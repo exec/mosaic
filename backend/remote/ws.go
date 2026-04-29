@@ -80,6 +80,11 @@ func (h *Hub) PublishInspector(d api.DetailDTO) {
 	h.bus.Publish(Envelope{Type: "inspector:tick", Payload: d})
 }
 
+// PublishUpdate emits an update:available frame to all connected clients.
+func (h *Hub) PublishUpdate(info api.UpdateInfoDTO) {
+	h.bus.Publish(Envelope{Type: "update:available", Payload: info})
+}
+
 // Close detaches all clients and shuts down the internal bus.
 func (h *Hub) Close() {
 	h.bus.Close()

@@ -245,6 +245,33 @@ func (a *App) AppVersion() string {
 	return version
 }
 
+func (a *App) GetUpdaterConfig() api.UpdaterConfigDTO {
+	return a.svc.GetUpdaterConfig(a.ctx)
+}
+
+func (a *App) SetUpdaterConfig(c api.UpdaterConfigDTO) error {
+	return a.svc.SetUpdaterConfig(a.ctx, c)
+}
+
+func (a *App) CheckForUpdate() (api.UpdateInfoDTO, error) {
+	return a.svc.CheckForUpdate(a.ctx)
+}
+
+func (a *App) InstallUpdate() error {
+	return a.svc.InstallUpdate(a.ctx)
+}
+
+// NotifyUpdateAvailable emits the Wails-side `update:available` event so the
+// desktop SPA can render its toast. Called from main.go's updater OnAvailable
+// callback, off the updater goroutine; safe to invoke before startup() has
+// run (a.ctx may be nil) — emission is silently skipped in that case.
+func (a *App) NotifyUpdateAvailable(info api.UpdateInfoDTO) {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.EventsEmit(a.ctx, "update:available", info)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)

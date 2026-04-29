@@ -21,6 +21,7 @@ import (
 	"mosaic/backend/persistence"
 	"mosaic/backend/platform"
 	"mosaic/backend/remote"
+	"mosaic/backend/updater"
 )
 
 //go:embed all:frontend/dist
@@ -110,6 +111,29 @@ func main() {
 	remoteSrv.Apply(svc.GetWebConfig(ctx))
 
 	app := NewApp(svc, hub)
+
+	// Auto-update: GitHub-backed updater, fan out new releases to both the
+	// Wails desktop session and any connected browser sessions. Schedule only
+	// runs the goroutine when the user hasn't disabled checks in Settings.
+	upd := updater.New(updater.Config{
+		CurrentVersion: version,
+		Source: &updater.GitHubSource{
+			Owner:   "exec",
+			Repo:    "mosaic",
+			Channel: svc.UpdaterChannel(ctx),
+		},
+		OnAvailable: func(info updater.Info) {
+			dto := svc.MakeUpdateInfoDTO(info)
+			if hub != nil {
+				hub.PublishUpdate(dto)
+			}
+			app.NotifyUpdateAvailable(dto)
+		},
+	})
+	svc.AttachUpdater(upd, version)
+	if svc.UpdaterEnabled(ctx) {
+		go upd.Schedule(ctx)
+	}
 
 	err = wails.Run(&options.App{
 		Title:  "Mosaic",
