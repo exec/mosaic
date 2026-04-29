@@ -81,9 +81,15 @@ export default function App() {
         density={store.state.density}
         statusFilter={store.state.statusFilter}
         searchQuery={store.state.searchQuery}
+        categories={store.state.categories}
+        tags={store.state.tags}
+        selectedCategoryID={store.state.selectedCategoryID}
+        selectedTagID={store.state.selectedTagID}
         onDensityChange={store.setDensity}
         onStatusFilter={store.setStatusFilter}
         onSearchQuery={store.setSearchQuery}
+        onSelectCategory={store.setSelectedCategory}
+        onSelectTag={store.setSelectedTag}
         onAddMagnet={() => setMagnetModal(true)}
         onAddTorrent={handleAddTorrent}
         onMagnetDropped={handleMagnetDropped}

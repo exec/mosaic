@@ -1,6 +1,6 @@
 import {type JSX} from 'solid-js';
 import type {Density, StatusFilter} from '../../lib/store';
-import type {GlobalStatsT, Torrent} from '../../lib/bindings';
+import type {CategoryDTO, GlobalStatsT, TagDTO, Torrent} from '../../lib/bindings';
 import {IconRail} from './IconRail';
 import {FilterRail} from './FilterRail';
 import {TopToolbar} from './TopToolbar';
@@ -14,9 +14,15 @@ type Props = {
   density: Density;
   statusFilter: StatusFilter;
   searchQuery: string;
+  categories: CategoryDTO[];
+  tags: TagDTO[];
+  selectedCategoryID: number | null;
+  selectedTagID: number | null;
   onDensityChange: (d: Density) => void;
   onStatusFilter: (s: StatusFilter) => void;
   onSearchQuery: (q: string) => void;
+  onSelectCategory: (id: number | null) => void;
+  onSelectTag: (id: number | null) => void;
   onAddMagnet: () => void;
   onAddTorrent: () => void;
   onMagnetDropped: (m: string) => Promise<void>;
@@ -33,7 +39,13 @@ export function WindowShell(props: Props) {
           <FilterRail
             torrents={props.torrents}
             active={props.statusFilter}
+            categories={props.categories}
+            tags={props.tags}
+            selectedCategoryID={props.selectedCategoryID}
+            selectedTagID={props.selectedTagID}
             onSelect={props.onStatusFilter}
+            onSelectCategory={props.onSelectCategory}
+            onSelectTag={props.onSelectTag}
           />
           <main class="flex flex-1 min-w-0 flex-col">
             <TopToolbar

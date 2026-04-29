@@ -1,7 +1,7 @@
 import {For, Show, type Component} from 'solid-js';
 import {ChevronDown, ListFilter, Folder, Tag, Globe} from 'lucide-solid';
 import type {StatusFilter} from '../../lib/store';
-import type {Torrent} from '../../lib/bindings';
+import type {CategoryDTO, TagDTO, Torrent} from '../../lib/bindings';
 
 type StatusItem = {id: StatusFilter; label: string; count: (t: Torrent[]) => number};
 
@@ -17,7 +17,13 @@ const statusItems: StatusItem[] = [
 type Props = {
   torrents: Torrent[];
   active: StatusFilter;
+  categories: CategoryDTO[];
+  tags: TagDTO[];
+  selectedCategoryID: number | null;
+  selectedTagID: number | null;
   onSelect: (s: StatusFilter) => void;
+  onSelectCategory: (id: number | null) => void;
+  onSelectTag: (id: number | null) => void;
 };
 
 const Section: Component<{icon: typeof ListFilter; title: string; count?: number; children?: any}> = (p) => (
@@ -62,13 +68,73 @@ export function FilterRail(props: Props) {
       </Section>
 
       <Section icon={Folder} title="Categories">
-        <p class="px-2 text-xs text-zinc-600">Coming in Plan 4</p>
+        <Show
+          when={props.categories.length > 0}
+          fallback={<p class="px-2 text-xs text-zinc-600">No categories yet</p>}
+        >
+          <ul class="flex flex-col gap-px">
+            <For each={props.categories}>
+              {(cat) => {
+                const count = () => props.torrents.filter((t) => t.category_id === cat.id).length;
+                return (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => props.onSelectCategory(props.selectedCategoryID === cat.id ? null : cat.id)}
+                      class="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-100 hover:bg-white/[.04]"
+                      classList={{'bg-accent-500/[.10] text-accent-200': props.selectedCategoryID === cat.id, 'text-zinc-300': props.selectedCategoryID !== cat.id}}
+                    >
+                      <span class="inline-flex min-w-0 items-center gap-2">
+                        <span class="h-2 w-2 shrink-0 rounded-full" style={{background: cat.color}} />
+                        <span class="truncate">{cat.name}</span>
+                      </span>
+                      <Show when={count() > 0}>
+                        <span class="font-mono text-xs tabular-nums text-zinc-500">{count()}</span>
+                      </Show>
+                    </button>
+                  </li>
+                );
+              }}
+            </For>
+          </ul>
+        </Show>
       </Section>
+
       <Section icon={Tag} title="Tags">
-        <p class="px-2 text-xs text-zinc-600">Coming in Plan 4</p>
+        <Show
+          when={props.tags.length > 0}
+          fallback={<p class="px-2 text-xs text-zinc-600">No tags yet</p>}
+        >
+          <ul class="flex flex-col gap-px">
+            <For each={props.tags}>
+              {(tg) => {
+                const count = () => props.torrents.filter((t) => t.tags.some((x) => x.id === tg.id)).length;
+                return (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => props.onSelectTag(props.selectedTagID === tg.id ? null : tg.id)}
+                      class="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-100 hover:bg-white/[.04]"
+                      classList={{'bg-accent-500/[.10] text-accent-200': props.selectedTagID === tg.id, 'text-zinc-300': props.selectedTagID !== tg.id}}
+                    >
+                      <span class="inline-flex min-w-0 items-center gap-2">
+                        <span class="h-2 w-2 shrink-0 rounded-full" style={{background: tg.color}} />
+                        <span class="truncate">{tg.name}</span>
+                      </span>
+                      <Show when={count() > 0}>
+                        <span class="font-mono text-xs tabular-nums text-zinc-500">{count()}</span>
+                      </Show>
+                    </button>
+                  </li>
+                );
+              }}
+            </For>
+          </ul>
+        </Show>
       </Section>
+
       <Section icon={Globe} title="Trackers">
-        <p class="px-2 text-xs text-zinc-600">Coming in Plan 4</p>
+        <p class="px-2 text-xs text-zinc-600">Coming in Plan 4b</p>
       </Section>
     </aside>
   );
