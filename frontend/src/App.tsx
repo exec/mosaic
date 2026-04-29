@@ -54,7 +54,7 @@ export default function App() {
   };
 
   const handleMagnetDropped = async (m: string) => {
-    await store.addMagnet(m);
+    await store.addMagnet(m, '');
     toast.success('Magnet added');
   };
 
@@ -177,17 +177,17 @@ export default function App() {
       <AddTorrentModal
         open={addModalOpen()}
         initialSource={addModalSource()}
-        defaultSavePath=""
+        defaultSavePath={store.state.defaultSavePath}
         categories={store.state.categories}
         tags={store.state.tags}
         onClose={() => setAddModalOpen(false)}
-        onSubmitMagnet={async (m, _savePath, categoryID, tagIDs) => {
-          const id = await store.addMagnet(m);
+        onSubmitMagnet={async (m, savePath, categoryID, tagIDs) => {
+          const id = await store.addMagnet(m, savePath);
           await applyOrganization(id, categoryID, tagIDs);
           toast.success('Magnet added');
         }}
-        onPickAndAddTorrent={async (_savePath, categoryID, tagIDs) => {
-          const id = await store.pickAndAddTorrent();
+        onPickAndAddTorrent={async (savePath, categoryID, tagIDs) => {
+          const id = await store.pickAndAddTorrent(savePath);
           if (!id) return; // user cancelled
           await applyOrganization(id, categoryID, tagIDs);
           toast.success('Torrent added');

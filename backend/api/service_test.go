@@ -67,7 +67,7 @@ func TestService_AddTorrentFile_PersistsAndAddsToEngine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fixture.torrent")
 	require.NoError(t, os.WriteFile(path, []byte("d4:infod6:lengthi42e4:name3:abcee"), 0o644))
 
-	id, err := svc.AddTorrentFile(context.Background(), path)
+	id, err := svc.AddTorrentFile(context.Background(), path, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 
@@ -81,7 +81,7 @@ func TestService_AddTorrentFile_PersistsAndAddsToEngine(t *testing.T) {
 
 func TestService_AddTorrentFile_ErrorOnMissingFile(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.AddTorrentFile(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.torrent"))
+	_, err := svc.AddTorrentFile(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.torrent"), "")
 	require.Error(t, err)
 }
 

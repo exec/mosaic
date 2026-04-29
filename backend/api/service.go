@@ -137,12 +137,15 @@ func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engin
 	return id, nil
 }
 
-func (s *Service) AddTorrentFile(ctx context.Context, filePath string) (engine.TorrentID, error) {
+func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string) (engine.TorrentID, error) {
+	if savePath == "" {
+		savePath = s.defaultPath(ctx)
+	}
 	blob, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", fmt.Errorf("read torrent file: %w", err)
 	}
-	id, err := s.engine.AddFile(ctx, blob, s.defaultSavePath)
+	id, err := s.engine.AddFile(ctx, blob, savePath)
 	if err != nil {
 		return "", fmt.Errorf("add torrent: %w", err)
 	}
@@ -153,7 +156,7 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath string) (engine.T
 	if err := s.torrents.Save(ctx, persistence.TorrentRecord{
 		InfoHash: string(id),
 		Name:     snap.Name,
-		SavePath: s.defaultSavePath,
+		SavePath: savePath,
 		AddedAt:  time.Now(),
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)

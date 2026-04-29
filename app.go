@@ -28,8 +28,8 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // AddMagnet adds a magnet link. Returns the torrent ID.
-func (a *App) AddMagnet(magnet string) (string, error) {
-	id, err := a.svc.AddMagnet(a.ctx, magnet, "")
+func (a *App) AddMagnet(magnet, savePath string) (string, error) {
+	id, err := a.svc.AddMagnet(a.ctx, magnet, savePath)
 	if err != nil {
 		return "", err
 	}
@@ -44,7 +44,7 @@ func (a *App) ListTorrents() ([]api.TorrentDTO, error) {
 // PickAndAddTorrent opens a native file dialog, lets the user choose a
 // .torrent file, and adds it to the engine + persistence. Returns the new
 // torrent ID, or "" if the user cancelled.
-func (a *App) PickAndAddTorrent() (string, error) {
+func (a *App) PickAndAddTorrent(savePath string) (string, error) {
 	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
 		Title: "Select .torrent file",
 		Filters: []wailsruntime.FileFilter{
@@ -57,7 +57,7 @@ func (a *App) PickAndAddTorrent() (string, error) {
 	if path == "" { // user cancelled
 		return "", nil
 	}
-	id, err := a.svc.AddTorrentFile(a.ctx, path)
+	id, err := a.svc.AddTorrentFile(a.ctx, path, savePath)
 	if err != nil {
 		return "", err
 	}

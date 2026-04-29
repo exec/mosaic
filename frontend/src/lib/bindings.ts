@@ -102,8 +102,8 @@ export type DetailDTO = {
 };
 
 export const api = {
-  addMagnet: (magnet: string) => AddMagnet(magnet),
-  pickAndAddTorrent: () => PickAndAddTorrent(),
+  addMagnet: (magnet: string, savePath: string) => AddMagnet(magnet, savePath),
+  pickAndAddTorrent: (savePath: string) => PickAndAddTorrent(savePath),
   listTorrents: () => ListTorrents() as Promise<Torrent[]>,
   globalStats: () => GlobalStats() as Promise<GlobalStatsT>,
   pause: (id: string) => Pause(id),
