@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ type Service struct {
 	categories      *persistence.Categories
 	tags            *persistence.Tags
 	settings        *persistence.Settings
+	scheduler       *engine.Scheduler
 	defaultSavePath string
 
 	focusMu    sync.RWMutex
@@ -34,6 +36,7 @@ func NewService(
 	categories *persistence.Categories,
 	tags *persistence.Tags,
 	settings *persistence.Settings,
+	scheduler *engine.Scheduler,
 	defaultSavePath string,
 ) *Service {
 	return &Service{
@@ -42,11 +45,21 @@ func NewService(
 		categories:      categories,
 		tags:            tags,
 		settings:        settings,
+		scheduler:       scheduler,
 		defaultSavePath: defaultSavePath,
 	}
 }
 
-const settingDefaultSavePath = "default_save_path"
+const (
+	settingDefaultSavePath = "default_save_path"
+	settingMaxActiveDL     = "max_active_downloads"
+	settingMaxActiveSeeds  = "max_active_seeds"
+	settingDownKbps        = "down_kbps"
+	settingUpKbps          = "up_kbps"
+	settingAltDownKbps     = "alt_down_kbps"
+	settingAltUpKbps       = "alt_up_kbps"
+	settingAltActive       = "alt_active"
+)
 
 func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {
 	v, err := s.settings.Get(ctx, settingDefaultSavePath)
@@ -72,22 +85,25 @@ func (s *Service) defaultPath(ctx context.Context) string {
 
 // TorrentDTO is the shape returned to UI/transport callers.
 type TorrentDTO struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Magnet       string   `json:"magnet"`
-	SavePath     string   `json:"save_path"`
-	TotalBytes   int64    `json:"total_bytes"`
-	BytesDone    int64    `json:"bytes_done"`
-	Progress     float64  `json:"progress"` // 0..1
-	DownloadRate int64    `json:"download_rate"`
-	UploadRate   int64    `json:"upload_rate"`
-	Peers        int      `json:"peers"`
-	Seeds        int      `json:"seeds"`
-	Paused       bool     `json:"paused"`
-	Completed    bool     `json:"completed"`
-	AddedAt      int64    `json:"added_at"` // unix seconds
-	CategoryID   *int     `json:"category_id"`
-	Tags         []TagDTO `json:"tags"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Magnet        string   `json:"magnet"`
+	SavePath      string   `json:"save_path"`
+	TotalBytes    int64    `json:"total_bytes"`
+	BytesDone     int64    `json:"bytes_done"`
+	Progress      float64  `json:"progress"` // 0..1
+	DownloadRate  int64    `json:"download_rate"`
+	UploadRate    int64    `json:"upload_rate"`
+	Peers         int      `json:"peers"`
+	Seeds         int      `json:"seeds"`
+	Paused        bool     `json:"paused"`
+	Completed     bool     `json:"completed"`
+	AddedAt       int64    `json:"added_at"` // unix seconds
+	CategoryID    *int     `json:"category_id"`
+	Tags          []TagDTO `json:"tags"`
+	QueuePosition int      `json:"queue_position"`
+	ForceStart    bool     `json:"force_start"`
+	Queued        bool     `json:"queued"`
 }
 
 func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
@@ -96,20 +112,23 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		prog = float64(s.BytesDone) / float64(s.TotalBytes)
 	}
 	return TorrentDTO{
-		ID:           string(s.ID),
-		Name:         s.Name,
-		Magnet:       s.Magnet,
-		SavePath:     s.SavePath,
-		TotalBytes:   s.TotalBytes,
-		BytesDone:    s.BytesDone,
-		Progress:     prog,
-		DownloadRate: s.RateDown,
-		UploadRate:   s.RateUp,
-		Peers:        s.Peers,
-		Seeds:        s.Seeds,
-		Paused:       s.Paused,
-		Completed:    s.Completed,
-		AddedAt:      addedAt.Unix(),
+		ID:            string(s.ID),
+		Name:          s.Name,
+		Magnet:        s.Magnet,
+		SavePath:      s.SavePath,
+		TotalBytes:    s.TotalBytes,
+		BytesDone:     s.BytesDone,
+		Progress:      prog,
+		DownloadRate:  s.RateDown,
+		UploadRate:    s.RateUp,
+		Peers:         s.Peers,
+		Seeds:         s.Seeds,
+		Paused:        s.Paused,
+		Completed:     s.Completed,
+		AddedAt:       addedAt.Unix(),
+		QueuePosition: s.QueuePosition,
+		ForceStart:    s.ForceStart,
+		Queued:        s.Queued,
 	}
 }
 
@@ -543,4 +562,141 @@ func (s *Service) SetFilePriorities(ctx context.Context, infohash string, prios 
 		}
 	}
 	return s.engine.SetFilePriorities(engine.TorrentID(infohash), mapped)
+}
+
+// LimitsDTO is the bandwidth-limits transport shape (kbps units).
+type LimitsDTO struct {
+	DownKbps    int  `json:"down_kbps"`
+	UpKbps      int  `json:"up_kbps"`
+	AltDownKbps int  `json:"alt_down_kbps"`
+	AltUpKbps   int  `json:"alt_up_kbps"`
+	AltActive   bool `json:"alt_active"`
+}
+
+// QueueLimitsDTO is the queue-slot transport shape.
+type QueueLimitsDTO struct {
+	MaxActiveDownloads int `json:"max_active_downloads"`
+	MaxActiveSeeds     int `json:"max_active_seeds"`
+}
+
+func (s *Service) GetLimits(ctx context.Context) (LimitsDTO, error) {
+	return LimitsDTO{
+		DownKbps:    s.intSetting(ctx, settingDownKbps),
+		UpKbps:      s.intSetting(ctx, settingUpKbps),
+		AltDownKbps: s.intSetting(ctx, settingAltDownKbps),
+		AltUpKbps:   s.intSetting(ctx, settingAltUpKbps),
+		AltActive:   s.boolSetting(ctx, settingAltActive),
+	}, nil
+}
+
+func (s *Service) SetLimits(ctx context.Context, l LimitsDTO) error {
+	if err := s.setIntSetting(ctx, settingDownKbps, l.DownKbps); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingUpKbps, l.UpKbps); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingAltDownKbps, l.AltDownKbps); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingAltUpKbps, l.AltUpKbps); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingAltActive, l.AltActive); err != nil {
+		return err
+	}
+	return s.applyLimits(ctx)
+}
+
+// ToggleAltSpeed flips the alt-speed flag and reapplies engine limits. Returns
+// the new alt_active state.
+func (s *Service) ToggleAltSpeed(ctx context.Context) (bool, error) {
+	cur := s.boolSetting(ctx, settingAltActive)
+	next := !cur
+	if err := s.setBoolSetting(ctx, settingAltActive, next); err != nil {
+		return cur, err
+	}
+	return next, s.applyLimits(ctx)
+}
+
+func (s *Service) applyLimits(ctx context.Context) error {
+	l, _ := s.GetLimits(ctx)
+	down, up := l.DownKbps*1024, l.UpKbps*1024
+	if l.AltActive {
+		down, up = l.AltDownKbps*1024, l.AltUpKbps*1024
+	}
+	return s.engine.SetGlobalRateLimits(down, up)
+}
+
+func (s *Service) GetQueueLimits(ctx context.Context) QueueLimitsDTO {
+	return QueueLimitsDTO{
+		MaxActiveDownloads: s.intSetting(ctx, settingMaxActiveDL),
+		MaxActiveSeeds:     s.intSetting(ctx, settingMaxActiveSeeds),
+	}
+}
+
+func (s *Service) SetQueueLimits(ctx context.Context, q QueueLimitsDTO) error {
+	if err := s.setIntSetting(ctx, settingMaxActiveDL, q.MaxActiveDownloads); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingMaxActiveSeeds, q.MaxActiveSeeds); err != nil {
+		return err
+	}
+	if s.scheduler != nil {
+		s.scheduler.SetLimits(q.MaxActiveDownloads, q.MaxActiveSeeds)
+	}
+	return nil
+}
+
+func (s *Service) SetQueuePosition(ctx context.Context, infohash string, pos int) error {
+	if err := s.torrents.SetQueuePosition(ctx, infohash, pos); err != nil {
+		return err
+	}
+	s.engine.SetQueuePosition(engine.TorrentID(infohash), pos)
+	return nil
+}
+
+func (s *Service) SetForceStart(ctx context.Context, infohash string, force bool) error {
+	if err := s.torrents.SetForceStart(ctx, infohash, force); err != nil {
+		return err
+	}
+	s.engine.SetForceStart(engine.TorrentID(infohash), force)
+	return nil
+}
+
+// RestoreOnStartup hydrates engine + scheduler limits from persisted settings.
+// Call this once after constructing the Service so the fresh process picks up
+// what the user configured last time.
+func (s *Service) RestoreOnStartup(ctx context.Context) error {
+	q := s.GetQueueLimits(ctx)
+	if s.scheduler != nil {
+		s.scheduler.SetLimits(q.MaxActiveDownloads, q.MaxActiveSeeds)
+	}
+	return s.applyLimits(ctx)
+}
+
+func (s *Service) intSetting(ctx context.Context, key string) int {
+	v, err := s.settings.Get(ctx, key)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(v)
+	return n
+}
+
+func (s *Service) setIntSetting(ctx context.Context, key string, n int) error {
+	return s.settings.Set(ctx, key, strconv.Itoa(n))
+}
+
+func (s *Service) boolSetting(ctx context.Context, key string) bool {
+	v, _ := s.settings.Get(ctx, key)
+	return v == "true"
+}
+
+func (s *Service) setBoolSetting(ctx context.Context, key string, b bool) error {
+	v := "false"
+	if b {
+		v = "true"
+	}
+	return s.settings.Set(ctx, key, v)
 }

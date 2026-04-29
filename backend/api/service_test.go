@@ -28,6 +28,7 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 		persistence.NewCategories(db),
 		persistence.NewTags(db),
 		persistence.NewSettings(db),
+		nil, // no scheduler in unit tests
 		"/tmp/dl")
 	return svc, fb
 }
@@ -227,6 +228,34 @@ func TestService_DefaultSavePath_Persistence(t *testing.T) {
 	got, err = svc.GetDefaultSavePath(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "/Volumes/torrents", got)
+}
+
+func TestService_LimitsRoundTrip(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetLimits(ctx, LimitsDTO{DownKbps: 1000, UpKbps: 100, AltDownKbps: 200, AltUpKbps: 50}))
+	got, _ := svc.GetLimits(ctx)
+	require.Equal(t, 1000, got.DownKbps)
+	require.Equal(t, 200, got.AltDownKbps)
+}
+
+func TestService_ToggleAltSpeed(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	on, err := svc.ToggleAltSpeed(ctx)
+	require.NoError(t, err)
+	require.True(t, on)
+	on, _ = svc.ToggleAltSpeed(ctx)
+	require.False(t, on)
+}
+
+func TestService_QueuePosition(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:qp", "")
+	require.NoError(t, svc.SetQueuePosition(ctx, string(id), 7))
+	rows, _ := svc.ListTorrents(ctx)
+	require.Equal(t, 7, rows[0].QueuePosition)
 }
 
 func TestService_GlobalStats(t *testing.T) {

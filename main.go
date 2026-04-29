@@ -66,12 +66,19 @@ func main() {
 	eng := engine.NewEngine(backend, 500*time.Millisecond)
 	defer eng.Close()
 
+	sched := engine.NewScheduler(eng, 0, 0, 2*time.Second) // 0/0 = unlimited until user sets
+	defer sched.Close()
+
 	svc := api.NewService(eng,
 		persistence.NewTorrents(db),
 		persistence.NewCategories(db),
 		persistence.NewTags(db),
 		persistence.NewSettings(db),
+		sched,
 		cfg.DefaultSavePath)
+	if err := svc.RestoreOnStartup(ctx); err != nil {
+		log.Warn().Err(err).Msg("restore on startup")
+	}
 	app := NewApp(svc)
 
 	err = wails.Run(&options.App{
