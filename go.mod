@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/adrg/xdg v0.5.3
 	github.com/anacrolix/torrent v1.61.0
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/rs/zerolog v1.35.1

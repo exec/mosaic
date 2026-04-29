@@ -15,7 +15,7 @@ import (
 
 	"mosaic/backend/engine"
 	"mosaic/backend/persistence"
-	"mosaic/backend/remote"
+	"mosaic/backend/remote/cred"
 )
 
 // Service is the only place business logic lives. Wails handlers and (later)
@@ -143,7 +143,7 @@ func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
 }
 
 func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
-	hash, err := remote.HashPassword(plain)
+	hash, err := cred.HashPassword(plain)
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
 }
 
 func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
-	key := remote.RandomToken()
+	key := cred.RandomToken()
 	if err := s.settings.Set(ctx, settingWebAPIKey, key); err != nil {
 		return "", err
 	}
@@ -169,7 +169,7 @@ func (s *Service) VerifyWebCredentials(ctx context.Context, username, plain stri
 	if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 {
 		return false
 	}
-	return remote.VerifyPassword(plain, hash)
+	return cred.VerifyPassword(plain, hash)
 }
 
 func (s *Service) VerifyAPIKey(ctx context.Context, key string) bool {
