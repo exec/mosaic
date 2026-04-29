@@ -226,19 +226,44 @@ Trivial — store in maps, return them from snapshotFor.
 
 - [ ] **Step 5: Implement on AnacrolixBackend**
 
+In `NewAnacrolixBackend`, install fresh limiters on the `ClientConfig` and stash the pointers on the backend struct so we can mutate them later:
+
+```go
+dlLim := rate.NewLimiter(rate.Inf, 256<<10)
+ulLim := rate.NewLimiter(rate.Inf, 256<<10)
+tcfg.DownloadRateLimiter = dlLim
+tcfg.UploadRateLimiter   = ulLim
+// ...
+a := &AnacrolixBackend{
+    // ...
+    dlLim: dlLim,
+    ulLim: ulLim,
+}
+```
+
+Then mutate them in place:
+
 ```go
 func (a *AnacrolixBackend) SetGlobalRateLimits(downBPS, upBPS int) error {
-	dl := rate.Inf
-	ul := rate.Inf
-	if downBPS > 0 { dl = rate.Limit(downBPS) }
-	if upBPS > 0   { ul = rate.Limit(upBPS) }
-	a.client.SetDownloadRateLimiter(rate.NewLimiter(dl, max(downBPS, 256<<10)))
-	a.client.SetUploadRateLimiter(rate.NewLimiter(ul, max(upBPS, 256<<10)))
+	if downBPS <= 0 {
+		a.dlLim.SetLimit(rate.Inf)
+		a.dlLim.SetBurst(256 << 10)
+	} else {
+		a.dlLim.SetLimit(rate.Limit(downBPS))
+		a.dlLim.SetBurst(max(downBPS, 256<<10))
+	}
+	if upBPS <= 0 {
+		a.ulLim.SetLimit(rate.Inf)
+		a.ulLim.SetBurst(256 << 10)
+	} else {
+		a.ulLim.SetLimit(rate.Limit(upBPS))
+		a.ulLim.SetBurst(max(upBPS, 256<<10))
+	}
 	return nil
 }
 ```
 
-(Verify `client.SetDownloadRateLimiter` and `SetUploadRateLimiter` exist in v1.61 — these are the standard anacrolix/torrent rate-limiter setters using `golang.org/x/time/rate`. Add `"golang.org/x/time/rate"` import. The "burst" must be at least the largest peer message; 256 KB is safe.)
+(Add `"golang.org/x/time/rate"` import. anacrolix v1.61 stores the rate limiters as `*rate.Limiter` fields on `ClientConfig` (`config.DownloadRateLimiter` / `config.UploadRateLimiter`) — there are no `SetDownloadRateLimiter` / `SetUploadRateLimiter` setters on `*torrent.Client`, and the same limiter pointer is referenced from many runtime spots, so we mutate the limiter in place via `SetLimit` + `SetBurst`. The "burst" must be at least the largest peer message; 256 KB is safe.)
 
 `SetQueuePosition`, `SetForceStart`, `ScheduledPause` write to internal maps under their existing mutex pattern.
 
