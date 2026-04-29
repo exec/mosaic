@@ -131,6 +131,14 @@ func (a *App) SetFilePriorities(infohash string, prios map[int]string) error {
 	return a.svc.SetFilePriorities(a.ctx, infohash, prios)
 }
 
+func (a *App) GetDefaultSavePath() (string, error) {
+	return a.svc.GetDefaultSavePath(a.ctx)
+}
+
+func (a *App) SetDefaultSavePath(path string) error {
+	return a.svc.SetDefaultSavePath(a.ctx, path)
+}
+
 func (a *App) AddTorrentBytes(blob []byte, savePath string) (string, error) {
 	id, err := a.svc.AddTorrentBytes(a.ctx, blob, savePath)
 	if err != nil {
