@@ -16,6 +16,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 	anacrolix_types "github.com/anacrolix/torrent/types"
+	"golang.org/x/time/rate"
 )
 
 // AnacrolixConfig configures the production Backend.
@@ -36,8 +37,21 @@ type AnacrolixBackend struct {
 	rateMu    sync.Mutex
 	prevRates map[TorrentID]rateSample
 
-	pausedMu sync.RWMutex
-	paused   map[TorrentID]bool
+	// pausedMu guards paused, queuePos, forceStart, scheduledPause. We extend
+	// the existing read-mostly mutex rather than introducing a new one — these
+	// maps are all read together by snapshotFor and written through the same
+	// per-torrent setters, so a single RWMutex keeps the invariants simple.
+	pausedMu       sync.RWMutex
+	paused         map[TorrentID]bool
+	queuePos       map[TorrentID]int
+	forceStart     map[TorrentID]bool
+	scheduledPause map[TorrentID]bool
+
+	// Rate limiters owned via ClientConfig. The same *rate.Limiter pointers are
+	// stashed here so SetGlobalRateLimits can mutate them in place via
+	// SetLimit/SetBurst (anacrolix v1.61 has no setter on the Client itself).
+	dlLim *rate.Limiter
+	ulLim *rate.Limiter
 }
 
 type rateSample struct {
@@ -63,15 +77,25 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	}
 	tcfg.DefaultStorage = storage.NewFile(cfg.DataDir)
 
+	dlLim := rate.NewLimiter(rate.Inf, 256<<10)
+	ulLim := rate.NewLimiter(rate.Inf, 256<<10)
+	tcfg.DownloadRateLimiter = dlLim
+	tcfg.UploadRateLimiter = ulLim
+
 	c, err := torrent.NewClient(tcfg)
 	if err != nil {
 		return nil, fmt.Errorf("anacrolix client: %w", err)
 	}
 	return &AnacrolixBackend{
-		client:    c,
-		bySaveTo:  make(map[TorrentID]string),
-		prevRates: make(map[TorrentID]rateSample),
-		paused:    make(map[TorrentID]bool),
+		client:         c,
+		bySaveTo:       make(map[TorrentID]string),
+		prevRates:      make(map[TorrentID]rateSample),
+		paused:         make(map[TorrentID]bool),
+		queuePos:       make(map[TorrentID]int),
+		forceStart:     make(map[TorrentID]bool),
+		scheduledPause: make(map[TorrentID]bool),
+		dlLim:          dlLim,
+		ulLim:          ulLim,
 	}, nil
 }
 
@@ -156,6 +180,9 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	a.mu.Unlock()
 	a.pausedMu.Lock()
 	delete(a.paused, id)
+	delete(a.queuePos, id)
+	delete(a.forceStart, id)
+	delete(a.scheduledPause, id)
 	a.pausedMu.Unlock()
 	t.Drop()
 	if deleteFiles && saveTo != "" {
@@ -175,7 +202,7 @@ func (a *AnacrolixBackend) List() []Snapshot {
 	defer a.pausedMu.RUnlock()
 	for _, t := range ts {
 		id := TorrentID(t.InfoHash().HexString())
-		snap, next := snapshotFor(t, a.prevRates[id], a.paused[id])
+		snap, next := snapshotFor(t, a.prevRates[id], a.paused[id], a.queuePos[id], a.forceStart[id], a.scheduledPause[id])
 		a.prevRates[id] = next
 		out = append(out, snap)
 	}
@@ -191,8 +218,11 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	prev := a.prevRates[id]
 	a.pausedMu.RLock()
 	paused := a.paused[id]
+	queuePos := a.queuePos[id]
+	forceStart := a.forceStart[id]
+	queued := a.scheduledPause[id]
 	a.pausedMu.RUnlock()
-	snap, next := snapshotFor(t, prev, paused)
+	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued)
 	a.prevRates[id] = next
 	a.rateMu.Unlock()
 	return snap, nil
@@ -254,8 +284,11 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	prev := a.prevRates[id]
 	a.pausedMu.RLock()
 	paused := a.paused[id]
+	queuePos := a.queuePos[id]
+	forceStart := a.forceStart[id]
+	queued := a.scheduledPause[id]
 	a.pausedMu.RUnlock()
-	snap, next := snapshotFor(t, prev, paused)
+	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued)
 	a.prevRates[id] = next
 	a.rateMu.Unlock()
 	d := Detail{Snapshot: snap}
@@ -361,7 +394,7 @@ func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
 	return float64(pp.GetCardinality()) / float64(n)
 }
 
-func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool) (Snapshot, rateSample) {
+func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool, queuePos int, forceStart, queued bool) (Snapshot, rateSample) {
 	stats := t.Stats()
 	name := t.Name()
 	if name == "" {
@@ -383,19 +416,73 @@ func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool) (Snapshot, ra
 		}
 	}
 	snap := Snapshot{
-		ID:         TorrentID(t.InfoHash().HexString()),
-		Name:       name,
-		TotalBytes: total,
-		BytesDone:  t.BytesCompleted(),
-		BytesDown:  bytesDown,
-		BytesUp:    bytesUp,
-		RateDown:   rateDown,
-		RateUp:     rateUp,
-		Peers:      stats.ActivePeers,
-		Seeds:      stats.ConnectedSeeders,
-		Paused:     paused,
-		Completed:  total > 0 && t.BytesCompleted() == total,
-		AddedAt:    time.Now(), // engine wrapper does not track AddedAt; persistence does
+		ID:            TorrentID(t.InfoHash().HexString()),
+		Name:          name,
+		TotalBytes:    total,
+		BytesDone:     t.BytesCompleted(),
+		BytesDown:     bytesDown,
+		BytesUp:       bytesUp,
+		RateDown:      rateDown,
+		RateUp:        rateUp,
+		Peers:         stats.ActivePeers,
+		Seeds:         stats.ConnectedSeeders,
+		Paused:        paused,
+		Completed:     total > 0 && t.BytesCompleted() == total,
+		AddedAt:       time.Now(), // engine wrapper does not track AddedAt; persistence does
+		QueuePosition: queuePos,
+		ForceStart:    forceStart,
+		Queued:        queued,
 	}
 	return snap, rateSample{at: now, down: bytesDown, up: bytesUp}
+}
+
+// SetGlobalRateLimits mutates the existing limiter pointers in place. Passing
+// 0 means unlimited (rate.Inf, with a 256 KB burst floor for peer messages).
+func (a *AnacrolixBackend) SetGlobalRateLimits(downBPS, upBPS int) error {
+	if downBPS <= 0 {
+		a.dlLim.SetLimit(rate.Inf)
+		a.dlLim.SetBurst(256 << 10)
+	} else {
+		a.dlLim.SetLimit(rate.Limit(downBPS))
+		a.dlLim.SetBurst(max(downBPS, 256<<10))
+	}
+	if upBPS <= 0 {
+		a.ulLim.SetLimit(rate.Inf)
+		a.ulLim.SetBurst(256 << 10)
+	} else {
+		a.ulLim.SetLimit(rate.Limit(upBPS))
+		a.ulLim.SetBurst(max(upBPS, 256<<10))
+	}
+	return nil
+}
+
+func (a *AnacrolixBackend) SetQueuePosition(id TorrentID, pos int) {
+	a.pausedMu.Lock()
+	a.queuePos[id] = pos
+	a.pausedMu.Unlock()
+}
+
+func (a *AnacrolixBackend) SetForceStart(id TorrentID, force bool) {
+	a.pausedMu.Lock()
+	a.forceStart[id] = force
+	a.pausedMu.Unlock()
+}
+
+// ScheduledPause is the scheduler's pause channel — independent from the
+// user's manual Pause. It uses the same SetMaxEstablishedConns(0/80) trick
+// the manual Pause uses, but writes only the scheduledPause map flag so
+// snapshots can distinguish "user-paused" from "queue-held".
+func (a *AnacrolixBackend) ScheduledPause(id TorrentID, paused bool) {
+	t, ok := a.find(id)
+	if !ok {
+		return
+	}
+	if paused {
+		t.SetMaxEstablishedConns(0)
+	} else {
+		t.SetMaxEstablishedConns(80)
+	}
+	a.pausedMu.Lock()
+	a.scheduledPause[id] = paused
+	a.pausedMu.Unlock()
 }

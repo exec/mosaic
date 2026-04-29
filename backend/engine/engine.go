@@ -99,6 +99,17 @@ func (e *Engine) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
 	return e.backend.SetFilePriorities(id, prios)
 }
 
+func (e *Engine) SetGlobalRateLimits(d, u int) error { return e.backend.SetGlobalRateLimits(d, u) }
+func (e *Engine) SetQueuePosition(id TorrentID, pos int) {
+	e.backend.SetQueuePosition(id, pos)
+}
+func (e *Engine) SetForceStart(id TorrentID, force bool) {
+	e.backend.SetForceStart(id, force)
+}
+func (e *Engine) ScheduledPause(id TorrentID, paused bool) {
+	e.backend.ScheduledPause(id, paused)
+}
+
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {

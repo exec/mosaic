@@ -14,6 +14,9 @@ type FakeBackend struct {
 	mu        sync.Mutex
 	torrents  map[TorrentID]*Snapshot
 	filePrios map[TorrentID]map[int]Priority
+
+	downBPS int
+	upBPS   int
 }
 
 func NewFakeBackend() *FakeBackend {
@@ -136,6 +139,38 @@ func (f *FakeBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail,
 		}
 	}
 	return d, nil
+}
+
+func (f *FakeBackend) SetGlobalRateLimits(downBPS, upBPS int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.downBPS = downBPS
+	f.upBPS = upBPS
+	return nil
+}
+
+func (f *FakeBackend) SetQueuePosition(id TorrentID, pos int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.torrents[id]; ok {
+		t.QueuePosition = pos
+	}
+}
+
+func (f *FakeBackend) SetForceStart(id TorrentID, force bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.torrents[id]; ok {
+		t.ForceStart = force
+	}
+}
+
+func (f *FakeBackend) ScheduledPause(id TorrentID, paused bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.torrents[id]; ok {
+		t.Queued = paused
+	}
 }
 
 func (f *FakeBackend) SetFilePriorities(id TorrentID, prios map[int]Priority) error {

@@ -18,21 +18,24 @@ type AddRequest struct {
 
 // Snapshot is a point-in-time view of a torrent's state, suitable for the UI.
 type Snapshot struct {
-	ID         TorrentID
-	Name       string
-	Magnet     string
-	SavePath   string
-	TotalBytes int64
-	BytesDone  int64
-	BytesDown  int64 // cumulative bytes downloaded this session
-	BytesUp    int64 // cumulative bytes uploaded this session
-	RateDown   int64 // instantaneous bytes/sec
-	RateUp     int64
-	Peers      int
-	Seeds      int
-	Paused     bool
-	Completed  bool
-	AddedAt    time.Time
+	ID            TorrentID
+	Name          string
+	Magnet        string
+	SavePath      string
+	TotalBytes    int64
+	BytesDone     int64
+	BytesDown     int64 // cumulative bytes downloaded this session
+	BytesUp       int64 // cumulative bytes uploaded this session
+	RateDown      int64 // instantaneous bytes/sec
+	RateUp        int64
+	Peers         int
+	Seeds         int
+	Paused        bool
+	Completed     bool
+	AddedAt       time.Time
+	QueuePosition int  // 0 = top of queue
+	ForceStart    bool
+	Queued        bool // true if scheduler is holding it back
 }
 
 // EventKind enumerates the kinds of EngineEvent.
@@ -66,6 +69,10 @@ type Backend interface {
 	Snapshot(id TorrentID) (Snapshot, error)
 	DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error)
 	SetFilePriorities(id TorrentID, prios map[int]Priority) error
+	SetGlobalRateLimits(downBytesPerSec, upBytesPerSec int) error // 0 = unlimited
+	SetQueuePosition(id TorrentID, pos int)
+	SetForceStart(id TorrentID, force bool)
+	ScheduledPause(id TorrentID, paused bool) // distinct from manual Pause
 	Close() error
 }
 
