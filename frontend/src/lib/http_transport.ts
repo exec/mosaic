@@ -183,6 +183,18 @@ const ROUTES: Record<string, RouteSpec> = {
     unwrap: (r) => r.api_key as string,
   },
 
+  // Updater + version
+  AppVersion: {method: 'GET', path: () => '/api/version', unwrap: (r) => r.version as string},
+  GetUpdaterConfig: {method: 'GET', path: () => '/api/settings/updater'},
+  SetUpdaterConfig: {
+    method: 'PUT',
+    path: () => '/api/settings/updater',
+    body: ([c]) => c,
+    unwrap: okEnvelope,
+  },
+  CheckForUpdate: {method: 'POST', path: () => '/api/updater/check'},
+  InstallUpdate: {method: 'POST', path: () => '/api/updater/install', unwrap: okEnvelope},
+
   // Schedule
   ListScheduleRules: {method: 'GET', path: () => '/api/schedule_rules'},
   CreateScheduleRule: {

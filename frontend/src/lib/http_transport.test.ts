@@ -132,6 +132,50 @@ describe('http_transport.invoke', () => {
     await expect(t.invoke<number>('CreateCategory', 'movies', '/m', '#abc')).resolves.toBe(42);
   });
 
+  test('AppVersion unwraps {version} as bare string', async () => {
+    const {fetchImpl, calls} = makeMockFetch([{ok: true, body: {version: 'v0.7.0'}}]);
+    const t = makeHTTPTransport('http://localhost', {fetchImpl, wsCtor: MockWS as any});
+    await expect(t.invoke<string>('AppVersion')).resolves.toBe('v0.7.0');
+    expect(calls[0].url).toBe('http://localhost/api/version');
+    expect(calls[0].init.method).toBe('GET');
+  });
+
+  test('CheckForUpdate POSTs /api/updater/check and returns full UpdateInfoDTO', async () => {
+    const payload = {
+      available: true,
+      latest_version: 'v0.8.0',
+      asset_url: 'https://example.com/release',
+      asset_filename: 'mosaic_v0.8.0_darwin_arm64.tar.gz',
+      checked_at: 1700000000,
+      current_version: 'v0.7.0',
+    };
+    const {fetchImpl, calls} = makeMockFetch([{ok: true, body: payload}]);
+    const t = makeHTTPTransport('http://localhost', {fetchImpl, wsCtor: MockWS as any});
+    const got = await t.invoke<typeof payload>('CheckForUpdate');
+    expect(got).toEqual(payload);
+    expect(calls[0].url).toBe('http://localhost/api/updater/check');
+    expect(calls[0].init.method).toBe('POST');
+  });
+
+  test('SetUpdaterConfig PUTs JSON body and unwraps OK', async () => {
+    const {fetchImpl, calls} = makeMockFetch([{ok: true, body: {ok: true}}]);
+    const t = makeHTTPTransport('http://localhost', {fetchImpl, wsCtor: MockWS as any});
+    const cfg = {enabled: false, channel: 'beta', last_checked_at: 0, last_seen_version: ''};
+    const result = await t.invoke<void>('SetUpdaterConfig', cfg);
+    expect(result).toBeUndefined();
+    expect(calls[0].url).toBe('http://localhost/api/settings/updater');
+    expect(calls[0].init.method).toBe('PUT');
+    expect(JSON.parse(calls[0].init.body as string)).toEqual(cfg);
+  });
+
+  test('InstallUpdate POSTs /api/updater/install', async () => {
+    const {fetchImpl, calls} = makeMockFetch([{ok: true, body: {ok: true}}]);
+    const t = makeHTTPTransport('http://localhost', {fetchImpl, wsCtor: MockWS as any});
+    await t.invoke<void>('InstallUpdate');
+    expect(calls[0].url).toBe('http://localhost/api/updater/install');
+    expect(calls[0].init.method).toBe('POST');
+  });
+
   test('error response surfaces server error message', async () => {
     const {fetchImpl} = makeMockFetch([{ok: false, status: 400, body: {error: 'bad request'}}]);
     const t = makeHTTPTransport('http://localhost', {fetchImpl, wsCtor: MockWS as any});

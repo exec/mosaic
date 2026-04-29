@@ -155,6 +155,22 @@ export type WebConfigDTO = {
   api_key: string;
 };
 
+export type UpdaterConfigDTO = {
+  enabled: boolean;
+  channel: 'stable' | 'beta';
+  last_checked_at: number;
+  last_seen_version: string;
+};
+
+export type UpdateInfoDTO = {
+  available: boolean;
+  latest_version: string;
+  asset_url: string;
+  asset_filename: string;
+  checked_at: number;
+  current_version: string;
+};
+
 export const api = {
   addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
   pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
@@ -210,6 +226,11 @@ export const api = {
   setWebConfig: (c: WebConfigDTO) => transport.invoke<void>('SetWebConfig', c),
   setWebPassword: (plain: string) => transport.invoke<void>('SetWebPassword', plain),
   rotateAPIKey: () => transport.invoke<string>('RotateAPIKey'),
+  appVersion: () => transport.invoke<string>('AppVersion'),
+  getUpdaterConfig: () => transport.invoke<UpdaterConfigDTO>('GetUpdaterConfig'),
+  setUpdaterConfig: (c: UpdaterConfigDTO) => transport.invoke<void>('SetUpdaterConfig', c),
+  checkForUpdate: () => transport.invoke<UpdateInfoDTO>('CheckForUpdate'),
+  installUpdate: () => transport.invoke<void>('InstallUpdate'),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {
@@ -222,4 +243,8 @@ export function onStatsTick(handler: (stats: GlobalStatsT) => void): () => void 
 
 export function onInspectorTick(handler: (detail: DetailDTO) => void): () => void {
   return transport.on('inspector:tick', handler);
+}
+
+export function onUpdateAvailable(handler: (info: UpdateInfoDTO) => void): () => void {
+  return transport.on('update:available', handler);
 }
