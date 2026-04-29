@@ -11,9 +11,9 @@ export default function App() {
 
   return (
     <div class="h-full flex flex-col">
-      <header class="flex items-center justify-between px-4 py-2 border-b border-zinc-800">
-        <div class="font-semibold">Mosaic</div>
-        <div class="flex gap-2">
+      <header class="flex items-center justify-between pl-24 pr-4 py-2 border-b border-zinc-800" style={{'-webkit-app-region': 'drag'}}>
+        <div class="font-semibold text-sm text-zinc-400">Mosaic</div>
+        <div class="flex gap-2" style={{'-webkit-app-region': 'no-drag'}}>
           <button
             class="px-3 py-1.5 rounded border border-zinc-700 text-sm hover:bg-zinc-900"
             onClick={() => store.pickAndAddTorrent().catch(console.error)}
@@ -24,7 +24,7 @@ export default function App() {
             class="px-3 py-1.5 rounded bg-blue-600 text-sm"
             onClick={() => setModalOpen(true)}
           >
-            + Add Magnet
+            + Magnet
           </button>
         </div>
       </header>

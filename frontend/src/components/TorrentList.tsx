@@ -24,7 +24,7 @@ export function TorrentList(props: Props) {
     <div class="flex flex-col gap-2 p-3">
       <Show when={props.torrents.length === 0}>
         <div class="text-sm text-zinc-500 p-6 text-center">
-          No torrents yet. Use <kbd>Add Magnet</kbd> to start one.
+          No torrents yet. Add a <kbd>.torrent</kbd> file or paste a magnet link to start.
         </div>
       </Show>
       <For each={props.torrents}>
