@@ -104,9 +104,11 @@ func (u *Updater) Schedule(ctx context.Context) {
 	}
 }
 
-// Install downloads and applies the asset at info.AssetURL, replacing the
-// running binary. Caller arranges the relaunch prompt. The AssetFilename's
-// extension drives go-selfupdate's archive decompressor selection.
+// Install downloads, verifies, and applies the latest release detected by the
+// most recent Check, replacing the running binary. The Source carries the
+// validation pipeline (e.g. SHA-256 manifest verification on GitHubSource);
+// Install just gates on Info.Available and resolves the executable path.
+// Caller arranges the relaunch prompt.
 func (u *Updater) Install(ctx context.Context, info Info) error {
 	if !info.Available {
 		return fmt.Errorf("no update available")
@@ -115,7 +117,7 @@ func (u *Updater) Install(ctx context.Context, info Info) error {
 	if err != nil {
 		return fmt.Errorf("executable path: %w", err)
 	}
-	return selfupdate.UpdateTo(ctx, info.AssetURL, info.AssetFilename, exe)
+	return u.cfg.Source.Install(ctx, exe)
 }
 
 // compareVersions returns negative / zero / positive for a < / == / > b
