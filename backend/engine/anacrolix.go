@@ -5,14 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	anacrolix_types "github.com/anacrolix/torrent/types"
 )
 
 // AnacrolixConfig configures the production Backend.
@@ -169,6 +172,117 @@ func (a *AnacrolixBackend) find(id TorrentID) (*torrent.Torrent, bool) {
 		}
 	}
 	return nil, false
+}
+
+// DetailedSnapshot pulls files/peers/trackers from the underlying anacrolix
+// Torrent based on scope. We translate to our FileEntry/PeerEntry/TrackerEntry
+// domain types.
+func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error) {
+	t, ok := a.find(id)
+	if !ok {
+		return Detail{}, errors.New("not found")
+	}
+	d := Detail{Snapshot: snapshotFor(t)}
+
+	if scope.Files {
+		for i, f := range t.Files() {
+			d.Files = append(d.Files, FileEntry{
+				Index:     i,
+				Path:      f.DisplayPath(),
+				Size:      f.Length(),
+				BytesDone: f.BytesCompleted(),
+				Priority:  prioFromAnacrolix(f.Priority()),
+			})
+		}
+	}
+
+	if scope.Peers {
+		for _, pc := range t.PeerConns() {
+			addr := pc.RemoteAddr.String()
+			ip := addr
+			port := 0
+			if h, p, err := splitHostPort(addr); err == nil {
+				ip = h
+				port = p
+			}
+			name, _ := pc.PeerClientName.Load().(string)
+			d.Peers = append(d.Peers, PeerEntry{
+				IP:           ip,
+				Port:         port,
+				ClientName:   name,
+				Flags:        peerFlagsFor(pc),
+				Progress:     pieceProgressOf(t, pc),
+				DownloadRate: int64(pc.DownloadRate()),
+				UploadRate:   int64(pc.Stats().LastWriteUploadRate),
+				CountryCode:  "",
+			})
+		}
+	}
+
+	if scope.Trackers {
+		mi := t.Metainfo()
+		for _, tier := range mi.AnnounceList {
+			for _, url := range tier {
+				d.Trackers = append(d.Trackers, TrackerEntry{
+					URL:    url,
+					Status: "OK",
+				})
+			}
+		}
+		if len(d.Trackers) == 0 && mi.Announce != "" {
+			d.Trackers = append(d.Trackers, TrackerEntry{URL: mi.Announce, Status: "OK"})
+		}
+	}
+
+	return d, nil
+}
+
+func prioFromAnacrolix(p anacrolix_types.PiecePriority) Priority {
+	switch p {
+	case anacrolix_types.PiecePriorityNone:
+		return PrioritySkip
+	case anacrolix_types.PiecePriorityNormal:
+		return PriorityNormal
+	case anacrolix_types.PiecePriorityHigh:
+		return PriorityHigh
+	case anacrolix_types.PiecePriorityNow:
+		return PriorityMax
+	}
+	return PriorityNormal
+}
+
+func splitHostPort(addr string) (string, int, error) {
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := strconv.Atoi(p)
+	if err != nil {
+		return h, 0, err
+	}
+	return h, port, nil
+}
+
+// peerFlagsFor returns the BitTorrent peer flag string. anacrolix v1.61 keeps
+// peerInterested/peerChoking unexported and ships no header-obfuscation
+// accessor, so we cannot read the bits — Plan 4 (or an upstream PR) refines.
+func peerFlagsFor(pc *torrent.PeerConn) string {
+	_ = pc
+	return ""
+}
+
+// pieceProgressOf returns 0..1 of pieces this peer has. *roaring.Bitmap has
+// no Len() method; the denominator is the parent torrent's piece count.
+func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
+	pp := pc.PeerPieces()
+	if pp.IsEmpty() {
+		return 0
+	}
+	n := t.NumPieces()
+	if n == 0 {
+		return 0
+	}
+	return float64(pp.GetCardinality()) / float64(n)
 }
 
 func snapshotFor(t *torrent.Torrent) Snapshot {
