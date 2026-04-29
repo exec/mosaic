@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"mosaic/backend/engine"
 	"mosaic/backend/persistence"
+	"mosaic/backend/remote"
 )
 
 // Service is the only place business logic lives. Wails handlers and (later)
@@ -85,7 +87,98 @@ const (
 	settingAltActive        = "alt_active"
 	settingBlocklistURL     = "blocklist_url"
 	settingBlocklistEnabled = "blocklist_enabled"
+
+	settingWebEnabled  = "web_enabled"
+	settingWebPort     = "web_port"
+	settingWebBindAll  = "web_bind_all"
+	settingWebUsername = "web_username"
+	settingWebPassHash = "web_password_hash"
+	settingWebAPIKey   = "web_api_key"
 )
+
+// WebConfigDTO is the transport shape for the optional HTTP+WS interface.
+// APIKey is only populated by RotateAPIKey (shown once); GetWebConfig returns
+// the stored key so the UI can display it after navigation.
+type WebConfigDTO struct {
+	Enabled  bool   `json:"enabled"`
+	Port     int    `json:"port"`
+	BindAll  bool   `json:"bind_all"`
+	Username string `json:"username"`
+	APIKey   string `json:"api_key"`
+}
+
+func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
+	port := s.intSetting(ctx, settingWebPort)
+	if port == 0 {
+		port = 8080
+	}
+	user, _ := s.settings.Get(ctx, settingWebUsername)
+	if user == "" {
+		user = "admin"
+	}
+	key, _ := s.settings.Get(ctx, settingWebAPIKey)
+	return WebConfigDTO{
+		Enabled:  s.boolSetting(ctx, settingWebEnabled),
+		Port:     port,
+		BindAll:  s.boolSetting(ctx, settingWebBindAll),
+		Username: user,
+		APIKey:   key,
+	}
+}
+
+func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
+	if err := s.setBoolSetting(ctx, settingWebEnabled, c.Enabled); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingWebPort, c.Port); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingWebBindAll, c.BindAll); err != nil {
+		return err
+	}
+	if err := s.settings.Set(ctx, settingWebUsername, c.Username); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
+	hash, err := remote.HashPassword(plain)
+	if err != nil {
+		return err
+	}
+	return s.settings.Set(ctx, settingWebPassHash, hash)
+}
+
+func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
+	key := remote.RandomToken()
+	if err := s.settings.Set(ctx, settingWebAPIKey, key); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// VerifyWebCredentials returns true if username + password match the stored
+// hash; used by the auth middleware on login.
+func (s *Service) VerifyWebCredentials(ctx context.Context, username, plain string) bool {
+	user, _ := s.settings.Get(ctx, settingWebUsername)
+	hash, _ := s.settings.Get(ctx, settingWebPassHash)
+	if user == "" || hash == "" {
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 {
+		return false
+	}
+	return remote.VerifyPassword(plain, hash)
+}
+
+func (s *Service) VerifyAPIKey(ctx context.Context, key string) bool {
+	stored, _ := s.settings.Get(ctx, settingWebAPIKey)
+	if stored == "" || key == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(stored)) == 1
+}
 
 func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {
 	v, err := s.settings.Get(ctx, settingDefaultSavePath)

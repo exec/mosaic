@@ -360,3 +360,76 @@ func TestService_DeleteFeed_CascadesFilters(t *testing.T) {
 	post, _ := svc.ListFiltersByFeed(ctx, feedID)
 	require.Empty(t, post)
 }
+
+func TestService_GetWebConfig_Defaults(t *testing.T) {
+	svc, _ := newTestService(t)
+	cfg := svc.GetWebConfig(context.Background())
+	require.False(t, cfg.Enabled)
+	require.Equal(t, 8080, cfg.Port)
+	require.False(t, cfg.BindAll)
+	require.Equal(t, "admin", cfg.Username)
+	require.Empty(t, cfg.APIKey)
+}
+
+func TestService_SetWebConfig_RoundTrip(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{
+		Enabled: true, Port: 9091, BindAll: true, Username: "remote",
+	}))
+	got := svc.GetWebConfig(ctx)
+	require.True(t, got.Enabled)
+	require.Equal(t, 9091, got.Port)
+	require.True(t, got.BindAll)
+	require.Equal(t, "remote", got.Username)
+}
+
+func TestService_SetWebPassword_VerifyCredentials(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{
+		Enabled: true, Port: 8080, Username: "alice",
+	}))
+	require.NoError(t, svc.SetWebPassword(ctx, "s3cret"))
+
+	require.True(t, svc.VerifyWebCredentials(ctx, "alice", "s3cret"))
+	require.False(t, svc.VerifyWebCredentials(ctx, "alice", "wrong"))
+	require.False(t, svc.VerifyWebCredentials(ctx, "bob", "s3cret"))
+}
+
+func TestService_VerifyWebCredentials_NoPasswordSet(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{Username: "alice"}))
+	require.False(t, svc.VerifyWebCredentials(ctx, "alice", "anything"))
+}
+
+func TestService_RotateAPIKey_AndVerify(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	require.False(t, svc.VerifyAPIKey(ctx, "anything"))
+
+	key, err := svc.RotateAPIKey(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, key)
+
+	require.True(t, svc.VerifyAPIKey(ctx, key))
+	require.False(t, svc.VerifyAPIKey(ctx, "not-the-key"))
+	require.False(t, svc.VerifyAPIKey(ctx, ""))
+
+	// Rotate replaces; old key should no longer verify.
+	newKey, err := svc.RotateAPIKey(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, key, newKey)
+	require.False(t, svc.VerifyAPIKey(ctx, key))
+	require.True(t, svc.VerifyAPIKey(ctx, newKey))
+}
+
+func TestService_GetWebConfig_ReturnsStoredAPIKey(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	key, err := svc.RotateAPIKey(ctx)
+	require.NoError(t, err)
+	require.Equal(t, key, svc.GetWebConfig(ctx).APIKey)
+}
