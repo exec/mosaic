@@ -25,31 +25,33 @@ type Props = {
 
 export function WindowShell(props: Props) {
   return (
-    <div class="flex h-full flex-col">
-      <div class="flex flex-1 min-h-0">
-        <IconRail />
-        <FilterRail
-          torrents={props.torrents}
-          active={props.statusFilter}
-          onSelect={props.onStatusFilter}
-        />
-        <main class="flex flex-1 min-w-0 flex-col">
-          <TopToolbar
-            searchQuery={props.searchQuery}
-            onSearch={props.onSearchQuery}
-            onAddMagnet={props.onAddMagnet}
-            onAddTorrent={props.onAddTorrent}
-            density={props.density}
-            onDensityChange={props.onDensityChange}
+    <div class="flex h-full">
+      <IconRail />
+      <div class="flex flex-1 min-w-0 flex-col">
+        <div class="flex flex-1 min-h-0">
+          <FilterRail
+            torrents={props.torrents}
+            active={props.statusFilter}
+            onSelect={props.onStatusFilter}
           />
-          <DropZone onMagnet={props.onMagnetDropped}>
-            <div class="h-full overflow-auto">
-              {props.children}
-            </div>
-          </DropZone>
-        </main>
+          <main class="flex flex-1 min-w-0 flex-col">
+            <TopToolbar
+              searchQuery={props.searchQuery}
+              onSearch={props.onSearchQuery}
+              onAddMagnet={props.onAddMagnet}
+              onAddTorrent={props.onAddTorrent}
+              density={props.density}
+              onDensityChange={props.onDensityChange}
+            />
+            <DropZone onMagnet={props.onMagnetDropped}>
+              <div class="h-full overflow-auto">
+                {props.children}
+              </div>
+            </DropZone>
+          </main>
+        </div>
+        <StatusBar stats={props.stats} />
       </div>
-      <StatusBar stats={props.stats} />
     </div>
   );
 }

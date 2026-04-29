@@ -1,31 +1,30 @@
 import {createSignal, For, type Component} from 'solid-js';
-import {Activity, Plus, Search, Calendar, Rss, Settings, Info} from 'lucide-solid';
+import {Activity, Search, Calendar, Rss, Settings, Info} from 'lucide-solid';
 import {Tooltip} from '../ui/Tooltip';
 
-type Item = {id: string; label: string; icon: typeof Activity; disabled?: boolean};
+type Item = {id: string; label: string; icon: typeof Activity; soon?: string};
 
 const top: Item[] = [
   {id: 'torrents', label: 'Torrents', icon: Activity},
-  {id: 'add',      label: 'Add',      icon: Plus,     disabled: true},
-  {id: 'search',   label: 'Search',   icon: Search,   disabled: true},
-  {id: 'schedule', label: 'Schedule', icon: Calendar, disabled: true},
-  {id: 'rss',      label: 'RSS',      icon: Rss,      disabled: true},
+  {id: 'search',   label: 'Search',   icon: Search,   soon: 'Plan 5+'},
+  {id: 'schedule', label: 'Schedule', icon: Calendar, soon: 'Plan 4'},
+  {id: 'rss',      label: 'RSS',      icon: Rss,      soon: 'Plan 5'},
 ];
 const bottom: Item[] = [
-  {id: 'settings', label: 'Settings', icon: Settings, disabled: true},
-  {id: 'about',    label: 'About',    icon: Info,     disabled: true},
+  {id: 'settings', label: 'Settings', icon: Settings, soon: 'Plan 4+'},
+  {id: 'about',    label: 'About',    icon: Info,     soon: 'soon'},
 ];
 
 export function IconRail() {
   const [active, setActive] = createSignal('torrents');
 
   const Btn: Component<{item: Item}> = (p) => (
-    <Tooltip label={p.item.label} placement="right">
+    <Tooltip label={p.item.soon ? `${p.item.label} — coming ${p.item.soon}` : p.item.label} placement="right">
       <button
         type="button"
-        disabled={p.item.disabled}
-        onClick={() => !p.item.disabled && setActive(p.item.id)}
-        class="relative grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-colors duration-150 hover:text-zinc-200 disabled:opacity-30 disabled:hover:text-zinc-500"
+        disabled={!!p.item.soon}
+        onClick={() => !p.item.soon && setActive(p.item.id)}
+        class="relative grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-colors duration-150 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default disabled:hover:text-zinc-500"
         classList={{'!text-zinc-100': active() === p.item.id}}
       >
         <p.item.icon class="h-4 w-4" />
