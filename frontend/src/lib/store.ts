@@ -1,7 +1,8 @@
 import {createStore, produce} from 'solid-js/store';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick,
-  type BlocklistDTO, type CategoryDTO, type DetailDTO, type GlobalStatsT, type InspectorTab,
+  type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
+  type GlobalStatsT, type InspectorTab,
   type LimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
 } from './bindings';
 
@@ -43,6 +44,10 @@ export type AppState = {
   // Scheduling + blocklist
   scheduleRules: ScheduleRuleDTO[];
   blocklist: BlocklistDTO;
+
+  // RSS
+  feeds: FeedDTO[];
+  filtersByFeed: Record<number, FilterDTO[]>;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -114,6 +119,9 @@ export function createTorrentsStore() {
 
     scheduleRules: [],
     blocklist: emptyBlocklist,
+
+    feeds: [],
+    filtersByFeed: {},
   });
 
   api.listTorrents()
@@ -128,6 +136,7 @@ export function createTorrentsStore() {
   api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(console.error);
   api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(console.error);
   api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(console.error);
+  api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(console.error);
 
   const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -309,6 +318,49 @@ export function createTorrentsStore() {
         const b = await api.getBlocklist();
         setState(produce((s) => { s.blocklist = b; }));
       }
+    },
+
+    // RSS
+    refreshFeeds: async () => {
+      const fs = await api.listFeeds();
+      setState(produce((s) => { s.feeds = fs ?? []; }));
+    },
+    createFeed: async (f: FeedDTO) => {
+      await api.createFeed(f);
+      const fs = await api.listFeeds();
+      setState(produce((s) => { s.feeds = fs ?? []; }));
+    },
+    updateFeed: async (f: FeedDTO) => {
+      await api.updateFeed(f);
+      const fs = await api.listFeeds();
+      setState(produce((s) => { s.feeds = fs ?? []; }));
+    },
+    deleteFeed: async (id: number) => {
+      await api.deleteFeed(id);
+      const fs = await api.listFeeds();
+      setState(produce((s) => {
+        s.feeds = fs ?? [];
+        delete s.filtersByFeed[id];
+      }));
+    },
+    refreshFiltersForFeed: async (feedID: number) => {
+      const rows = await api.listFiltersByFeed(feedID);
+      setState(produce((s) => { s.filtersByFeed[feedID] = rows ?? []; }));
+    },
+    createFilter: async (f: FilterDTO) => {
+      await api.createFilter(f);
+      const rows = await api.listFiltersByFeed(f.feed_id);
+      setState(produce((s) => { s.filtersByFeed[f.feed_id] = rows ?? []; }));
+    },
+    updateFilter: async (f: FilterDTO) => {
+      await api.updateFilter(f);
+      const rows = await api.listFiltersByFeed(f.feed_id);
+      setState(produce((s) => { s.filtersByFeed[f.feed_id] = rows ?? []; }));
+    },
+    deleteFilter: async (feedID: number, id: number) => {
+      await api.deleteFilter(id);
+      const rows = await api.listFiltersByFeed(feedID);
+      setState(produce((s) => { s.filtersByFeed[feedID] = rows ?? []; }));
     },
 
     dispose: () => { offT(); offS(); offI(); },

@@ -9,6 +9,8 @@ import {
   GetQueueLimits, SetQueueLimits, SetQueuePosition, SetForceStart,
   ListScheduleRules, CreateScheduleRule, UpdateScheduleRule, DeleteScheduleRule,
   GetBlocklist, SetBlocklistURL, RefreshBlocklist,
+  ListFeeds, CreateFeed, UpdateFeed, DeleteFeed,
+  ListFiltersByFeed, CreateFilter, UpdateFilter, DeleteFilter,
 } from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 
@@ -120,6 +122,25 @@ export type BlocklistDTO = {
   error?: string;
 };
 
+export type FeedDTO = {
+  id: number;
+  url: string;
+  name: string;
+  interval_min: number;
+  last_polled: number; // unix seconds, 0 if never
+  etag: string;
+  enabled: boolean;
+};
+
+export type FilterDTO = {
+  id: number;
+  feed_id: number;
+  regex: string;
+  category_id: number | null;
+  save_path: string;
+  enabled: boolean;
+};
+
 export type DetailDTO = {
   id: string;
   name: string;
@@ -178,6 +199,14 @@ export const api = {
   getBlocklist: () => GetBlocklist() as Promise<BlocklistDTO>,
   setBlocklistURL: (url: string, enabled: boolean) => SetBlocklistURL(url, enabled),
   refreshBlocklist: () => RefreshBlocklist(),
+  listFeeds: () => ListFeeds() as Promise<FeedDTO[]>,
+  createFeed: (f: FeedDTO) => CreateFeed(f as any),
+  updateFeed: (f: FeedDTO) => UpdateFeed(f as any),
+  deleteFeed: (id: number) => DeleteFeed(id),
+  listFiltersByFeed: (feedID: number) => ListFiltersByFeed(feedID) as Promise<FilterDTO[]>,
+  createFilter: (f: FilterDTO) => CreateFilter(f as any),
+  updateFilter: (f: FilterDTO) => UpdateFilter(f as any),
+  deleteFilter: (id: number) => DeleteFilter(id),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {
