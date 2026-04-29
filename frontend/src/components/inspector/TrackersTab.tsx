@@ -20,7 +20,9 @@ export function TrackersTab(props: Props) {
                   class="shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
                   classList={{
                     'bg-seed/[.10] text-seed': t.status === 'OK',
-                    'bg-zinc-700/30 text-zinc-400': t.status !== 'OK',
+                    'bg-amber-500/[.10] text-amber-400': t.status === 'Updating',
+                    'bg-rose-500/[.10] text-rose-300': t.status.startsWith('Error'),
+                    'bg-zinc-700/30 text-zinc-400': !['OK', 'Updating'].includes(t.status) && !t.status.startsWith('Error'),
                   }}
                 >
                   {t.status}
