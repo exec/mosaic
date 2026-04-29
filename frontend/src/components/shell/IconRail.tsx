@@ -37,7 +37,7 @@ export function IconRail() {
   );
 
   return (
-    <nav class="flex h-full w-12 flex-col items-center justify-between border-r border-white/[.04] bg-white/[.01] py-3" style={{'-webkit-app-region': 'drag'}}>
+    <nav class="flex h-full w-12 flex-col items-center justify-between border-r border-white/[.04] bg-white/[.01] pt-10 pb-3" style={{'-webkit-app-region': 'drag'}}>
       <div class="flex flex-col gap-1" style={{'-webkit-app-region': 'no-drag'}}>
         <For each={top}>{(it) => <Btn item={it} />}</For>
       </div>
