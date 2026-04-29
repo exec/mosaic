@@ -26,6 +26,10 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// version is overridden at build time with `-ldflags "-X main.version=v0.7.0"`.
+// Defaults to "dev" so `wails dev` runs cleanly.
+var version = "dev"
+
 func main() {
 	paths, err := platform.Paths("Mosaic")
 	if err != nil {

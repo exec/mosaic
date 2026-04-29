@@ -240,6 +240,11 @@ func (a *App) RotateAPIKey() (string, error) {
 	return a.svc.RotateAPIKey(a.ctx)
 }
 
+// AppVersion returns the build-time version string (e.g. "v0.7.0" or "dev").
+func (a *App) AppVersion() string {
+	return version
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
