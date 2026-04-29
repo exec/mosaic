@@ -30,6 +30,7 @@ func TestOpen_RunsMigrations(t *testing.T) {
 	require.Contains(t, names, "categories")
 	require.Contains(t, names, "tags")
 	require.Contains(t, names, "torrent_tags")
+	require.Contains(t, names, "schedule_rules")
 
 	require.Eventually(t, func() bool {
 		rows, err := db.SQL().Query(`SELECT name FROM pragma_table_info('torrents')`)
