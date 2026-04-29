@@ -4,6 +4,7 @@ import {createTorrentsStore, filterTorrents} from './lib/store';
 import {ThemeProvider} from './components/theme/ThemeProvider';
 import {WindowShell} from './components/shell/WindowShell';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
+import {UpdateToast} from './components/shell/UpdateToast';
 import {TorrentList} from './components/list/TorrentList';
 import {Inspector} from './components/inspector/Inspector';
 import {SettingsRoute} from './components/settings/SettingsRoute';
@@ -267,6 +268,11 @@ export default function App() {
           await applyOrganization(id, categoryID, tagIDs);
           toast.success('Torrent added');
         }}
+      />
+      <UpdateToast
+        info={store.state.updateInfo}
+        onInstall={() => { store.setView('settings'); store.setSettingsPane('updates'); }}
+        onDismiss={() => {}}
       />
       <Toaster
         position="bottom-right"
