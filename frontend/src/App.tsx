@@ -5,6 +5,7 @@ import {ThemeProvider} from './components/theme/ThemeProvider';
 import {WindowShell} from './components/shell/WindowShell';
 import {AddMagnetModal} from './components/shell/AddMagnetModal';
 import {TorrentList} from './components/list/TorrentList';
+import {Inspector} from './components/inspector/Inspector';
 import './index.css';
 
 export default function App() {
@@ -19,7 +20,10 @@ export default function App() {
   const handleSelect = (id: string, e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey) store.toggleSelect(id);
     else if (e.shiftKey) store.extendSelectTo(id);
-    else store.select(id);
+    else {
+      store.select(id);
+      store.openInspector(id);
+    }
   };
 
   const handleAddTorrent = async () => {
@@ -42,7 +46,8 @@ export default function App() {
         e.preventDefault();
         store.selectAll();
       } else if (e.key === 'Escape') {
-        store.clearSelection();
+        if (store.state.inspectorOpenId) store.closeInspector();
+        else store.clearSelection();
       } else if (e.key === ' ') {
         e.preventDefault();
         for (const id of store.state.selection) {
@@ -76,6 +81,16 @@ export default function App() {
         onAddMagnet={() => setMagnetModal(true)}
         onAddTorrent={handleAddTorrent}
         onMagnetDropped={handleMagnetDropped}
+        inspector={
+          <Inspector
+            open={store.state.inspectorOpenId !== null}
+            detail={store.state.inspectorDetail}
+            tab={store.state.inspectorTab}
+            bandwidth={store.state.bandwidthRing}
+            onTabChange={(t) => store.setInspectorTab(t)}
+            onClose={() => store.closeInspector()}
+          />
+        }
       >
         <TorrentList
           torrents={filtered()}

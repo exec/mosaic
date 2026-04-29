@@ -21,6 +21,7 @@ type Props = {
   onAddTorrent: () => void;
   onMagnetDropped: (m: string) => Promise<void>;
   children: JSX.Element; // the main pane (TorrentList)
+  inspector?: JSX.Element;
 };
 
 export function WindowShell(props: Props) {
@@ -49,6 +50,7 @@ export function WindowShell(props: Props) {
               </div>
             </DropZone>
           </main>
+          {props.inspector}
         </div>
         <StatusBar stats={props.stats} />
       </div>
