@@ -1,7 +1,7 @@
 import {createMemo, For, Show} from 'solid-js';
 import {createSolidTable, getCoreRowModel, getSortedRowModel, flexRender, type ColumnDef, type SortingState} from '@tanstack/solid-table';
 import {createSignal} from 'solid-js';
-import {ChevronDown, ChevronUp} from 'lucide-solid';
+import {ChevronDown, ChevronUp, Star} from 'lucide-solid';
 import type {Torrent} from '../../lib/bindings';
 import {fmtBytes, fmtETA, fmtPercent, fmtRate} from '../../lib/format';
 
@@ -18,12 +18,23 @@ export function TorrentTable(props: Props) {
     {
       accessorKey: 'name',
       header: 'Name',
-      cell: (info) => (
-        <div class="flex items-center gap-2 min-w-0">
-          <span class={`h-1.5 w-1.5 shrink-0 rounded-full ${info.row.original.paused ? 'bg-paused' : info.row.original.completed ? 'bg-seed' : 'bg-down animate-pulse'}`} />
-          <span class="truncate text-zinc-100">{info.getValue() as string}</span>
-        </div>
-      ),
+      cell: (info) => {
+        const t = info.row.original;
+        return (
+          <div class="flex items-center gap-2 min-w-0">
+            <span class={`h-1.5 w-1.5 shrink-0 rounded-full ${t.paused ? 'bg-paused' : t.completed ? 'bg-seed' : 'bg-down animate-pulse'}`} />
+            <span class="truncate text-zinc-100">{info.getValue() as string}</span>
+            <Show when={t.queued && !t.completed}>
+              <span class="inline-flex shrink-0 items-center gap-1 rounded bg-zinc-800/60 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-zinc-400">
+                Q{t.queue_position + 1}
+              </span>
+            </Show>
+            <Show when={t.force_start}>
+              <Star class="h-3 w-3 shrink-0 text-amber-400" fill="currentColor" />
+            </Show>
+          </div>
+        );
+      },
       size: 360,
     },
     {accessorKey: 'total_bytes', header: 'Size', cell: (info) => <span class="font-mono tabular-nums text-zinc-400">{fmtBytes(info.getValue() as number)}</span>, size: 90},

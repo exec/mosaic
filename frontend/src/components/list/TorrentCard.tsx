@@ -1,5 +1,5 @@
 import {Show} from 'solid-js';
-import {Pause as PauseIcon, Play, Trash2} from 'lucide-solid';
+import {Pause as PauseIcon, Play, Star, Trash2} from 'lucide-solid';
 import type {Torrent} from '../../lib/bindings';
 import {fmtBytes, fmtETA, fmtPercent, fmtRate} from '../../lib/format';
 import {ProgressBar} from '../ui/ProgressBar';
@@ -33,7 +33,17 @@ export function TorrentCard(props: Props) {
           <span class={`h-1.5 w-1.5 shrink-0 rounded-full ${t().paused ? 'bg-paused' : t().completed ? 'bg-seed' : 'bg-down animate-pulse'}`} />
           <div class="truncate font-medium text-zinc-100">{t().name}</div>
         </div>
-        <div class="shrink-0 font-mono text-xs tabular-nums text-zinc-500">{fmtBytes(t().total_bytes)}</div>
+        <div class="flex shrink-0 items-center gap-1.5">
+          <Show when={t().queued && !t().completed}>
+            <span class="inline-flex items-center gap-1 rounded bg-zinc-800/60 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-zinc-400">
+              Q{t().queue_position + 1}
+            </span>
+          </Show>
+          <Show when={t().force_start}>
+            <Star class="h-3 w-3 text-amber-400" fill="currentColor" />
+          </Show>
+          <span class="font-mono text-xs tabular-nums text-zinc-500">{fmtBytes(t().total_bytes)}</span>
+        </div>
       </div>
 
       <div class="mt-2.5">
