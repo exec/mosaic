@@ -113,7 +113,12 @@ export default function App() {
     <ThemeProvider>
       <WindowShell
         view={store.state.view}
+        settingsPane={store.state.settingsPane}
         onNavigate={store.setView}
+        onNavigateRSS={() => {
+          store.setView('settings');
+          store.setSettingsPane('rss');
+        }}
         torrents={store.state.torrents}
         filteredTorrents={filtered()}
         stats={store.state.stats}
@@ -143,6 +148,8 @@ export default function App() {
         queuedCount={queuedCount()}
         settings={
           <SettingsRoute
+            pane={store.state.settingsPane}
+            onPaneChange={store.setSettingsPane}
             defaultSavePath={store.state.defaultSavePath}
             categories={store.state.categories}
             tags={store.state.tags}
@@ -150,6 +157,8 @@ export default function App() {
             queueLimits={store.state.queueLimits}
             scheduleRules={store.state.scheduleRules}
             blocklist={store.state.blocklist}
+            feeds={store.state.feeds}
+            filtersByFeed={store.state.filtersByFeed}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
@@ -163,6 +172,13 @@ export default function App() {
             onDeleteScheduleRule={(id) => store.deleteScheduleRule(id)}
             onSetBlocklistURL={(url, en) => store.setBlocklistURL(url, en)}
             onRefreshBlocklist={() => store.refreshBlocklist()}
+            onCreateFeed={(f) => store.createFeed(f)}
+            onUpdateFeed={(f) => store.updateFeed(f)}
+            onDeleteFeed={(id) => store.deleteFeed(id)}
+            onLoadFiltersForFeed={(feedID) => store.refreshFiltersForFeed(feedID)}
+            onCreateFilter={(f) => store.createFilter(f)}
+            onUpdateFilter={(f) => store.updateFilter(f)}
+            onDeleteFilter={(feedID, id) => store.deleteFilter(feedID, id)}
           />
         }
         inspector={

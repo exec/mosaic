@@ -1,6 +1,7 @@
 import {Match, Show, Switch, type JSX} from 'solid-js';
 import type {AppView, Density, StatusFilter} from '../../lib/store';
 import type {CategoryDTO, GlobalStatsT, TagDTO, Torrent} from '../../lib/bindings';
+import type {SettingsPane} from '../settings/SettingsSidebar';
 import {IconRail} from './IconRail';
 import {FilterRail} from './FilterRail';
 import {TopToolbar} from './TopToolbar';
@@ -9,7 +10,9 @@ import {DropZone} from './DropZone';
 
 type Props = {
   view: AppView;
+  settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
+  onNavigateRSS: () => void;
   torrents: Torrent[];
   filteredTorrents: Torrent[];
   stats: GlobalStatsT;
@@ -40,7 +43,12 @@ type Props = {
 export function WindowShell(props: Props) {
   return (
     <div class="flex h-full">
-      <IconRail view={props.view} onNavigate={props.onNavigate} />
+      <IconRail
+        view={props.view}
+        settingsPane={props.settingsPane}
+        onNavigate={props.onNavigate}
+        onNavigateRSS={props.onNavigateRSS}
+      />
       <div class="flex flex-1 min-w-0 flex-col">
         <div class="flex flex-1 min-h-0">
           <Show when={props.view === 'torrents'}>

@@ -1,15 +1,18 @@
-import {createSignal, Match, Switch} from 'solid-js';
-import type {BlocklistDTO, CategoryDTO, LimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO} from '../../lib/bindings';
+import {Match, Switch} from 'solid-js';
+import type {BlocklistDTO, CategoryDTO, FeedDTO, FilterDTO, LimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
 import {ConnectionPane} from './ConnectionPane';
 import {SchedulePane} from './SchedulePane';
 import {BlocklistPane} from './BlocklistPane';
+import {RSSPane} from './RSSPane';
 import {CategoriesPane} from './CategoriesPane';
 import {TagsPane} from './TagsPane';
 import {AboutPane} from './AboutPane';
 
 type Props = {
+  pane: SettingsPane;
+  onPaneChange: (p: SettingsPane) => void;
   defaultSavePath: string;
   categories: CategoryDTO[];
   tags: TagDTO[];
@@ -17,6 +20,8 @@ type Props = {
   queueLimits: QueueLimitsDTO;
   scheduleRules: ScheduleRuleDTO[];
   blocklist: BlocklistDTO;
+  feeds: FeedDTO[];
+  filtersByFeed: Record<number, FilterDTO[]>;
   onSetDefaultSavePath: (path: string) => Promise<void>;
   onSetLimits: (l: LimitsDTO) => Promise<void>;
   onSetQueueLimits: (q: QueueLimitsDTO) => Promise<void>;
@@ -30,23 +35,28 @@ type Props = {
   onDeleteScheduleRule: (id: number) => Promise<void>;
   onSetBlocklistURL: (url: string, enabled: boolean) => Promise<void>;
   onRefreshBlocklist: () => Promise<void>;
+  onCreateFeed: (f: FeedDTO) => Promise<void>;
+  onUpdateFeed: (f: FeedDTO) => Promise<void>;
+  onDeleteFeed: (id: number) => Promise<void>;
+  onLoadFiltersForFeed: (feedID: number) => Promise<void>;
+  onCreateFilter: (f: FilterDTO) => Promise<void>;
+  onUpdateFilter: (f: FilterDTO) => Promise<void>;
+  onDeleteFilter: (feedID: number, id: number) => Promise<void>;
 };
 
 export function SettingsRoute(props: Props) {
-  const [pane, setPane] = createSignal<SettingsPane>('general');
-
   return (
     <div class="flex h-full">
-      <SettingsSidebar active={pane()} onSelect={setPane} />
+      <SettingsSidebar active={props.pane} onSelect={props.onPaneChange} />
       <div class="flex-1 overflow-auto">
         <Switch>
-          <Match when={pane() === 'general'}>
+          <Match when={props.pane === 'general'}>
             <GeneralPane defaultSavePath={props.defaultSavePath} onSetDefaultSavePath={props.onSetDefaultSavePath} />
           </Match>
-          <Match when={pane() === 'connection'}>
+          <Match when={props.pane === 'connection'}>
             <ConnectionPane limits={props.limits} queueLimits={props.queueLimits} onSetLimits={props.onSetLimits} onSetQueueLimits={props.onSetQueueLimits} />
           </Match>
-          <Match when={pane() === 'schedule'}>
+          <Match when={props.pane === 'schedule'}>
             <SchedulePane
               rules={props.scheduleRules}
               onCreate={props.onCreateScheduleRule}
@@ -54,20 +64,34 @@ export function SettingsRoute(props: Props) {
               onDelete={props.onDeleteScheduleRule}
             />
           </Match>
-          <Match when={pane() === 'blocklist'}>
+          <Match when={props.pane === 'blocklist'}>
             <BlocklistPane
               blocklist={props.blocklist}
               onSetBlocklistURL={props.onSetBlocklistURL}
               onRefreshBlocklist={props.onRefreshBlocklist}
             />
           </Match>
-          <Match when={pane() === 'categories'}>
+          <Match when={props.pane === 'rss'}>
+            <RSSPane
+              feeds={props.feeds}
+              filtersByFeed={props.filtersByFeed}
+              categories={props.categories}
+              onCreateFeed={props.onCreateFeed}
+              onUpdateFeed={props.onUpdateFeed}
+              onDeleteFeed={props.onDeleteFeed}
+              onLoadFilters={props.onLoadFiltersForFeed}
+              onCreateFilter={props.onCreateFilter}
+              onUpdateFilter={props.onUpdateFilter}
+              onDeleteFilter={props.onDeleteFilter}
+            />
+          </Match>
+          <Match when={props.pane === 'categories'}>
             <CategoriesPane categories={props.categories} onCreate={props.onCreateCategory} onUpdate={props.onUpdateCategory} onDelete={props.onDeleteCategory} />
           </Match>
-          <Match when={pane() === 'tags'}>
+          <Match when={props.pane === 'tags'}>
             <TagsPane tags={props.tags} onCreate={props.onCreateTag} onDelete={props.onDeleteTag} />
           </Match>
-          <Match when={pane() === 'about'}>
+          <Match when={props.pane === 'about'}>
             <AboutPane />
           </Match>
         </Switch>

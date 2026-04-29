@@ -5,6 +5,7 @@ import {
   type GlobalStatsT, type InspectorTab,
   type LimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
 } from './bindings';
+import type {SettingsPane} from '../components/settings/SettingsSidebar';
 
 export type Density = 'cards' | 'table';
 export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused' | 'errored';
@@ -23,6 +24,7 @@ export type AppState = {
 
   // View routing
   view: AppView;
+  settingsPane: SettingsPane;
   defaultSavePath: string;
 
   // Inspector
@@ -102,6 +104,7 @@ export function createTorrentsStore() {
     loading: true,
 
     view: 'torrents',
+    settingsPane: 'general',
     defaultSavePath: '',
 
     inspectorOpenId: null,
@@ -211,6 +214,7 @@ export function createTorrentsStore() {
     setStatusFilter: (f: StatusFilter) => setState(produce((s) => { s.statusFilter = f; })),
     setSearchQuery: (q: string) => setState(produce((s) => { s.searchQuery = q; })),
     setView: (v: AppView) => setState(produce((s) => { s.view = v; })),
+    setSettingsPane: (p: SettingsPane) => setState(produce((s) => { s.settingsPane = p; })),
     setDefaultSavePath: async (p: string) => {
       await api.setDefaultSavePath(p);
       setState(produce((s) => { s.defaultSavePath = p; }));
