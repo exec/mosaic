@@ -162,6 +162,22 @@ func (a *App) SetForceStart(infohash string, force bool) error {
 	return a.svc.SetForceStart(a.ctx, infohash, force)
 }
 
+func (a *App) ListScheduleRules() ([]api.ScheduleRuleDTO, error) {
+	return a.svc.ListScheduleRules(a.ctx)
+}
+
+func (a *App) CreateScheduleRule(r api.ScheduleRuleDTO) (int, error) {
+	return a.svc.CreateScheduleRule(a.ctx, r)
+}
+
+func (a *App) UpdateScheduleRule(r api.ScheduleRuleDTO) error {
+	return a.svc.UpdateScheduleRule(a.ctx, r)
+}
+
+func (a *App) DeleteScheduleRule(id int) error {
+	return a.svc.DeleteScheduleRule(a.ctx, id)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
