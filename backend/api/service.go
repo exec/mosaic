@@ -39,6 +39,9 @@ type Service struct {
 
 	blocklistMu sync.RWMutex
 	blocklist   blocklistState
+
+	webHookMu       sync.RWMutex
+	onWebCfgChanged func(WebConfigDTO)
 }
 
 // blocklistState is the in-memory snapshot of the most recent successful (or
@@ -139,7 +142,27 @@ func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
 	if err := s.settings.Set(ctx, settingWebUsername, c.Username); err != nil {
 		return err
 	}
+	s.fireWebConfigChanged(s.GetWebConfig(ctx))
 	return nil
+}
+
+// OnWebConfigChange registers a callback invoked (synchronously) after a
+// SetWebConfig call commits. The callback receives the freshly-read DTO so
+// the remote.Server can restart with the new bind/port/enabled state.
+// Pass nil to unregister.
+func (s *Service) OnWebConfigChange(cb func(WebConfigDTO)) {
+	s.webHookMu.Lock()
+	s.onWebCfgChanged = cb
+	s.webHookMu.Unlock()
+}
+
+func (s *Service) fireWebConfigChanged(c WebConfigDTO) {
+	s.webHookMu.RLock()
+	cb := s.onWebCfgChanged
+	s.webHookMu.RUnlock()
+	if cb != nil {
+		cb(c)
+	}
 }
 
 func (s *Service) SetWebPassword(ctx context.Context, plain string) error {

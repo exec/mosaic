@@ -9,17 +9,19 @@ import (
 
 	"mosaic/backend/api"
 	"mosaic/backend/engine"
+	"mosaic/backend/remote"
 )
 
 // App is the Wails-bound type. Methods on App become callable from the
 // frontend via the auto-generated bindings in frontend/wailsjs/.
 type App struct {
 	svc *api.Service
+	hub *remote.Hub // optional fan-out for browser clients; nil-safe
 	ctx context.Context
 }
 
-func NewApp(svc *api.Service) *App {
-	return &App{svc: svc}
+func NewApp(svc *api.Service, hub *remote.Hub) *App {
+	return &App{svc: svc, hub: hub}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -240,6 +242,9 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "torrents:tick", rows)
+			if a.hub != nil {
+				a.hub.PublishTorrents(rows)
+			}
 		case <-stats.C:
 			s, err := a.svc.GlobalStats(ctx)
 			if err != nil {
@@ -247,6 +252,9 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "stats:tick", s)
+			if a.hub != nil {
+				a.hub.PublishStats(s)
+			}
 		case <-inspector.C:
 			detail, err := a.svc.DetailForFocus(ctx)
 			if err != nil {
@@ -257,6 +265,9 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "inspector:tick", detail)
+			if a.hub != nil {
+				a.hub.PublishInspector(*detail)
+			}
 		}
 	}
 }

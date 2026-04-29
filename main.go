@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"mosaic/backend/logging"
 	"mosaic/backend/persistence"
 	"mosaic/backend/platform"
+	"mosaic/backend/remote"
 )
 
 //go:embed all:frontend/dist
@@ -89,7 +91,21 @@ func main() {
 	defer scheduleEngine.Close()
 	rssPoller := api.NewRSSPoller(svc, feeds, filters)
 	defer rssPoller.Close()
-	app := NewApp(svc)
+
+	// Optional HTTPS+WS remote interface. Reads its enabled/port/bind state
+	// from settings; restarts whenever SetWebConfig fires the change hook.
+	staticFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		log.Fatal().Err(err).Msg("embed sub frontend/dist")
+	}
+	hub := remote.NewHub()
+	defer hub.Close()
+	remoteSrv := remote.NewServer(svc, hub, remote.NewSessionStore(), staticFS, paths.DataDir)
+	defer remoteSrv.Stop()
+	svc.OnWebConfigChange(remoteSrv.Apply)
+	remoteSrv.Apply(svc.GetWebConfig(ctx))
+
+	app := NewApp(svc, hub)
 
 	err = wails.Run(&options.App{
 		Title:  "Mosaic",
