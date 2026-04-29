@@ -51,3 +51,8 @@ html, body, #app {
 
   --ease-app: cubic-bezier(0.32, 0.72, 0, 1);
 }
+
+@keyframes shimmer {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(400%); }
+}
