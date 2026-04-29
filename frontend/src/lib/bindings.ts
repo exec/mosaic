@@ -5,6 +5,8 @@ import {
   ListTags, CreateTag, DeleteTag, AssignTag, UnassignTag,
   SetTorrentCategory, SetFilePriorities, AddTorrentBytes,
   GetDefaultSavePath, SetDefaultSavePath,
+  GetLimits, SetLimits, ToggleAltSpeed,
+  GetQueueLimits, SetQueueLimits, SetQueuePosition, SetForceStart,
 } from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 
@@ -38,6 +40,22 @@ export type Torrent = {
   added_at: number;
   category_id: number | null;
   tags: TagDTO[];
+  queue_position: number;
+  force_start: boolean;
+  queued: boolean;
+};
+
+export type LimitsDTO = {
+  down_kbps: number;
+  up_kbps: number;
+  alt_down_kbps: number;
+  alt_up_kbps: number;
+  alt_active: boolean;
+};
+
+export type QueueLimitsDTO = {
+  max_active_downloads: number;
+  max_active_seeds: number;
 };
 
 export type GlobalStatsT = {
@@ -125,6 +143,13 @@ export const api = {
   addTorrentBytes: (bytes: Uint8Array, savePath: string) => AddTorrentBytes(Array.from(bytes), savePath),
   getDefaultSavePath: () => GetDefaultSavePath() as Promise<string>,
   setDefaultSavePath: (path: string) => SetDefaultSavePath(path),
+  getLimits: () => GetLimits() as Promise<LimitsDTO>,
+  setLimits: (l: LimitsDTO) => SetLimits(l),
+  toggleAltSpeed: () => ToggleAltSpeed() as Promise<boolean>,
+  getQueueLimits: () => GetQueueLimits() as Promise<QueueLimitsDTO>,
+  setQueueLimits: (q: QueueLimitsDTO) => SetQueueLimits(q),
+  setQueuePosition: (infohash: string, pos: number) => SetQueuePosition(infohash, pos),
+  setForceStart: (infohash: string, force: boolean) => SetForceStart(infohash, force),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {

@@ -1,7 +1,8 @@
 import {createStore, produce} from 'solid-js/store';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick,
-  type CategoryDTO, type DetailDTO, type GlobalStatsT, type InspectorTab, type TagDTO, type Torrent,
+  type CategoryDTO, type DetailDTO, type GlobalStatsT, type InspectorTab,
+  type LimitsDTO, type QueueLimitsDTO, type TagDTO, type Torrent,
 } from './bindings';
 
 export type Density = 'cards' | 'table';
@@ -34,6 +35,10 @@ export type AppState = {
   tags: TagDTO[];
   selectedCategoryID: number | null;
   selectedTagID: number | null;
+
+  // Bandwidth + queue
+  limits: LimitsDTO;
+  queueLimits: QueueLimitsDTO;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -55,6 +60,19 @@ const emptyStats: GlobalStatsT = {
   total_download_rate: 0,
   total_upload_rate: 0,
   total_peers: 0,
+};
+
+const emptyLimits: LimitsDTO = {
+  down_kbps: 0,
+  up_kbps: 0,
+  alt_down_kbps: 0,
+  alt_up_kbps: 0,
+  alt_active: false,
+};
+
+const emptyQueueLimits: QueueLimitsDTO = {
+  max_active_downloads: 0,
+  max_active_seeds: 0,
 };
 
 export function createTorrentsStore() {
@@ -79,6 +97,9 @@ export function createTorrentsStore() {
     tags: [],
     selectedCategoryID: null,
     selectedTagID: null,
+
+    limits: emptyLimits,
+    queueLimits: emptyQueueLimits,
   });
 
   api.listTorrents()
@@ -89,6 +110,8 @@ export function createTorrentsStore() {
   api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(console.error);
   api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(console.error);
   api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(console.error);
+  api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(console.error);
+  api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(console.error);
 
   const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -215,6 +238,22 @@ export function createTorrentsStore() {
       api.setFilePriorities(infohash, prios),
     setSelectedCategory: (id: number | null) => setState(produce((s) => { s.selectedCategoryID = id; })),
     setSelectedTag: (id: number | null) => setState(produce((s) => { s.selectedTagID = id; })),
+
+    // Bandwidth + queue
+    setLimits: async (l: LimitsDTO) => {
+      await api.setLimits(l);
+      setState(produce((s) => { s.limits = l; }));
+    },
+    toggleAltSpeed: async () => {
+      const next = await api.toggleAltSpeed();
+      setState(produce((s) => { s.limits = {...s.limits, alt_active: next}; }));
+    },
+    setQueueLimits: async (q: QueueLimitsDTO) => {
+      await api.setQueueLimits(q);
+      setState(produce((s) => { s.queueLimits = q; }));
+    },
+    setQueuePosition: (infohash: string, pos: number) => api.setQueuePosition(infohash, pos),
+    setForceStart: (infohash: string, force: boolean) => api.setForceStart(infohash, force),
 
     dispose: () => { offT(); offS(); offI(); },
   };
