@@ -5,7 +5,7 @@ import type {Density} from '../../lib/store';
 import {TorrentCard} from './TorrentCard';
 import {TorrentTable} from './TorrentTable';
 import {EmptyState} from './EmptyState';
-import {TorrentRowMenu} from './TorrentRowMenu';
+import {TorrentRowMenu, type QueueDirection} from './TorrentRowMenu';
 
 type Props = {
   torrents: Torrent[];
@@ -19,6 +19,8 @@ type Props = {
   onRemove: (id: string) => void;
   onSetCategory: (id: string, categoryID: number | null) => void;
   onToggleTag: (id: string, tagID: number) => void;
+  onMoveQueue: (id: string, direction: QueueDirection) => void;
+  onToggleForceStart: (id: string, current: boolean) => void;
 };
 
 export function TorrentList(props: Props) {
@@ -44,6 +46,8 @@ export function TorrentList(props: Props) {
                   }}
                   onSetCategory={(categoryID) => props.onSetCategory(t.id, categoryID)}
                   onToggleTag={(tagID) => props.onToggleTag(t.id, tagID)}
+                  onMoveQueue={(direction) => props.onMoveQueue(t.id, direction)}
+                  onToggleForceStart={() => props.onToggleForceStart(t.id, t.force_start)}
                 >
                   <TorrentCard
                     torrent={t}

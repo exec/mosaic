@@ -34,6 +34,27 @@ export default function App() {
     )
   );
 
+  const onMoveQueue = async (id: string, direction: 'top' | 'up' | 'down' | 'bottom') => {
+    const sorted = [...store.state.torrents].sort((a, b) => a.queue_position - b.queue_position);
+    const currentIdx = sorted.findIndex((t) => t.id === id);
+    if (currentIdx < 0) return;
+    let targetIdx: number;
+    switch (direction) {
+      case 'top':    targetIdx = 0; break;
+      case 'bottom': targetIdx = sorted.length - 1; break;
+      case 'up':     targetIdx = Math.max(0, currentIdx - 1); break;
+      case 'down':   targetIdx = Math.min(sorted.length - 1, currentIdx + 1); break;
+    }
+    if (targetIdx === currentIdx) return;
+    const moved = sorted.splice(currentIdx, 1)[0];
+    sorted.splice(targetIdx, 0, moved);
+    await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
+  };
+
+  const onToggleForceStart = async (id: string, current: boolean) => {
+    await store.setForceStart(id, !current);
+  };
+
   const handleSelect = (id: string, e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey) store.toggleSelect(id);
     else if (e.shiftKey) store.extendSelectTo(id);
@@ -178,6 +199,8 @@ export default function App() {
               }
             } catch (err) { toast.error(String(err)); }
           }}
+          onMoveQueue={onMoveQueue}
+          onToggleForceStart={onToggleForceStart}
         />
       </WindowShell>
       <AddTorrentModal

@@ -1,7 +1,9 @@
 import {ContextMenu} from '../ui/ContextMenu';
-import {Pause, Play, Trash2, Folder, Copy, RotateCw, Tag, ChevronRight, Check} from 'lucide-solid';
+import {Pause, Play, Trash2, Folder, Copy, RotateCw, Tag, ChevronRight, Check, ListOrdered} from 'lucide-solid';
 import type {CategoryDTO, TagDTO, Torrent} from '../../lib/bindings';
 import {For, type JSX, Show} from 'solid-js';
+
+export type QueueDirection = 'top' | 'up' | 'down' | 'bottom';
 
 type Props = {
   torrent: Torrent;
@@ -13,6 +15,8 @@ type Props = {
   onCopyMagnet: () => void;
   onSetCategory: (id: number | null) => void;
   onToggleTag: (id: number) => void;
+  onMoveQueue: (direction: QueueDirection) => void;
+  onToggleForceStart: () => void;
   children: JSX.Element;
 };
 
@@ -39,6 +43,34 @@ export function TorrentRowMenu(props: Props) {
         Recheck
       </ContextMenu.Item>
       <ContextMenu.Separator />
+      <ContextMenu.Sub>
+        <ContextMenu.SubTrigger>
+          <ListOrdered class="h-3.5 w-3.5" />
+          Queue
+          <ChevronRight class="ml-auto h-3 w-3" />
+        </ContextMenu.SubTrigger>
+        <ContextMenu.SubContent>
+          <ContextMenu.Item onSelect={() => props.onMoveQueue('top')}>
+            Move to top
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => props.onMoveQueue('up')}>
+            Move up
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => props.onMoveQueue('down')}>
+            Move down
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => props.onMoveQueue('bottom')}>
+            Move to bottom
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
+          <ContextMenu.Item onSelect={() => props.onToggleForceStart()}>
+            <Show when={props.torrent.force_start} fallback={<>Force-start</>}>
+              <Check class="h-3.5 w-3.5" />
+              Force-start (active)
+            </Show>
+          </ContextMenu.Item>
+        </ContextMenu.SubContent>
+      </ContextMenu.Sub>
       <ContextMenu.Sub>
         <ContextMenu.SubTrigger>
           <Folder class="h-3.5 w-3.5" />
