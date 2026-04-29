@@ -224,6 +224,22 @@ func (a *App) DeleteFilter(id int) error {
 	return a.svc.DeleteFilter(a.ctx, id)
 }
 
+func (a *App) GetWebConfig() api.WebConfigDTO {
+	return a.svc.GetWebConfig(a.ctx)
+}
+
+func (a *App) SetWebConfig(c api.WebConfigDTO) error {
+	return a.svc.SetWebConfig(a.ctx, c)
+}
+
+func (a *App) SetWebPassword(plain string) error {
+	return a.svc.SetWebPassword(a.ctx, plain)
+}
+
+func (a *App) RotateAPIKey() (string, error) {
+	return a.svc.RotateAPIKey(a.ctx)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
