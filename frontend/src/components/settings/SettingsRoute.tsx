@@ -1,8 +1,10 @@
 import {createSignal, Match, Switch} from 'solid-js';
-import type {CategoryDTO, LimitsDTO, QueueLimitsDTO, TagDTO} from '../../lib/bindings';
+import type {BlocklistDTO, CategoryDTO, LimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
 import {ConnectionPane} from './ConnectionPane';
+import {SchedulePane} from './SchedulePane';
+import {BlocklistPane} from './BlocklistPane';
 import {CategoriesPane} from './CategoriesPane';
 import {TagsPane} from './TagsPane';
 import {AboutPane} from './AboutPane';
@@ -13,6 +15,8 @@ type Props = {
   tags: TagDTO[];
   limits: LimitsDTO;
   queueLimits: QueueLimitsDTO;
+  scheduleRules: ScheduleRuleDTO[];
+  blocklist: BlocklistDTO;
   onSetDefaultSavePath: (path: string) => Promise<void>;
   onSetLimits: (l: LimitsDTO) => Promise<void>;
   onSetQueueLimits: (q: QueueLimitsDTO) => Promise<void>;
@@ -21,6 +25,11 @@ type Props = {
   onDeleteCategory: (id: number) => Promise<void>;
   onCreateTag: (name: string, color: string) => Promise<void>;
   onDeleteTag: (id: number) => Promise<void>;
+  onCreateScheduleRule: (r: ScheduleRuleDTO) => Promise<void>;
+  onUpdateScheduleRule: (r: ScheduleRuleDTO) => Promise<void>;
+  onDeleteScheduleRule: (id: number) => Promise<void>;
+  onSetBlocklistURL: (url: string, enabled: boolean) => Promise<void>;
+  onRefreshBlocklist: () => Promise<void>;
 };
 
 export function SettingsRoute(props: Props) {
@@ -36,6 +45,21 @@ export function SettingsRoute(props: Props) {
           </Match>
           <Match when={pane() === 'connection'}>
             <ConnectionPane limits={props.limits} queueLimits={props.queueLimits} onSetLimits={props.onSetLimits} onSetQueueLimits={props.onSetQueueLimits} />
+          </Match>
+          <Match when={pane() === 'schedule'}>
+            <SchedulePane
+              rules={props.scheduleRules}
+              onCreate={props.onCreateScheduleRule}
+              onUpdate={props.onUpdateScheduleRule}
+              onDelete={props.onDeleteScheduleRule}
+            />
+          </Match>
+          <Match when={pane() === 'blocklist'}>
+            <BlocklistPane
+              blocklist={props.blocklist}
+              onSetBlocklistURL={props.onSetBlocklistURL}
+              onRefreshBlocklist={props.onRefreshBlocklist}
+            />
           </Match>
           <Match when={pane() === 'categories'}>
             <CategoriesPane categories={props.categories} onCreate={props.onCreateCategory} onUpdate={props.onUpdateCategory} onDelete={props.onDeleteCategory} />

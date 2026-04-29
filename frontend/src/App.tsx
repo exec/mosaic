@@ -148,6 +148,8 @@ export default function App() {
             tags={store.state.tags}
             limits={store.state.limits}
             queueLimits={store.state.queueLimits}
+            scheduleRules={store.state.scheduleRules}
+            blocklist={store.state.blocklist}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
@@ -156,6 +158,11 @@ export default function App() {
             onDeleteCategory={(id) => store.deleteCategory(id)}
             onCreateTag={(name, color) => store.createTag(name, color)}
             onDeleteTag={(id) => store.deleteTag(id)}
+            onCreateScheduleRule={(r) => store.createScheduleRule(r)}
+            onUpdateScheduleRule={(r) => store.updateScheduleRule(r)}
+            onDeleteScheduleRule={(id) => store.deleteScheduleRule(id)}
+            onSetBlocklistURL={(url, en) => store.setBlocklistURL(url, en)}
+            onRefreshBlocklist={() => store.refreshBlocklist()}
           />
         }
         inspector={
