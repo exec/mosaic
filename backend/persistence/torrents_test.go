@@ -64,6 +64,25 @@ func TestTorrents_Remove(t *testing.T) {
 	require.Empty(t, all)
 }
 
+func TestTorrents_QueueAndForceStart(t *testing.T) {
+	db := newTestDB(t)
+	tr := NewTorrents(db)
+	ctx := context.Background()
+	require.NoError(t, tr.Save(ctx, TorrentRecord{InfoHash: "q1", Name: "n", SavePath: "/p", AddedAt: time.Now()}))
+
+	// Default values
+	got, _ := tr.Get(ctx, "q1")
+	require.Equal(t, 0, got.QueuePosition)
+	require.False(t, got.ForceStart)
+
+	require.NoError(t, tr.SetQueuePosition(ctx, "q1", 5))
+	require.NoError(t, tr.SetForceStart(ctx, "q1", true))
+
+	got, _ = tr.Get(ctx, "q1")
+	require.Equal(t, 5, got.QueuePosition)
+	require.True(t, got.ForceStart)
+}
+
 func TestTorrents_CategoryAssignment(t *testing.T) {
 	db := newTestDB(t)
 	tor := NewTorrents(db)

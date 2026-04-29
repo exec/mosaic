@@ -9,14 +9,16 @@ import (
 
 // TorrentRecord is the persisted metadata for a single torrent.
 type TorrentRecord struct {
-	InfoHash    string
-	Name        string
-	Magnet      string
-	SavePath    string
-	CategoryID  *int // nullable foreign key
-	AddedAt     time.Time
-	CompletedAt *time.Time
-	Paused      bool
+	InfoHash      string
+	Name          string
+	Magnet        string
+	SavePath      string
+	CategoryID    *int // nullable foreign key
+	AddedAt       time.Time
+	CompletedAt   *time.Time
+	Paused        bool
+	QueuePosition int // 0 = top
+	ForceStart    bool
 }
 
 // Torrents is the DAO for the torrents table.
@@ -41,9 +43,13 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 	if r.Paused {
 		paused = 1
 	}
+	forceStart := 0
+	if r.ForceStart {
+		forceStart = 1
+	}
 	_, err := t.db.SQL().ExecContext(ctx, `
-INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(infohash) DO UPDATE SET
   name = excluded.name,
   magnet = excluded.magnet,
@@ -51,15 +57,17 @@ ON CONFLICT(infohash) DO UPDATE SET
   category_id = excluded.category_id,
   added_at = excluded.added_at,
   completed_at = excluded.completed_at,
-  paused = excluded.paused
-`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused)
+  paused = excluded.paused,
+  queue_position = excluded.queue_position,
+  force_start = excluded.force_start
+`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart)
 	return err
 }
 
 // Get returns a single record by infohash.
 func (t *Torrents) Get(ctx context.Context, infohash string) (TorrentRecord, error) {
 	row := t.db.SQL().QueryRowContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start
 FROM torrents WHERE infohash = ?`, infohash)
 	return scanTorrent(row)
 }
@@ -67,7 +75,7 @@ FROM torrents WHERE infohash = ?`, infohash)
 // List returns all records ordered by added_at descending.
 func (t *Torrents) List(ctx context.Context) ([]TorrentRecord, error) {
 	rows, err := t.db.SQL().QueryContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start
 FROM torrents ORDER BY added_at DESC`)
 	if err != nil {
 		return nil, err
@@ -101,6 +109,24 @@ func (t *Torrents) SetCategory(ctx context.Context, infohash string, categoryID 
 	return err
 }
 
+// SetQueuePosition updates the queue position for a torrent.
+func (t *Torrents) SetQueuePosition(ctx context.Context, infohash string, pos int) error {
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET queue_position = ? WHERE infohash = ?`, pos, infohash)
+	return err
+}
+
+// SetForceStart toggles whether a torrent bypasses the queue limit.
+func (t *Torrents) SetForceStart(ctx context.Context, infohash string, force bool) error {
+	v := 0
+	if force {
+		v = 1
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET force_start = ? WHERE infohash = ?`, v, infohash)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -111,7 +137,8 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	var completedAt sql.NullInt64
 	var categoryID sql.NullInt64
 	var paused int
-	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused); err != nil {
+	var forceStart int
+	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return r, ErrNotFound
 		}
@@ -127,5 +154,6 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 		r.CategoryID = &v
 	}
 	r.Paused = paused == 1
+	r.ForceStart = forceStart == 1
 	return r, nil
 }
