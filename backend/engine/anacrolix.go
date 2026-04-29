@@ -32,6 +32,15 @@ type AnacrolixBackend struct {
 
 	mu       sync.Mutex
 	bySaveTo map[TorrentID]string // id → save path (we set it per-torrent)
+
+	rateMu    sync.Mutex
+	prevRates map[TorrentID]rateSample
+}
+
+type rateSample struct {
+	at   time.Time
+	down int64
+	up   int64
 }
 
 // NewAnacrolixBackend opens a torrent.Client with our config.
@@ -55,7 +64,11 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("anacrolix client: %w", err)
 	}
-	return &AnacrolixBackend{client: c, bySaveTo: make(map[TorrentID]string)}, nil
+	return &AnacrolixBackend{
+		client:    c,
+		bySaveTo:  make(map[TorrentID]string),
+		prevRates: make(map[TorrentID]rateSample),
+	}, nil
 }
 
 func idFor(t *torrent.Torrent) TorrentID {
@@ -143,8 +156,13 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 func (a *AnacrolixBackend) List() []Snapshot {
 	ts := a.client.Torrents()
 	out := make([]Snapshot, 0, len(ts))
+	a.rateMu.Lock()
+	defer a.rateMu.Unlock()
 	for _, t := range ts {
-		out = append(out, snapshotFor(t))
+		id := TorrentID(t.InfoHash().HexString())
+		snap, next := snapshotFor(t, a.prevRates[id])
+		a.prevRates[id] = next
+		out = append(out, snap)
 	}
 	return out
 }
@@ -154,7 +172,12 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	if !ok {
 		return Snapshot{}, errors.New("not found")
 	}
-	return snapshotFor(t), nil
+	a.rateMu.Lock()
+	prev := a.prevRates[id]
+	snap, next := snapshotFor(t, prev)
+	a.prevRates[id] = next
+	a.rateMu.Unlock()
+	return snap, nil
 }
 
 func (a *AnacrolixBackend) Close() error {
@@ -182,7 +205,12 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	if !ok {
 		return Detail{}, errors.New("not found")
 	}
-	d := Detail{Snapshot: snapshotFor(t)}
+	a.rateMu.Lock()
+	prev := a.prevRates[id]
+	snap, next := snapshotFor(t, prev)
+	a.prevRates[id] = next
+	a.rateMu.Unlock()
+	d := Detail{Snapshot: snap}
 
 	if scope.Files {
 		for i, f := range t.Files() {
@@ -285,7 +313,7 @@ func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
 	return float64(pp.GetCardinality()) / float64(n)
 }
 
-func snapshotFor(t *torrent.Torrent) Snapshot {
+func snapshotFor(t *torrent.Torrent, prev rateSample) (Snapshot, rateSample) {
 	stats := t.Stats()
 	name := t.Name()
 	if name == "" {
@@ -295,17 +323,31 @@ func snapshotFor(t *torrent.Torrent) Snapshot {
 	if info := t.Info(); info != nil {
 		total = info.TotalLength()
 	}
-	return Snapshot{
-		ID:           TorrentID(t.InfoHash().HexString()),
-		Name:         name,
-		TotalBytes:   total,
-		BytesDone:    t.BytesCompleted(),
-		DownloadRate: int64(stats.BytesReadData.Int64()), // cumulative; UI computes rate
-		UploadRate:   int64(stats.BytesWrittenData.Int64()),
-		Peers:        stats.ActivePeers,
-		Seeds:        stats.ConnectedSeeders,
-		Paused:       false, // TODO in plan 2: distinguish via SetMaxEstablishedConns(0)
-		Completed:    total > 0 && t.BytesCompleted() == total,
-		AddedAt:      time.Now(), // engine wrapper does not track AddedAt; persistence does
+	bytesDown := stats.BytesReadData.Int64()
+	bytesUp := stats.BytesWrittenData.Int64()
+	now := time.Now()
+	var rateDown, rateUp int64
+	if !prev.at.IsZero() {
+		dt := now.Sub(prev.at).Seconds()
+		if dt > 0 {
+			rateDown = int64(float64(bytesDown-prev.down) / dt)
+			rateUp = int64(float64(bytesUp-prev.up) / dt)
+		}
 	}
+	snap := Snapshot{
+		ID:         TorrentID(t.InfoHash().HexString()),
+		Name:       name,
+		TotalBytes: total,
+		BytesDone:  t.BytesCompleted(),
+		BytesDown:  bytesDown,
+		BytesUp:    bytesUp,
+		RateDown:   rateDown,
+		RateUp:     rateUp,
+		Peers:      stats.ActivePeers,
+		Seeds:      stats.ConnectedSeeders,
+		Paused:     false, // TODO in plan 2: distinguish via SetMaxEstablishedConns(0)
+		Completed:  total > 0 && t.BytesCompleted() == total,
+		AddedAt:    time.Now(), // engine wrapper does not track AddedAt; persistence does
+	}
+	return snap, rateSample{at: now, down: bytesDown, up: bytesUp}
 }

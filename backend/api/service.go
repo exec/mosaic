@@ -59,8 +59,8 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		TotalBytes:   s.TotalBytes,
 		BytesDone:    s.BytesDone,
 		Progress:     prog,
-		DownloadRate: s.DownloadRate,
-		UploadRate:   s.UploadRate,
+		DownloadRate: s.RateDown,
+		UploadRate:   s.RateUp,
 		Peers:        s.Peers,
 		Seeds:        s.Seeds,
 		Paused:       s.Paused,
@@ -174,8 +174,8 @@ func (s *Service) GlobalStats(ctx context.Context) (GlobalStats, error) {
 		if snap.Completed {
 			st.SeedingTorrents++
 		}
-		st.TotalDownloadRate += snap.DownloadRate
-		st.TotalUploadRate += snap.UploadRate
+		st.TotalDownloadRate += snap.RateDown
+		st.TotalUploadRate += snap.RateUp
 		st.TotalPeers += snap.Peers
 	}
 	return st, nil
@@ -306,11 +306,6 @@ func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
 	if snap.TotalBytes > 0 {
 		prog = float64(snap.BytesDone) / float64(snap.TotalBytes)
 	}
-	// Ratio left at 0.0 in Plan 3 — engine.Snapshot doesn't yet expose
-	// cumulative-uploaded vs cumulative-downloaded as separate fields, and the
-	// UploadRate/DownloadRate names are misleading carry-overs from Plan 1
-	// (they're actually cumulative byte counts). Plan 4 will rename to
-	// BytesUp/BytesDown and compute ratio = BytesUp / BytesDown.
 	dto := DetailDTO{
 		ID:         string(snap.ID),
 		Name:       snap.Name,
@@ -319,9 +314,9 @@ func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
 		TotalBytes: snap.TotalBytes,
 		BytesDone:  snap.BytesDone,
 		Progress:   prog,
-		Ratio:      0.0,
-		TotalDown:  snap.DownloadRate,
-		TotalUp:    snap.UploadRate,
+		Ratio:      ratioOf(snap.BytesDown, snap.BytesUp),
+		TotalDown:  snap.BytesDown,
+		TotalUp:    snap.BytesUp,
 		Peers:      snap.Peers,
 		Seeds:      snap.Seeds,
 		AddedAt:    addedAt.Unix(),
@@ -349,6 +344,13 @@ func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
 		})
 	}
 	return dto
+}
+
+func ratioOf(down, up int64) float64 {
+	if down == 0 {
+		return 0
+	}
+	return float64(up) / float64(down)
 }
 
 func priorityToString(p engine.Priority) string {

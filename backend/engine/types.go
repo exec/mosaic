@@ -18,19 +18,21 @@ type AddRequest struct {
 
 // Snapshot is a point-in-time view of a torrent's state, suitable for the UI.
 type Snapshot struct {
-	ID           TorrentID
-	Name         string
-	Magnet       string
-	SavePath     string
-	TotalBytes   int64
-	BytesDone    int64
-	DownloadRate int64 // bytes/sec
-	UploadRate   int64
-	Peers        int
-	Seeds        int
-	Paused       bool
-	Completed    bool
-	AddedAt      time.Time
+	ID         TorrentID
+	Name       string
+	Magnet     string
+	SavePath   string
+	TotalBytes int64
+	BytesDone  int64
+	BytesDown  int64 // cumulative bytes downloaded this session
+	BytesUp    int64 // cumulative bytes uploaded this session
+	RateDown   int64 // instantaneous bytes/sec
+	RateUp     int64
+	Peers      int
+	Seeds      int
+	Paused     bool
+	Completed  bool
+	AddedAt    time.Time
 }
 
 // EventKind enumerates the kinds of EngineEvent.

@@ -110,3 +110,22 @@ func TestEngine_DetailedSnapshot_ScopeFlagsExcludeData(t *testing.T) {
 	require.Empty(t, d.Peers)
 	require.Empty(t, d.Trackers)
 }
+
+func TestEngine_Snapshot_HasSeparateBytesAndRateFields(t *testing.T) {
+	fb := NewFakeBackend()
+	eng := NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	id, err := eng.AddMagnet(context.Background(), "magnet:?xt=urn:btih:fields", "/tmp")
+	require.NoError(t, err)
+	fb.AdvanceProgress(id, 1024)
+
+	snap, err := eng.Snapshot(id)
+	require.NoError(t, err)
+	require.Equal(t, int64(1024), snap.BytesDone)
+	// BytesDown/BytesUp default to 0 in the fake; RateDown/RateUp default to 0
+	require.Equal(t, int64(0), snap.BytesDown)
+	require.Equal(t, int64(0), snap.BytesUp)
+	require.Equal(t, int64(0), snap.RateDown)
+	require.Equal(t, int64(0), snap.RateUp)
+}
