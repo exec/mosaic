@@ -27,6 +27,7 @@ export function createTorrentsStore() {
   return {
     state,
     addMagnet: (m: string) => api.addMagnet(m),
+    pickAndAddTorrent: () => api.pickAndAddTorrent(),
     pause: (id: string) => api.pause(id),
     resume: (id: string) => api.resume(id),
     remove: (id: string, deleteFiles: boolean) => api.remove(id, deleteFiles),

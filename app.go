@@ -41,6 +41,29 @@ func (a *App) ListTorrents() ([]api.TorrentDTO, error) {
 	return a.svc.ListTorrents(a.ctx)
 }
 
+// PickAndAddTorrent opens a native file dialog, lets the user choose a
+// .torrent file, and adds it to the engine + persistence. Returns the new
+// torrent ID, or "" if the user cancelled.
+func (a *App) PickAndAddTorrent() (string, error) {
+	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title: "Select .torrent file",
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Torrent files (*.torrent)", Pattern: "*.torrent"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if path == "" { // user cancelled
+		return "", nil
+	}
+	id, err := a.svc.AddTorrentFile(a.ctx, path)
+	if err != nil {
+		return "", err
+	}
+	return string(id), nil
+}
+
 // Pause/Resume/Remove operate by id.
 func (a *App) Pause(id string) error  { return a.svc.Pause(engine.TorrentID(id)) }
 func (a *App) Resume(id string) error { return a.svc.Resume(engine.TorrentID(id)) }

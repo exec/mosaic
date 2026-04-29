@@ -13,12 +13,20 @@ export default function App() {
     <div class="h-full flex flex-col">
       <header class="flex items-center justify-between px-4 py-2 border-b border-zinc-800">
         <div class="font-semibold">Mosaic</div>
-        <button
-          class="px-3 py-1.5 rounded bg-blue-600 text-sm"
-          onClick={() => setModalOpen(true)}
-        >
-          + Add Magnet
-        </button>
+        <div class="flex gap-2">
+          <button
+            class="px-3 py-1.5 rounded border border-zinc-700 text-sm hover:bg-zinc-900"
+            onClick={() => store.pickAndAddTorrent().catch(console.error)}
+          >
+            + .torrent
+          </button>
+          <button
+            class="px-3 py-1.5 rounded bg-blue-600 text-sm"
+            onClick={() => setModalOpen(true)}
+          >
+            + Add Magnet
+          </button>
+        </div>
       </header>
       <main class="flex-1 overflow-auto">
         <TorrentList

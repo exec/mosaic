@@ -1,4 +1,4 @@
-import {AddMagnet, ListTorrents, Pause, Remove, Resume} from '../../wailsjs/go/main/App';
+import {AddMagnet, ListTorrents, Pause, PickAndAddTorrent, Remove, Resume} from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 
 export type Torrent = {
@@ -20,6 +20,7 @@ export type Torrent = {
 
 export const api = {
   addMagnet: (magnet: string) => AddMagnet(magnet),
+  pickAndAddTorrent: () => PickAndAddTorrent(),
   listTorrents: () => ListTorrents() as Promise<Torrent[]>,
   pause: (id: string) => Pause(id),
   resume: (id: string) => Resume(id),

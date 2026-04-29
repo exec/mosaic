@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"mosaic/backend/engine"
@@ -80,6 +81,30 @@ func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engin
 		Name:     snap.Name,
 		Magnet:   magnet,
 		SavePath: savePath,
+		AddedAt:  time.Now(),
+	}); err != nil {
+		return "", fmt.Errorf("persist: %w", err)
+	}
+	return id, nil
+}
+
+func (s *Service) AddTorrentFile(ctx context.Context, filePath string) (engine.TorrentID, error) {
+	blob, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("read torrent file: %w", err)
+	}
+	id, err := s.engine.AddFile(ctx, blob, s.defaultSavePath)
+	if err != nil {
+		return "", fmt.Errorf("add torrent: %w", err)
+	}
+	snap, err := s.engine.Snapshot(id)
+	if err != nil {
+		return "", err
+	}
+	if err := s.torrents.Save(ctx, persistence.TorrentRecord{
+		InfoHash: string(id),
+		Name:     snap.Name,
+		SavePath: s.defaultSavePath,
 		AddedAt:  time.Now(),
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
