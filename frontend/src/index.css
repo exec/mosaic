@@ -4,7 +4,7 @@
   color-scheme: dark;
 }
 
-html, body, #root {
+html, body, #app {
   height: 100%;
   margin: 0;
   background: #0b0c0e;
