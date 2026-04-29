@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"mosaic/backend/engine"
@@ -17,6 +18,10 @@ type Service struct {
 	engine          *engine.Engine
 	torrents        *persistence.Torrents
 	defaultSavePath string
+
+	focusMu    sync.RWMutex
+	focusID    engine.TorrentID
+	focusScope engine.DetailScope
 }
 
 func NewService(eng *engine.Engine, torrents *persistence.Torrents, defaultSavePath string) *Service {
@@ -174,4 +179,186 @@ func (s *Service) GlobalStats(ctx context.Context) (GlobalStats, error) {
 		st.TotalPeers += snap.Peers
 	}
 	return st, nil
+}
+
+// DetailDTO is the inspector tick payload, returned from DetailForFocus or
+// emitted via the inspector:tick event.
+type DetailDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Overview-tab fields — always present
+	Magnet      string  `json:"magnet"`
+	SavePath    string  `json:"save_path"`
+	TotalBytes  int64   `json:"total_bytes"`
+	BytesDone   int64   `json:"bytes_done"`
+	Progress    float64 `json:"progress"`
+	Ratio       float64 `json:"ratio"`
+	TotalDown   int64   `json:"total_down"`
+	TotalUp     int64   `json:"total_up"`
+	Peers       int     `json:"peers"`
+	Seeds       int     `json:"seeds"`
+	AddedAt     int64   `json:"added_at"`
+	CompletedAt int64   `json:"completed_at,omitempty"`
+
+	Files     []FileDTO    `json:"files,omitempty"`
+	PeersList []PeerDTO    `json:"peers_list,omitempty"`
+	Trackers  []TrackerDTO `json:"trackers,omitempty"`
+}
+
+type FileDTO struct {
+	Index     int     `json:"index"`
+	Path      string  `json:"path"`
+	Size      int64   `json:"size"`
+	BytesDone int64   `json:"bytes_done"`
+	Progress  float64 `json:"progress"`
+	Priority  string  `json:"priority"` // "skip" | "normal" | "high" | "max"
+}
+
+type PeerDTO struct {
+	IP           string  `json:"ip"`
+	Port         int     `json:"port"`
+	Client       string  `json:"client"`
+	Flags        string  `json:"flags"`
+	Progress     float64 `json:"progress"`
+	DownloadRate int64   `json:"download_rate"`
+	UploadRate   int64   `json:"upload_rate"`
+	Country      string  `json:"country"`
+}
+
+type TrackerDTO struct {
+	URL          string `json:"url"`
+	Status       string `json:"status"`
+	Seeds        int    `json:"seeds"`
+	Peers        int    `json:"peers"`
+	Downloaded   int    `json:"downloaded"`
+	LastAnnounce int64  `json:"last_announce"`
+	NextAnnounce int64  `json:"next_announce"`
+}
+
+// SetInspectorFocus tells the service which torrent + tabs the UI is looking
+// at. Subsequent DetailForFocus calls (and the inspector:tick event in app.go)
+// will return the appropriately-scoped Detail. tabs is a subset of:
+// "overview", "files", "peers", "trackers", "speed".
+func (s *Service) SetInspectorFocus(id string, tabs []string) error {
+	if id == "" {
+		s.ClearInspectorFocus()
+		return nil
+	}
+	scope := scopeForTabs(tabs)
+	s.focusMu.Lock()
+	s.focusID = engine.TorrentID(id)
+	s.focusScope = scope
+	s.focusMu.Unlock()
+	return nil
+}
+
+func (s *Service) ClearInspectorFocus() {
+	s.focusMu.Lock()
+	s.focusID = ""
+	s.focusScope = engine.DetailScope{}
+	s.focusMu.Unlock()
+}
+
+// DetailForFocus returns the current focused torrent's detail, or nil if no
+// inspector focus is set.
+func (s *Service) DetailForFocus(ctx context.Context) (*DetailDTO, error) {
+	s.focusMu.RLock()
+	id := s.focusID
+	scope := s.focusScope
+	s.focusMu.RUnlock()
+	if id == "" {
+		return nil, nil
+	}
+	d, err := s.engine.DetailedSnapshot(id, scope)
+	if err != nil {
+		return nil, err
+	}
+	dto := detailToDTO(d, s.lookupAddedAt(ctx, id))
+	return &dto, nil
+}
+
+func scopeForTabs(tabs []string) engine.DetailScope {
+	scope := engine.DetailScope{}
+	for _, t := range tabs {
+		switch t {
+		case "files":
+			scope.Files = true
+		case "peers":
+			scope.Peers = true
+		case "trackers":
+			scope.Trackers = true
+		}
+	}
+	return scope
+}
+
+func (s *Service) lookupAddedAt(ctx context.Context, id engine.TorrentID) time.Time {
+	rec, err := s.torrents.Get(ctx, string(id))
+	if err != nil {
+		return time.Time{}
+	}
+	return rec.AddedAt
+}
+
+func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
+	snap := d.Snapshot
+	prog := 0.0
+	if snap.TotalBytes > 0 {
+		prog = float64(snap.BytesDone) / float64(snap.TotalBytes)
+	}
+	// Ratio left at 0.0 in Plan 3 — engine.Snapshot doesn't yet expose
+	// cumulative-uploaded vs cumulative-downloaded as separate fields, and the
+	// UploadRate/DownloadRate names are misleading carry-overs from Plan 1
+	// (they're actually cumulative byte counts). Plan 4 will rename to
+	// BytesUp/BytesDown and compute ratio = BytesUp / BytesDown.
+	dto := DetailDTO{
+		ID:         string(snap.ID),
+		Name:       snap.Name,
+		Magnet:     snap.Magnet,
+		SavePath:   snap.SavePath,
+		TotalBytes: snap.TotalBytes,
+		BytesDone:  snap.BytesDone,
+		Progress:   prog,
+		Ratio:      0.0,
+		TotalDown:  snap.DownloadRate,
+		TotalUp:    snap.UploadRate,
+		Peers:      snap.Peers,
+		Seeds:      snap.Seeds,
+		AddedAt:    addedAt.Unix(),
+	}
+	for _, f := range d.Files {
+		fp := 0.0
+		if f.Size > 0 {
+			fp = float64(f.BytesDone) / float64(f.Size)
+		}
+		dto.Files = append(dto.Files, FileDTO{
+			Index: f.Index, Path: f.Path, Size: f.Size, BytesDone: f.BytesDone, Progress: fp,
+			Priority: priorityToString(f.Priority),
+		})
+	}
+	for _, p := range d.Peers {
+		dto.PeersList = append(dto.PeersList, PeerDTO{
+			IP: p.IP, Port: p.Port, Client: p.ClientName, Flags: p.Flags,
+			Progress: p.Progress, DownloadRate: p.DownloadRate, UploadRate: p.UploadRate, Country: p.CountryCode,
+		})
+	}
+	for _, t := range d.Trackers {
+		dto.Trackers = append(dto.Trackers, TrackerDTO{
+			URL: t.URL, Status: t.Status, Seeds: t.Seeds, Peers: t.Peers, Downloaded: t.Downloaded,
+			LastAnnounce: t.LastAnnounce.Unix(), NextAnnounce: t.NextAnnounce.Unix(),
+		})
+	}
+	return dto
+}
+
+func priorityToString(p engine.Priority) string {
+	switch p {
+	case engine.PrioritySkip:
+		return "skip"
+	case engine.PriorityHigh:
+		return "high"
+	case engine.PriorityMax:
+		return "max"
+	}
+	return "normal"
 }

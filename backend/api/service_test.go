@@ -90,6 +90,62 @@ func TestService_Remove_RemovesFromEngineAndPersistence(t *testing.T) {
 	require.Empty(t, rows)
 }
 
+func TestService_InspectorFocus_StoresAndReturnsDetail(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:focus", "")
+
+	// No focus set — DetailForFocus returns nil, nil
+	got, err := svc.DetailForFocus(ctx)
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	// Set focus to this torrent with all tabs
+	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview", "files", "peers", "trackers"}))
+
+	got, err = svc.DetailForFocus(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, string(id), got.ID)
+	require.Len(t, got.Files, 2)
+	require.Len(t, got.PeersList, 1)
+	require.Len(t, got.Trackers, 1)
+}
+
+func TestService_ClearInspectorFocus(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:cf", "")
+	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview"}))
+	svc.ClearInspectorFocus()
+
+	got, err := svc.DetailForFocus(ctx)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestService_InspectorFocus_ScopesByVisibleTabs(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:scope2", "")
+
+	// Only Overview tab visible — files/peers/trackers should be empty
+	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview"}))
+	got, _ := svc.DetailForFocus(ctx)
+	require.NotNil(t, got)
+	require.Empty(t, got.Files)
+	require.Empty(t, got.PeersList)
+	require.Empty(t, got.Trackers)
+
+	// Switch to peers tab
+	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview", "peers"}))
+	got, _ = svc.DetailForFocus(ctx)
+	require.Empty(t, got.Files)
+	require.Len(t, got.PeersList, 1)
+	require.Empty(t, got.Trackers)
+}
+
 func TestService_GlobalStats(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
