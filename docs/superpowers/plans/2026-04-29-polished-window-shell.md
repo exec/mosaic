@@ -123,7 +123,7 @@ git commit -m "chore(frontend): add Kobalte + TanStack + Lucide + Sonner"
 
 **Files:**
 - Create: `frontend/src/assets/fonts/Inter-Variable.woff2`
-- Create: `frontend/src/assets/fonts/JetBrainsMono-Variable.woff2`
+- Create: `frontend/src/assets/fonts/JetBrainsMono-Variable.ttf`
 - Modify: `frontend/src/index.css`
 
 > Self-hosted to keep the app offline-capable and avoid Google Fonts dependency.
@@ -133,10 +133,10 @@ git commit -m "chore(frontend): add Kobalte + TanStack + Lucide + Sonner"
 ```bash
 cd frontend/src/assets/fonts
 curl -L -o Inter-Variable.woff2 https://github.com/rsms/inter/raw/v4.0/docs/font-files/InterVariable.woff2
-curl -L -o JetBrainsMono-Variable.woff2 https://github.com/JetBrains/JetBrainsMono/raw/v2.304/fonts/variable/JetBrainsMono%5Bwght%5D.woff2
+curl -L -o JetBrainsMono-Variable.ttf https://github.com/JetBrains/JetBrainsMono/raw/v2.304/fonts/variable/JetBrainsMono%5Bwght%5D.ttf
 ```
 
-Expected: two `.woff2` files exist, ~290 KB and ~140 KB respectively.
+Expected: an `Inter-Variable.woff2` (~340 KB) and a `JetBrainsMono-Variable.ttf` (~300 KB). v2.304 of JetBrainsMono only ships variable fonts as TTF; verify with `file frontend/src/assets/fonts/JetBrainsMono-Variable.ttf` (should report TrueType, not HTML — `curl -L` will silently write a 404 HTML page if the URL is wrong).
 
 - [ ] **Step 2: Add @font-face declarations to `frontend/src/index.css`**
 
@@ -157,7 +157,7 @@ Replace the file with:
   font-weight: 100 800;
   font-style: normal;
   font-display: swap;
-  src: url("./assets/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations");
+  src: url("./assets/fonts/JetBrainsMono-Variable.ttf") format("truetype-variations");
 }
 
 :root {
@@ -247,16 +247,18 @@ git commit -m "feat(frontend): theme tokens (accent palette, status colors, easi
 
 > Vitest is already a transitive dep via Vite; install it if not present.
 
-- [ ] **Step 1: Add Vitest if missing**
+- [ ] **Step 1: Add Vitest + jsdom**
 
 ```bash
 cd frontend
-npm install -D vitest
+npm install -D vitest@^2 jsdom
 ```
+
+Pin vitest to v2 — vitest@4+ bundles Vite 8 internally, which crashes against the project's pinned vite-plugin-solid@2.11 (uses Vite 5/6 API: "TypeError: defaultServerConditions is not iterable"). jsdom is required up-front because vite-plugin-solid auto-injects `test.environment = 'jsdom'` into vitest's resolved config — pure-logic tests won't run without it.
 
 - [ ] **Step 2: Add test script to `frontend/package.json`**
 
-In `scripts`, add: `"test": "vitest run"`.
+In `scripts`, add: `"test": "vitest run --environment jsdom"`.
 
 - [ ] **Step 3: Write failing tests**
 
@@ -389,17 +391,9 @@ describe('resolveTheme', () => {
 });
 ```
 
-- [ ] **Step 2: Configure vitest for jsdom**
+- [ ] **Step 2: Verify vitest is configured for jsdom**
 
-Modify `frontend/package.json` test script:
-```json
-"test": "vitest run --environment jsdom"
-```
-
-Install jsdom:
-```bash
-cd frontend && npm install -D jsdom
-```
+The test script in `frontend/package.json` should already be `"vitest run --environment jsdom"` from Task 4 Step 2, and `jsdom` should already be installed (Task 4 Step 1). No action needed here unless one of those is missing.
 
 - [ ] **Step 3: Run tests, confirm they fail**
 
