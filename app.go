@@ -147,6 +147,21 @@ func (a *App) AddTorrentBytes(blob []byte, savePath string) (string, error) {
 	return string(id), nil
 }
 
+func (a *App) GetLimits() (api.LimitsDTO, error) { return a.svc.GetLimits(a.ctx) }
+func (a *App) SetLimits(l api.LimitsDTO) error   { return a.svc.SetLimits(a.ctx, l) }
+func (a *App) ToggleAltSpeed() (bool, error)     { return a.svc.ToggleAltSpeed(a.ctx) }
+
+func (a *App) GetQueueLimits() api.QueueLimitsDTO        { return a.svc.GetQueueLimits(a.ctx) }
+func (a *App) SetQueueLimits(q api.QueueLimitsDTO) error { return a.svc.SetQueueLimits(a.ctx, q) }
+
+func (a *App) SetQueuePosition(infohash string, pos int) error {
+	return a.svc.SetQueuePosition(a.ctx, infohash, pos)
+}
+
+func (a *App) SetForceStart(infohash string, force bool) error {
+	return a.svc.SetForceStart(a.ctx, infohash, force)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
