@@ -122,7 +122,7 @@ export function SettingsRoute(props: Props) {
             <TagsPane tags={props.tags} onCreate={props.onCreateTag} onDelete={props.onDeleteTag} />
           </Match>
           <Match when={props.pane === 'about'}>
-            <AboutPane />
+            <AboutPane appVersion={props.appVersion} />
           </Match>
         </Switch>
       </div>
