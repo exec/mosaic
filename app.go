@@ -190,6 +190,38 @@ func (a *App) RefreshBlocklist() error {
 	return a.svc.RefreshBlocklist(a.ctx)
 }
 
+func (a *App) ListFeeds() ([]api.FeedDTO, error) {
+	return a.svc.ListFeeds(a.ctx)
+}
+
+func (a *App) CreateFeed(f api.FeedDTO) (int, error) {
+	return a.svc.CreateFeed(a.ctx, f)
+}
+
+func (a *App) UpdateFeed(f api.FeedDTO) error {
+	return a.svc.UpdateFeed(a.ctx, f)
+}
+
+func (a *App) DeleteFeed(id int) error {
+	return a.svc.DeleteFeed(a.ctx, id)
+}
+
+func (a *App) ListFiltersByFeed(feedID int) ([]api.FilterDTO, error) {
+	return a.svc.ListFiltersByFeed(a.ctx, feedID)
+}
+
+func (a *App) CreateFilter(f api.FilterDTO) (int, error) {
+	return a.svc.CreateFilter(a.ctx, f)
+}
+
+func (a *App) UpdateFilter(f api.FilterDTO) error {
+	return a.svc.UpdateFilter(a.ctx, f)
+}
+
+func (a *App) DeleteFilter(id int) error {
+	return a.svc.DeleteFilter(a.ctx, id)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
