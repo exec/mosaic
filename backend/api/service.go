@@ -147,3 +147,31 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 	}
 	return out, nil
 }
+
+// GlobalStats is the snapshot displayed in the status bar.
+type GlobalStats struct {
+	TotalTorrents      int   `json:"total_torrents"`
+	ActiveTorrents     int   `json:"active_torrents"`
+	SeedingTorrents    int   `json:"seeding_torrents"`
+	TotalDownloadRate  int64 `json:"total_download_rate"`
+	TotalUploadRate    int64 `json:"total_upload_rate"`
+	TotalPeers         int   `json:"total_peers"`
+}
+
+func (s *Service) GlobalStats(ctx context.Context) (GlobalStats, error) {
+	snaps := s.engine.List()
+	var st GlobalStats
+	st.TotalTorrents = len(snaps)
+	for _, snap := range snaps {
+		if !snap.Paused && !snap.Completed {
+			st.ActiveTorrents++
+		}
+		if snap.Completed {
+			st.SeedingTorrents++
+		}
+		st.TotalDownloadRate += snap.DownloadRate
+		st.TotalUploadRate += snap.UploadRate
+		st.TotalPeers += snap.Peers
+	}
+	return st, nil
+}

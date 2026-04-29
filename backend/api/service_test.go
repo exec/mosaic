@@ -89,3 +89,24 @@ func TestService_Remove_RemovesFromEngineAndPersistence(t *testing.T) {
 	rows, _ := svc.ListTorrents(context.Background())
 	require.Empty(t, rows)
 }
+
+func TestService_GlobalStats(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// Empty state
+	stats, err := svc.GlobalStats(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.TotalTorrents)
+	require.Equal(t, 0, stats.ActiveTorrents)
+	require.Equal(t, 0, stats.SeedingTorrents)
+
+	// Add two torrents, one paused
+	id1, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:abc", "")
+	_, _ = svc.AddMagnet(ctx, "magnet:?xt=urn:btih:def", "")
+	require.NoError(t, svc.Pause(id1))
+
+	stats, err = svc.GlobalStats(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.TotalTorrents)
+}

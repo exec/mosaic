@@ -71,23 +71,33 @@ func (a *App) Remove(id string, deleteFiles bool) error {
 	return a.svc.Remove(a.ctx, engine.TorrentID(id), deleteFiles)
 }
 
-// streamTicks emits a "torrents:tick" event every 500ms with the current list.
-// Plan 2 will replace this with a diff-based emitter; full snapshot is fine
-// for now while the list is small.
+func (a *App) GlobalStats() (api.GlobalStats, error) {
+	return a.svc.GlobalStats(a.ctx)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
-	t := time.NewTicker(500 * time.Millisecond)
-	defer t.Stop()
+	torrents := time.NewTicker(500 * time.Millisecond)
+	stats := time.NewTicker(1 * time.Second)
+	defer torrents.Stop()
+	defer stats.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-torrents.C:
 			rows, err := a.svc.ListTorrents(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("list torrents during tick")
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "torrents:tick", rows)
+		case <-stats.C:
+			s, err := a.svc.GlobalStats(ctx)
+			if err != nil {
+				log.Error().Err(err).Msg("global stats during tick")
+				continue
+			}
+			wailsruntime.EventsEmit(ctx, "stats:tick", s)
 		}
 	}
 }
