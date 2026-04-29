@@ -4,6 +4,7 @@ import {toast} from 'solid-sonner';
 
 type Props = {
   onMagnet: (m: string) => Promise<void>;
+  onTorrentBytes: (bytes: Uint8Array) => Promise<void>;
   children: JSX.Element;
 };
 
@@ -30,7 +31,15 @@ export function DropZone(props: Props) {
         return;
       }
       if (e.dataTransfer?.files.length) {
-        toast.error('.torrent file drop coming in Plan 3 — use the .torrent button for now');
+        const file = e.dataTransfer.files[0];
+        if (!file.name.endsWith('.torrent')) {
+          toast.error('Only .torrent files are supported');
+          return;
+        }
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          await props.onTorrentBytes(bytes);
+        } catch (err) { toast.error(String(err)); }
       }
     };
     window.addEventListener('dragover', onDragOver);
@@ -51,7 +60,7 @@ export function DropZone(props: Props) {
           <div class="flex flex-col items-center gap-3 text-accent-200">
             <div class="flex gap-2">
               <Magnet class="h-8 w-8" />
-              <FileDown class="h-8 w-8 opacity-50" />
+              <FileDown class="h-8 w-8" />
             </div>
             <div class="text-base font-semibold">Drop to add torrent</div>
           </div>

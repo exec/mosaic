@@ -26,6 +26,7 @@ type Props = {
   onAddMagnet: () => void;
   onAddTorrent: () => void;
   onMagnetDropped: (m: string) => Promise<void>;
+  onTorrentBytesDropped: (bytes: Uint8Array) => Promise<void>;
   children: JSX.Element; // the main pane (TorrentList)
   inspector?: JSX.Element;
 };
@@ -56,7 +57,7 @@ export function WindowShell(props: Props) {
               density={props.density}
               onDensityChange={props.onDensityChange}
             />
-            <DropZone onMagnet={props.onMagnetDropped}>
+            <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
               <div class="h-full overflow-auto">
                 {props.children}
               </div>

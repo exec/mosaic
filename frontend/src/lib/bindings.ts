@@ -3,7 +3,7 @@ import {
   SetInspectorFocus, ClearInspectorFocus,
   ListCategories, CreateCategory, UpdateCategory, DeleteCategory,
   ListTags, CreateTag, DeleteTag, AssignTag, UnassignTag,
-  SetTorrentCategory, SetFilePriorities,
+  SetTorrentCategory, SetFilePriorities, AddTorrentBytes,
 } from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 
@@ -121,6 +121,7 @@ export const api = {
   unassignTag: (infohash: string, tagID: number) => UnassignTag(infohash, tagID),
   setTorrentCategory: (infohash: string, categoryID: number | null) => SetTorrentCategory(infohash, categoryID),
   setFilePriorities: (infohash: string, prios: Record<number, 'skip' | 'normal' | 'high' | 'max'>) => SetFilePriorities(infohash, prios),
+  addTorrentBytes: (bytes: Uint8Array, savePath: string) => AddTorrentBytes(Array.from(bytes), savePath),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {

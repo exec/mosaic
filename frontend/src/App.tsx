@@ -106,6 +106,12 @@ export default function App() {
         onAddMagnet={handleAddMagnet}
         onAddTorrent={handleAddTorrent}
         onMagnetDropped={handleMagnetDropped}
+        onTorrentBytesDropped={async (bytes) => {
+          try {
+            await store.addTorrentBytes(bytes, '');
+            toast.success('Torrent added');
+          } catch (err) { toast.error(String(err)); }
+        }}
         inspector={
           <Inspector
             open={store.state.inspectorOpenId !== null}

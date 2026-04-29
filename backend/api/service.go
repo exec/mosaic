@@ -133,6 +133,29 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath string) (engine.T
 	return id, nil
 }
 
+func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath string) (engine.TorrentID, error) {
+	if savePath == "" {
+		savePath = s.defaultSavePath
+	}
+	id, err := s.engine.AddFile(ctx, blob, savePath)
+	if err != nil {
+		return "", fmt.Errorf("add torrent bytes: %w", err)
+	}
+	snap, err := s.engine.Snapshot(id)
+	if err != nil {
+		return "", err
+	}
+	if err := s.torrents.Save(ctx, persistence.TorrentRecord{
+		InfoHash: string(id),
+		Name:     snap.Name,
+		SavePath: savePath,
+		AddedAt:  time.Now(),
+	}); err != nil {
+		return "", fmt.Errorf("persist: %w", err)
+	}
+	return id, nil
+}
+
 func (s *Service) Pause(id engine.TorrentID) error  { return s.engine.Pause(id) }
 func (s *Service) Resume(id engine.TorrentID) error { return s.engine.Resume(id) }
 

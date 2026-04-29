@@ -99,6 +99,7 @@ export function createTorrentsStore() {
     state,
     addMagnet: (m: string) => api.addMagnet(m),
     pickAndAddTorrent: () => api.pickAndAddTorrent(),
+    addTorrentBytes: (bytes: Uint8Array, savePath: string) => api.addTorrentBytes(bytes, savePath),
     pause: (id: string) => api.pause(id),
     resume: (id: string) => api.resume(id),
     remove: (id: string, deleteFiles: boolean) => api.remove(id, deleteFiles),

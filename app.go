@@ -131,6 +131,14 @@ func (a *App) SetFilePriorities(infohash string, prios map[int]string) error {
 	return a.svc.SetFilePriorities(a.ctx, infohash, prios)
 }
 
+func (a *App) AddTorrentBytes(blob []byte, savePath string) (string, error) {
+	id, err := a.svc.AddTorrentBytes(a.ctx, blob, savePath)
+	if err != nil {
+		return "", err
+	}
+	return string(id), nil
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
