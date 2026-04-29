@@ -1,3 +1,31 @@
-build/bin
-node_modules
-frontend/dist
+# Wails build artifacts
+build/bin/
+mosaic
+*.exe
+*.test
+*.out
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/wailsjs/
+frontend/package.json.md5
+
+# Go
+vendor/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Mosaic runtime
+*.log
+mosaic.db
+mosaic.db-journal
+mosaic.db-wal
+mosaic.db-shm
