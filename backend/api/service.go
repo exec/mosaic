@@ -16,6 +16,7 @@ import (
 	"mosaic/backend/engine"
 	"mosaic/backend/persistence"
 	"mosaic/backend/remote/cred"
+	"mosaic/backend/updater"
 )
 
 // Service is the only place business logic lives. Wails handlers and (later)
@@ -42,6 +43,9 @@ type Service struct {
 
 	webHookMu       sync.RWMutex
 	onWebCfgChanged func(WebConfigDTO)
+
+	updater    *updater.Updater // may be nil if not yet attached
+	appVersion string
 }
 
 // blocklistState is the in-memory snapshot of the most recent successful (or
@@ -97,6 +101,11 @@ const (
 	settingWebUsername = "web_username"
 	settingWebPassHash = "web_password_hash"
 	settingWebAPIKey   = "web_api_key"
+
+	settingUpdaterEnabled         = "updater_enabled"
+	settingUpdaterChannel         = "updater_channel"
+	settingUpdaterLastChecked     = "updater_last_checked_at"
+	settingUpdaterLastSeenVersion = "updater_last_seen_version"
 )
 
 // WebConfigDTO is the transport shape for the optional HTTP+WS interface.
@@ -201,6 +210,123 @@ func (s *Service) VerifyAPIKey(ctx context.Context, key string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(key), []byte(stored)) == 1
+}
+
+// UpdaterConfigDTO is the persisted updater preferences shape (channel +
+// enabled toggle + cached last-check metadata for UI display).
+type UpdaterConfigDTO struct {
+	Enabled         bool   `json:"enabled"`
+	Channel         string `json:"channel"`           // "stable" | "beta"
+	LastCheckedAt   int64  `json:"last_checked_at"`   // unix seconds
+	LastSeenVersion string `json:"last_seen_version"`
+}
+
+// UpdateInfoDTO mirrors updater.Info plus CurrentVersion so the UI can render
+// "X → Y" without needing a separate AppVersion call.
+type UpdateInfoDTO struct {
+	Available      bool   `json:"available"`
+	LatestVersion  string `json:"latest_version"`
+	AssetURL       string `json:"asset_url"`
+	AssetFilename  string `json:"asset_filename"`
+	CheckedAt      int64  `json:"checked_at"` // unix seconds
+	CurrentVersion string `json:"current_version"`
+}
+
+// AttachUpdater wires the live *updater.Updater + build-time version into the
+// Service after construction. main.go calls this once at startup; tests can
+// leave it unset to exercise the disabled-updater path.
+func (s *Service) AttachUpdater(u *updater.Updater, version string) {
+	s.updater = u
+	s.appVersion = version
+}
+
+// AppVersion returns the build-time version string the Service was attached
+// with. Empty string if AttachUpdater was never called.
+func (s *Service) AppVersion() string {
+	return s.appVersion
+}
+
+// UpdaterEnabled reports whether the auto-update goroutine should run. The
+// setting defaults to true (if absent in the settings table). Stored as
+// "true" / "false" strings via setBoolSetting.
+func (s *Service) UpdaterEnabled(ctx context.Context) bool {
+	v, err := s.settings.Get(ctx, settingUpdaterEnabled)
+	if err != nil || v == "" {
+		return true
+	}
+	return v == "true"
+}
+
+// UpdaterChannel returns the configured update channel ("stable" by default).
+func (s *Service) UpdaterChannel(ctx context.Context) string {
+	ch, _ := s.settings.Get(ctx, settingUpdaterChannel)
+	if ch == "" {
+		return "stable"
+	}
+	return ch
+}
+
+func (s *Service) GetUpdaterConfig(ctx context.Context) UpdaterConfigDTO {
+	seen, _ := s.settings.Get(ctx, settingUpdaterLastSeenVersion)
+	return UpdaterConfigDTO{
+		Enabled:         s.UpdaterEnabled(ctx),
+		Channel:         s.UpdaterChannel(ctx),
+		LastCheckedAt:   int64(s.intSetting(ctx, settingUpdaterLastChecked)),
+		LastSeenVersion: seen,
+	}
+}
+
+func (s *Service) SetUpdaterConfig(ctx context.Context, c UpdaterConfigDTO) error {
+	if c.Channel != "stable" && c.Channel != "beta" {
+		return fmt.Errorf("channel must be stable or beta")
+	}
+	if err := s.setBoolSetting(ctx, settingUpdaterEnabled, c.Enabled); err != nil {
+		return err
+	}
+	return s.settings.Set(ctx, settingUpdaterChannel, c.Channel)
+}
+
+func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
+	if s.updater == nil {
+		return UpdateInfoDTO{CurrentVersion: s.appVersion}, fmt.Errorf("updater disabled")
+	}
+	info, err := s.updater.Check(ctx)
+	if err != nil {
+		return UpdateInfoDTO{CurrentVersion: s.appVersion}, err
+	}
+	_ = s.setIntSetting(ctx, settingUpdaterLastChecked, int(info.CheckedAt.Unix()))
+	if info.Available {
+		_ = s.settings.Set(ctx, settingUpdaterLastSeenVersion, info.LatestVersion)
+	}
+	return UpdateInfoDTO{
+		Available:      info.Available,
+		LatestVersion:  info.LatestVersion,
+		AssetURL:       info.AssetURL,
+		AssetFilename:  info.AssetFilename,
+		CheckedAt:      info.CheckedAt.Unix(),
+		CurrentVersion: s.appVersion,
+	}, nil
+}
+
+func (s *Service) InstallUpdate(ctx context.Context) error {
+	if s.updater == nil {
+		return fmt.Errorf("updater disabled")
+	}
+	last := s.updater.Last()
+	return s.updater.Install(ctx, last)
+}
+
+// MakeUpdateInfoDTO converts a raw updater.Info to the API DTO. Used by main.go
+// to wrap OnAvailable callback payloads for the WS/Wails event emission.
+func (s *Service) MakeUpdateInfoDTO(info updater.Info) UpdateInfoDTO {
+	return UpdateInfoDTO{
+		Available:      info.Available,
+		LatestVersion:  info.LatestVersion,
+		AssetURL:       info.AssetURL,
+		AssetFilename:  info.AssetFilename,
+		CheckedAt:      info.CheckedAt.Unix(),
+		CurrentVersion: s.appVersion,
+	}
 }
 
 func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {

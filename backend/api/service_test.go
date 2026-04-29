@@ -433,3 +433,40 @@ func TestService_GetWebConfig_ReturnsStoredAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, key, svc.GetWebConfig(ctx).APIKey)
 }
+
+func TestUpdaterConfig_DefaultsAndRoundTrip(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	cfg := svc.GetUpdaterConfig(ctx)
+	require.True(t, cfg.Enabled, "updater should be enabled by default")
+	require.Equal(t, "stable", cfg.Channel)
+	require.Zero(t, cfg.LastCheckedAt)
+	require.Empty(t, cfg.LastSeenVersion)
+
+	require.NoError(t, svc.SetUpdaterConfig(ctx, UpdaterConfigDTO{Enabled: false, Channel: "beta"}))
+	got := svc.GetUpdaterConfig(ctx)
+	require.False(t, got.Enabled)
+	require.Equal(t, "beta", got.Channel)
+}
+
+func TestUpdaterConfig_RejectsUnknownChannel(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	err := svc.SetUpdaterConfig(ctx, UpdaterConfigDTO{Enabled: true, Channel: "nightly"})
+	require.Error(t, err)
+}
+
+func TestCheckForUpdate_NoUpdater(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	info, err := svc.CheckForUpdate(ctx)
+	require.Error(t, err, "expected updater-disabled error")
+	require.False(t, info.Available)
+	require.Empty(t, info.CurrentVersion, "appVersion is unset on a fresh test service")
+}
+
+func TestInstallUpdate_NoUpdater(t *testing.T) {
+	svc, _ := newTestService(t)
+	require.Error(t, svc.InstallUpdate(context.Background()))
+}
