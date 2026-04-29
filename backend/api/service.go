@@ -473,3 +473,20 @@ func (s *Service) ListTagsFor(ctx context.Context, infohash string) ([]TagDTO, e
 func (s *Service) SetTorrentCategory(ctx context.Context, infohash string, categoryID *int) error {
 	return s.torrents.SetCategory(ctx, infohash, categoryID)
 }
+
+func (s *Service) SetFilePriorities(ctx context.Context, infohash string, prios map[int]string) error {
+	mapped := make(map[int]engine.Priority, len(prios))
+	for idx, p := range prios {
+		switch p {
+		case "skip":
+			mapped[idx] = engine.PrioritySkip
+		case "high":
+			mapped[idx] = engine.PriorityHigh
+		case "max":
+			mapped[idx] = engine.PriorityMax
+		default:
+			mapped[idx] = engine.PriorityNormal
+		}
+	}
+	return s.engine.SetFilePriorities(engine.TorrentID(infohash), mapped)
+}

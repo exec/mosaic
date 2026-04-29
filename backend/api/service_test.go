@@ -202,6 +202,17 @@ func TestService_SetTorrentCategory(t *testing.T) {
 	require.Equal(t, catID, *rows[0].CategoryID)
 }
 
+func TestService_SetFilePriorities(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:fp", "")
+
+	require.NoError(t, svc.SetFilePriorities(ctx, string(id), map[int]string{
+		0: "high",
+		1: "skip",
+	}))
+}
+
 func TestService_GlobalStats(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()

@@ -127,6 +127,10 @@ func (a *App) SetTorrentCategory(infohash string, categoryID *int) error {
 	return a.svc.SetTorrentCategory(a.ctx, infohash, categoryID)
 }
 
+func (a *App) SetFilePriorities(infohash string, prios map[int]string) error {
+	return a.svc.SetFilePriorities(a.ctx, infohash, prios)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
