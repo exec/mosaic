@@ -1,18 +1,4 @@
-import {
-  AddMagnet, GlobalStats, ListTorrents, Pause, PickAndAddTorrent, Remove, Resume,
-  SetInspectorFocus, ClearInspectorFocus,
-  ListCategories, CreateCategory, UpdateCategory, DeleteCategory,
-  ListTags, CreateTag, DeleteTag, AssignTag, UnassignTag,
-  SetTorrentCategory, SetFilePriorities, AddTorrentBytes,
-  GetDefaultSavePath, SetDefaultSavePath,
-  GetLimits, SetLimits, ToggleAltSpeed,
-  GetQueueLimits, SetQueueLimits, SetQueuePosition, SetForceStart,
-  ListScheduleRules, CreateScheduleRule, UpdateScheduleRule, DeleteScheduleRule,
-  GetBlocklist, SetBlocklistURL, RefreshBlocklist,
-  ListFeeds, CreateFeed, UpdateFeed, DeleteFeed,
-  ListFiltersByFeed, CreateFilter, UpdateFilter, DeleteFilter,
-} from '../../wailsjs/go/main/App';
-import {EventsOn} from '../../wailsjs/runtime/runtime';
+import {transport} from './transport';
 
 export type CategoryDTO = {
   id: number;
@@ -161,62 +147,79 @@ export type DetailDTO = {
   trackers?: TrackerDTO[];
 };
 
+export type WebConfigDTO = {
+  enabled: boolean;
+  port: number;
+  bind_all: boolean;
+  username: string;
+  api_key: string;
+};
+
 export const api = {
-  addMagnet: (magnet: string, savePath: string) => AddMagnet(magnet, savePath),
-  pickAndAddTorrent: (savePath: string) => PickAndAddTorrent(savePath),
-  listTorrents: () => ListTorrents() as Promise<Torrent[]>,
-  globalStats: () => GlobalStats() as Promise<GlobalStatsT>,
-  pause: (id: string) => Pause(id),
-  resume: (id: string) => Resume(id),
-  remove: (id: string, deleteFiles: boolean) => Remove(id, deleteFiles),
-  setInspectorFocus: (id: string, tabs: InspectorTab[]) => SetInspectorFocus(id, tabs),
-  clearInspectorFocus: () => ClearInspectorFocus(),
-  listCategories: () => ListCategories() as Promise<CategoryDTO[]>,
-  createCategory: (name: string, savePath: string, color: string) => CreateCategory(name, savePath, color),
-  updateCategory: (id: number, name: string, savePath: string, color: string) => UpdateCategory(id, name, savePath, color),
-  deleteCategory: (id: number) => DeleteCategory(id),
-  listTags: () => ListTags() as Promise<TagDTO[]>,
-  createTag: (name: string, color: string) => CreateTag(name, color),
-  deleteTag: (id: number) => DeleteTag(id),
-  assignTag: (infohash: string, tagID: number) => AssignTag(infohash, tagID),
-  unassignTag: (infohash: string, tagID: number) => UnassignTag(infohash, tagID),
-  setTorrentCategory: (infohash: string, categoryID: number | null) => SetTorrentCategory(infohash, categoryID),
-  setFilePriorities: (infohash: string, prios: Record<number, 'skip' | 'normal' | 'high' | 'max'>) => SetFilePriorities(infohash, prios),
-  addTorrentBytes: (bytes: Uint8Array, savePath: string) => AddTorrentBytes(Array.from(bytes), savePath),
-  getDefaultSavePath: () => GetDefaultSavePath() as Promise<string>,
-  setDefaultSavePath: (path: string) => SetDefaultSavePath(path),
-  getLimits: () => GetLimits() as Promise<LimitsDTO>,
-  setLimits: (l: LimitsDTO) => SetLimits(l),
-  toggleAltSpeed: () => ToggleAltSpeed() as Promise<boolean>,
-  getQueueLimits: () => GetQueueLimits() as Promise<QueueLimitsDTO>,
-  setQueueLimits: (q: QueueLimitsDTO) => SetQueueLimits(q),
-  setQueuePosition: (infohash: string, pos: number) => SetQueuePosition(infohash, pos),
-  setForceStart: (infohash: string, force: boolean) => SetForceStart(infohash, force),
-  listScheduleRules: () => ListScheduleRules() as Promise<ScheduleRuleDTO[]>,
-  createScheduleRule: (r: ScheduleRuleDTO) => CreateScheduleRule(r as any),
-  updateScheduleRule: (r: ScheduleRuleDTO) => UpdateScheduleRule(r as any),
-  deleteScheduleRule: (id: number) => DeleteScheduleRule(id),
-  getBlocklist: () => GetBlocklist() as Promise<BlocklistDTO>,
-  setBlocklistURL: (url: string, enabled: boolean) => SetBlocklistURL(url, enabled),
-  refreshBlocklist: () => RefreshBlocklist(),
-  listFeeds: () => ListFeeds() as Promise<FeedDTO[]>,
-  createFeed: (f: FeedDTO) => CreateFeed(f as any),
-  updateFeed: (f: FeedDTO) => UpdateFeed(f as any),
-  deleteFeed: (id: number) => DeleteFeed(id),
-  listFiltersByFeed: (feedID: number) => ListFiltersByFeed(feedID) as Promise<FilterDTO[]>,
-  createFilter: (f: FilterDTO) => CreateFilter(f as any),
-  updateFilter: (f: FilterDTO) => UpdateFilter(f as any),
-  deleteFilter: (id: number) => DeleteFilter(id),
+  addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
+  pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
+  listTorrents: () => transport.invoke<Torrent[]>('ListTorrents'),
+  globalStats: () => transport.invoke<GlobalStatsT>('GlobalStats'),
+  pause: (id: string) => transport.invoke<void>('Pause', id),
+  resume: (id: string) => transport.invoke<void>('Resume', id),
+  remove: (id: string, deleteFiles: boolean) => transport.invoke<void>('Remove', id, deleteFiles),
+  setInspectorFocus: (id: string, tabs: InspectorTab[]) => transport.invoke<void>('SetInspectorFocus', id, tabs),
+  clearInspectorFocus: () => transport.invoke<void>('ClearInspectorFocus'),
+  listCategories: () => transport.invoke<CategoryDTO[]>('ListCategories'),
+  createCategory: (name: string, savePath: string, color: string) =>
+    transport.invoke<number>('CreateCategory', name, savePath, color),
+  updateCategory: (id: number, name: string, savePath: string, color: string) =>
+    transport.invoke<void>('UpdateCategory', id, name, savePath, color),
+  deleteCategory: (id: number) => transport.invoke<void>('DeleteCategory', id),
+  listTags: () => transport.invoke<TagDTO[]>('ListTags'),
+  createTag: (name: string, color: string) => transport.invoke<number>('CreateTag', name, color),
+  deleteTag: (id: number) => transport.invoke<void>('DeleteTag', id),
+  assignTag: (infohash: string, tagID: number) => transport.invoke<void>('AssignTag', infohash, tagID),
+  unassignTag: (infohash: string, tagID: number) => transport.invoke<void>('UnassignTag', infohash, tagID),
+  setTorrentCategory: (infohash: string, categoryID: number | null) =>
+    transport.invoke<void>('SetTorrentCategory', infohash, categoryID),
+  setFilePriorities: (infohash: string, prios: Record<number, 'skip' | 'normal' | 'high' | 'max'>) =>
+    transport.invoke<void>('SetFilePriorities', infohash, prios),
+  addTorrentBytes: (bytes: Uint8Array, savePath: string) =>
+    transport.invoke<string>('AddTorrentBytes', bytes, savePath),
+  getDefaultSavePath: () => transport.invoke<string>('GetDefaultSavePath'),
+  setDefaultSavePath: (path: string) => transport.invoke<void>('SetDefaultSavePath', path),
+  getLimits: () => transport.invoke<LimitsDTO>('GetLimits'),
+  setLimits: (l: LimitsDTO) => transport.invoke<void>('SetLimits', l),
+  toggleAltSpeed: () => transport.invoke<boolean>('ToggleAltSpeed'),
+  getQueueLimits: () => transport.invoke<QueueLimitsDTO>('GetQueueLimits'),
+  setQueueLimits: (q: QueueLimitsDTO) => transport.invoke<void>('SetQueueLimits', q),
+  setQueuePosition: (infohash: string, pos: number) => transport.invoke<void>('SetQueuePosition', infohash, pos),
+  setForceStart: (infohash: string, force: boolean) => transport.invoke<void>('SetForceStart', infohash, force),
+  listScheduleRules: () => transport.invoke<ScheduleRuleDTO[]>('ListScheduleRules'),
+  createScheduleRule: (r: ScheduleRuleDTO) => transport.invoke<number>('CreateScheduleRule', r),
+  updateScheduleRule: (r: ScheduleRuleDTO) => transport.invoke<void>('UpdateScheduleRule', r),
+  deleteScheduleRule: (id: number) => transport.invoke<void>('DeleteScheduleRule', id),
+  getBlocklist: () => transport.invoke<BlocklistDTO>('GetBlocklist'),
+  setBlocklistURL: (url: string, enabled: boolean) => transport.invoke<void>('SetBlocklistURL', url, enabled),
+  refreshBlocklist: () => transport.invoke<void>('RefreshBlocklist'),
+  listFeeds: () => transport.invoke<FeedDTO[]>('ListFeeds'),
+  createFeed: (f: FeedDTO) => transport.invoke<number>('CreateFeed', f),
+  updateFeed: (f: FeedDTO) => transport.invoke<void>('UpdateFeed', f),
+  deleteFeed: (id: number) => transport.invoke<void>('DeleteFeed', id),
+  listFiltersByFeed: (feedID: number) => transport.invoke<FilterDTO[]>('ListFiltersByFeed', feedID),
+  createFilter: (f: FilterDTO) => transport.invoke<number>('CreateFilter', f),
+  updateFilter: (f: FilterDTO) => transport.invoke<void>('UpdateFilter', f),
+  deleteFilter: (id: number) => transport.invoke<void>('DeleteFilter', id),
+  getWebConfig: () => transport.invoke<WebConfigDTO>('GetWebConfig'),
+  setWebConfig: (c: WebConfigDTO) => transport.invoke<void>('SetWebConfig', c),
+  setWebPassword: (plain: string) => transport.invoke<void>('SetWebPassword', plain),
+  rotateAPIKey: () => transport.invoke<string>('RotateAPIKey'),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {
-  return EventsOn('torrents:tick', handler);
+  return transport.on('torrents:tick', handler);
 }
 
 export function onStatsTick(handler: (stats: GlobalStatsT) => void): () => void {
-  return EventsOn('stats:tick', handler);
+  return transport.on('stats:tick', handler);
 }
 
 export function onInspectorTick(handler: (detail: DetailDTO) => void): () => void {
-  return EventsOn('inspector:tick', handler);
+  return transport.on('inspector:tick', handler);
 }

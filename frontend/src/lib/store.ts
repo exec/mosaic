@@ -4,6 +4,7 @@ import {
   type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
   type GlobalStatsT, type InspectorTab,
   type LimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
+  type WebConfigDTO,
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
 
@@ -50,6 +51,9 @@ export type AppState = {
   // RSS
   feeds: FeedDTO[];
   filtersByFeed: Record<number, FilterDTO[]>;
+
+  // Web interface
+  webConfig: WebConfigDTO;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -93,6 +97,14 @@ const emptyBlocklist: BlocklistDTO = {
   entries: 0,
 };
 
+const emptyWebConfig: WebConfigDTO = {
+  enabled: false,
+  port: 8080,
+  bind_all: false,
+  username: 'admin',
+  api_key: '',
+};
+
 export function createTorrentsStore() {
   const [state, setState] = createStore<AppState>({
     torrents: [],
@@ -125,6 +137,8 @@ export function createTorrentsStore() {
 
     feeds: [],
     filtersByFeed: {},
+
+    webConfig: emptyWebConfig,
   });
 
   api.listTorrents()
@@ -140,6 +154,7 @@ export function createTorrentsStore() {
   api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(console.error);
   api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(console.error);
   api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(console.error);
+  api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(console.error);
 
   const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -365,6 +380,23 @@ export function createTorrentsStore() {
       await api.deleteFilter(id);
       const rows = await api.listFiltersByFeed(feedID);
       setState(produce((s) => { s.filtersByFeed[feedID] = rows ?? []; }));
+    },
+
+    // Web interface
+    refreshWebConfig: async () => {
+      const c = await api.getWebConfig();
+      setState(produce((s) => { s.webConfig = c; }));
+    },
+    setWebConfig: async (c: WebConfigDTO) => {
+      await api.setWebConfig(c);
+      const fresh = await api.getWebConfig();
+      setState(produce((s) => { s.webConfig = fresh; }));
+    },
+    setWebPassword: (plain: string) => api.setWebPassword(plain),
+    rotateAPIKey: async () => {
+      const key = await api.rotateAPIKey();
+      setState(produce((s) => { s.webConfig = {...s.webConfig, api_key: key}; }));
+      return key;
     },
 
     dispose: () => { offT(); offS(); offI(); },
