@@ -78,3 +78,35 @@ func TestEngine_Remove_EmitsRemovedEvent(t *testing.T) {
 		}
 	}
 }
+
+func TestEngine_DetailedSnapshot_RoutesThroughBackend(t *testing.T) {
+	fb := NewFakeBackend()
+	eng := NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	id, err := eng.AddMagnet(context.Background(), "magnet:?xt=urn:btih:detail", "/tmp")
+	require.NoError(t, err)
+
+	d, err := eng.DetailedSnapshot(id, DetailScope{Files: true, Peers: true, Trackers: true})
+	require.NoError(t, err)
+	require.Equal(t, id, d.Snapshot.ID)
+	// FakeBackend's seeded fixture returns 2 files / 1 peer / 1 tracker
+	require.Len(t, d.Files, 2)
+	require.Len(t, d.Peers, 1)
+	require.Len(t, d.Trackers, 1)
+}
+
+func TestEngine_DetailedSnapshot_ScopeFlagsExcludeData(t *testing.T) {
+	fb := NewFakeBackend()
+	eng := NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	id, _ := eng.AddMagnet(context.Background(), "magnet:?xt=urn:btih:scope", "/tmp")
+
+	// All three scopes off
+	d, err := eng.DetailedSnapshot(id, DetailScope{})
+	require.NoError(t, err)
+	require.Empty(t, d.Files)
+	require.Empty(t, d.Peers)
+	require.Empty(t, d.Trackers)
+}

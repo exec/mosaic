@@ -62,6 +62,7 @@ type Backend interface {
 	Remove(id TorrentID, deleteFiles bool) error
 	List() []Snapshot
 	Snapshot(id TorrentID) (Snapshot, error)
+	DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error)
 	Close() error
 }
 

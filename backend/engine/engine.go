@@ -89,6 +89,12 @@ func (e *Engine) List() []Snapshot { return e.backend.List() }
 
 func (e *Engine) Snapshot(id TorrentID) (Snapshot, error) { return e.backend.Snapshot(id) }
 
+// DetailedSnapshot delegates to the backend, packaging the file/peer/tracker
+// data per scope alongside the standard Snapshot.
+func (e *Engine) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error) {
+	return e.backend.DetailedSnapshot(id, scope)
+}
+
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {

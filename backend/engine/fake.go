@@ -98,6 +98,35 @@ func (f *FakeBackend) Snapshot(id TorrentID) (Snapshot, error) {
 
 func (f *FakeBackend) Close() error { return nil }
 
+// DetailedSnapshot returns a deterministic fixture for the requested scope.
+// Files: two entries (one half-done, one done). Peers: one entry. Trackers: one entry.
+func (f *FakeBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.torrents[id]
+	if !ok {
+		return Detail{}, errors.New("not found")
+	}
+	d := Detail{Snapshot: *t}
+	if scope.Files {
+		d.Files = []FileEntry{
+			{Index: 0, Path: "fake/disk1.iso", Size: 1 << 29, BytesDone: 1 << 28, Priority: PriorityNormal},
+			{Index: 1, Path: "fake/README", Size: 4096, BytesDone: 4096, Priority: PriorityNormal},
+		}
+	}
+	if scope.Peers {
+		d.Peers = []PeerEntry{
+			{IP: "10.0.0.1", Port: 6881, ClientName: "FakeClient 1.0", Flags: "D K E", Progress: 0.5, DownloadRate: 1024, UploadRate: 256, CountryCode: "US"},
+		}
+	}
+	if scope.Trackers {
+		d.Trackers = []TrackerEntry{
+			{URL: "https://tracker.example/announce", Status: "OK", Seeds: 10, Peers: 5, Downloaded: 100, LastAnnounce: time.Unix(1700000000, 0), NextAnnounce: time.Unix(1700001800, 0)},
+		}
+	}
+	return d, nil
+}
+
 // AdvanceProgress is a test helper: bumps BytesDone for a torrent.
 func (f *FakeBackend) AdvanceProgress(id TorrentID, by int64) {
 	f.mu.Lock()
