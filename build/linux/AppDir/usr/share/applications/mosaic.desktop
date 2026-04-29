@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Mosaic
+GenericName=BitTorrent Client
+Comment=A polished cross-platform BitTorrent client.
+Exec=mosaic %U
+Icon=mosaic
+Categories=Network;FileTransfer;P2P;
+MimeType=application/x-bittorrent;x-scheme-handler/magnet;
+StartupNotify=true
