@@ -7,6 +7,8 @@ import {
   GetDefaultSavePath, SetDefaultSavePath,
   GetLimits, SetLimits, ToggleAltSpeed,
   GetQueueLimits, SetQueueLimits, SetQueuePosition, SetForceStart,
+  ListScheduleRules, CreateScheduleRule, UpdateScheduleRule, DeleteScheduleRule,
+  GetBlocklist, SetBlocklistURL, RefreshBlocklist,
 } from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 
@@ -99,6 +101,25 @@ export type TrackerDTO = {
   next_announce: number;
 };
 
+export type ScheduleRuleDTO = {
+  id: number;
+  days_mask: number;   // bit 0=Sun, bit 6=Sat
+  start_min: number;   // 0..1439
+  end_min: number;
+  down_kbps: number;
+  up_kbps: number;
+  alt_only: boolean;
+  enabled: boolean;
+};
+
+export type BlocklistDTO = {
+  url: string;
+  enabled: boolean;
+  last_loaded_at: number; // unix seconds, 0 if never
+  entries: number;
+  error?: string;
+};
+
 export type DetailDTO = {
   id: string;
   name: string;
@@ -150,6 +171,13 @@ export const api = {
   setQueueLimits: (q: QueueLimitsDTO) => SetQueueLimits(q),
   setQueuePosition: (infohash: string, pos: number) => SetQueuePosition(infohash, pos),
   setForceStart: (infohash: string, force: boolean) => SetForceStart(infohash, force),
+  listScheduleRules: () => ListScheduleRules() as Promise<ScheduleRuleDTO[]>,
+  createScheduleRule: (r: ScheduleRuleDTO) => CreateScheduleRule(r as any),
+  updateScheduleRule: (r: ScheduleRuleDTO) => UpdateScheduleRule(r as any),
+  deleteScheduleRule: (id: number) => DeleteScheduleRule(id),
+  getBlocklist: () => GetBlocklist() as Promise<BlocklistDTO>,
+  setBlocklistURL: (url: string, enabled: boolean) => SetBlocklistURL(url, enabled),
+  refreshBlocklist: () => RefreshBlocklist(),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {

@@ -1,8 +1,8 @@
 import {createStore, produce} from 'solid-js/store';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick,
-  type CategoryDTO, type DetailDTO, type GlobalStatsT, type InspectorTab,
-  type LimitsDTO, type QueueLimitsDTO, type TagDTO, type Torrent,
+  type BlocklistDTO, type CategoryDTO, type DetailDTO, type GlobalStatsT, type InspectorTab,
+  type LimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
 } from './bindings';
 
 export type Density = 'cards' | 'table';
@@ -39,6 +39,10 @@ export type AppState = {
   // Bandwidth + queue
   limits: LimitsDTO;
   queueLimits: QueueLimitsDTO;
+
+  // Scheduling + blocklist
+  scheduleRules: ScheduleRuleDTO[];
+  blocklist: BlocklistDTO;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -75,6 +79,13 @@ const emptyQueueLimits: QueueLimitsDTO = {
   max_active_seeds: 0,
 };
 
+const emptyBlocklist: BlocklistDTO = {
+  url: '',
+  enabled: false,
+  last_loaded_at: 0,
+  entries: 0,
+};
+
 export function createTorrentsStore() {
   const [state, setState] = createStore<AppState>({
     torrents: [],
@@ -100,6 +111,9 @@ export function createTorrentsStore() {
 
     limits: emptyLimits,
     queueLimits: emptyQueueLimits,
+
+    scheduleRules: [],
+    blocklist: emptyBlocklist,
   });
 
   api.listTorrents()
@@ -112,6 +126,8 @@ export function createTorrentsStore() {
   api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(console.error);
   api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(console.error);
   api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(console.error);
+  api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(console.error);
+  api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(console.error);
 
   const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -254,6 +270,46 @@ export function createTorrentsStore() {
     },
     setQueuePosition: (infohash: string, pos: number) => api.setQueuePosition(infohash, pos),
     setForceStart: (infohash: string, force: boolean) => api.setForceStart(infohash, force),
+
+    // Scheduling
+    refreshScheduleRules: async () => {
+      const rs = await api.listScheduleRules();
+      setState(produce((s) => { s.scheduleRules = rs ?? []; }));
+    },
+    createScheduleRule: async (r: ScheduleRuleDTO) => {
+      await api.createScheduleRule(r);
+      const rs = await api.listScheduleRules();
+      setState(produce((s) => { s.scheduleRules = rs ?? []; }));
+    },
+    updateScheduleRule: async (r: ScheduleRuleDTO) => {
+      await api.updateScheduleRule(r);
+      const rs = await api.listScheduleRules();
+      setState(produce((s) => { s.scheduleRules = rs ?? []; }));
+    },
+    deleteScheduleRule: async (id: number) => {
+      await api.deleteScheduleRule(id);
+      const rs = await api.listScheduleRules();
+      setState(produce((s) => { s.scheduleRules = rs ?? []; }));
+    },
+
+    // Blocklist
+    refreshBlocklistStatus: async () => {
+      const b = await api.getBlocklist();
+      setState(produce((s) => { s.blocklist = b; }));
+    },
+    setBlocklistURL: async (url: string, enabled: boolean) => {
+      await api.setBlocklistURL(url, enabled);
+      const b = await api.getBlocklist();
+      setState(produce((s) => { s.blocklist = b; }));
+    },
+    refreshBlocklist: async () => {
+      try {
+        await api.refreshBlocklist();
+      } finally {
+        const b = await api.getBlocklist();
+        setState(produce((s) => { s.blocklist = b; }));
+      }
+    },
 
     dispose: () => { offT(); offS(); offI(); },
   };
