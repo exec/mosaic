@@ -65,6 +65,7 @@ type Backend interface {
 	List() []Snapshot
 	Snapshot(id TorrentID) (Snapshot, error)
 	DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error)
+	SetFilePriorities(id TorrentID, prios map[int]Priority) error
 	Close() error
 }
 

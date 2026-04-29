@@ -129,3 +129,27 @@ func TestEngine_Snapshot_HasSeparateBytesAndRateFields(t *testing.T) {
 	require.Equal(t, int64(0), snap.RateDown)
 	require.Equal(t, int64(0), snap.RateUp)
 }
+
+func TestEngine_SetFilePriorities(t *testing.T) {
+	fb := NewFakeBackend()
+	eng := NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	id, _ := eng.AddMagnet(context.Background(), "magnet:?xt=urn:btih:prio", "/tmp")
+
+	require.NoError(t, eng.SetFilePriorities(id, map[int]Priority{
+		0: PriorityHigh,
+		1: PrioritySkip,
+	}))
+
+	d, _ := eng.DetailedSnapshot(id, DetailScope{Files: true})
+	require.Len(t, d.Files, 2)
+	for _, f := range d.Files {
+		switch f.Index {
+		case 0:
+			require.Equal(t, PriorityHigh, f.Priority)
+		case 1:
+			require.Equal(t, PrioritySkip, f.Priority)
+		}
+	}
+}

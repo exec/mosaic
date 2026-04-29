@@ -95,6 +95,10 @@ func (e *Engine) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, erro
 	return e.backend.DetailedSnapshot(id, scope)
 }
 
+func (e *Engine) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
+	return e.backend.SetFilePriorities(id, prios)
+}
+
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {

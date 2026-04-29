@@ -180,6 +180,33 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	return snap, nil
 }
 
+func (a *AnacrolixBackend) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
+	t, ok := a.find(id)
+	if !ok {
+		return errors.New("not found")
+	}
+	files := t.Files()
+	for idx, p := range prios {
+		if idx < 0 || idx >= len(files) {
+			continue
+		}
+		files[idx].SetPriority(prioToAnacrolix(p))
+	}
+	return nil
+}
+
+func prioToAnacrolix(p Priority) anacrolix_types.PiecePriority {
+	switch p {
+	case PrioritySkip:
+		return anacrolix_types.PiecePriorityNone
+	case PriorityHigh:
+		return anacrolix_types.PiecePriorityHigh
+	case PriorityMax:
+		return anacrolix_types.PiecePriorityNow
+	}
+	return anacrolix_types.PiecePriorityNormal
+}
+
 func (a *AnacrolixBackend) Close() error {
 	errs := a.client.Close()
 	if len(errs) > 0 {

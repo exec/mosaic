@@ -11,12 +11,16 @@ import (
 
 // FakeBackend is an in-memory Backend for tests.
 type FakeBackend struct {
-	mu       sync.Mutex
-	torrents map[TorrentID]*Snapshot
+	mu        sync.Mutex
+	torrents  map[TorrentID]*Snapshot
+	filePrios map[TorrentID]map[int]Priority
 }
 
 func NewFakeBackend() *FakeBackend {
-	return &FakeBackend{torrents: make(map[TorrentID]*Snapshot)}
+	return &FakeBackend{
+		torrents:  make(map[TorrentID]*Snapshot),
+		filePrios: make(map[TorrentID]map[int]Priority),
+	}
 }
 
 func (f *FakeBackend) AddMagnet(_ context.Context, magnet, savePath string) (TorrentID, error) {
@@ -113,6 +117,13 @@ func (f *FakeBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail,
 			{Index: 0, Path: "fake/disk1.iso", Size: 1 << 29, BytesDone: 1 << 28, Priority: PriorityNormal},
 			{Index: 1, Path: "fake/README", Size: 4096, BytesDone: 4096, Priority: PriorityNormal},
 		}
+		if prios, ok := f.filePrios[id]; ok {
+			for i := range d.Files {
+				if p, set := prios[d.Files[i].Index]; set {
+					d.Files[i].Priority = p
+				}
+			}
+		}
 	}
 	if scope.Peers {
 		d.Peers = []PeerEntry{
@@ -125,6 +136,21 @@ func (f *FakeBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail,
 		}
 	}
 	return d, nil
+}
+
+func (f *FakeBackend) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.torrents[id]; !ok {
+		return errors.New("not found")
+	}
+	if f.filePrios[id] == nil {
+		f.filePrios[id] = make(map[int]Priority)
+	}
+	for idx, p := range prios {
+		f.filePrios[id][idx] = p
+	}
+	return nil
 }
 
 // AdvanceProgress is a test helper: bumps BytesDone for a torrent.
