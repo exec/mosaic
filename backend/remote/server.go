@@ -69,6 +69,11 @@ func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, s
 			g.Put("/settings/web", h.SetWebConfig)
 			g.Put("/settings/web/password", h.SetWebPassword)
 			g.Post("/settings/web/api_key/rotate", h.RotateAPIKey)
+			g.Get("/settings/updater", h.GetUpdaterConfig)
+			g.Put("/settings/updater", h.SetUpdaterConfig)
+			g.Post("/updater/check", h.CheckForUpdate)
+			g.Post("/updater/install", h.InstallUpdate)
+			g.Get("/version", h.GetAppVersion)
 
 			g.Get("/schedule_rules", h.ListScheduleRules)
 			g.Post("/schedule_rules", h.CreateScheduleRule)

@@ -698,3 +698,45 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"api_key": key})
 }
+
+// ---- updater + version ----
+
+func (h *Handlers) GetUpdaterConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.svc.GetUpdaterConfig(r.Context()))
+}
+
+func (h *Handlers) SetUpdaterConfig(w http.ResponseWriter, r *http.Request) {
+	var c api.UpdaterConfigDTO
+	if err := decodeJSON(r, &c); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.SetUpdaterConfig(r.Context(), c); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) CheckForUpdate(w http.ResponseWriter, r *http.Request) {
+	info, err := h.svc.CheckForUpdate(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (h *Handlers) InstallUpdate(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.InstallUpdate(r.Context()); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// GetAppVersion returns the build-time version. Used by the browser-mode
+// transport to populate the AboutPane and the update toast comparison.
+func (h *Handlers) GetAppVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": h.svc.AppVersion()})
+}

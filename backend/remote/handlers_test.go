@@ -181,6 +181,83 @@ func TestHandlers_Stats(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &s))
 }
 
+func TestHandlers_Updater_GetConfig_DefaultsEnabled(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(context.Background())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/settings/updater", nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var got api.UpdaterConfigDTO
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.True(t, got.Enabled, "default Enabled=true expected")
+	require.Equal(t, "stable", got.Channel)
+}
+
+func TestHandlers_Updater_SetConfig_RoundTrip(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(context.Background())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPut, "/api/settings/updater", api.UpdaterConfigDTO{
+		Enabled: false, Channel: "beta",
+	}))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/settings/updater", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got api.UpdaterConfigDTO
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.False(t, got.Enabled)
+	require.Equal(t, "beta", got.Channel)
+}
+
+func TestHandlers_Updater_RejectsUnknownChannel(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(context.Background())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPut, "/api/settings/updater", api.UpdaterConfigDTO{
+		Enabled: true, Channel: "nightly",
+	}))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+func TestHandlers_Updater_CheckWithoutUpdater_500s(t *testing.T) {
+	// fixture Service has no updater attached → CheckForUpdate returns the
+	// "updater disabled" error → handler maps to 500.
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(context.Background())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/check", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+}
+
+func TestHandlers_Updater_InstallWithoutUpdater_500s(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(context.Background())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/install", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+}
+
+func TestHandlers_Version_OK(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(context.Background())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/version", nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var got map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	_, ok := got["version"]
+	require.True(t, ok, "missing 'version' field")
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
