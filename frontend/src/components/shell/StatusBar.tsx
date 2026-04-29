@@ -1,8 +1,14 @@
-import {ArrowDown, ArrowUp, Wifi} from 'lucide-solid';
-import type {GlobalStatsT} from '../../lib/bindings';
+import {ArrowDown, ArrowUp, Globe, Wifi} from 'lucide-solid';
+import {Show} from 'solid-js';
+import type {GlobalStatsT, WebConfigDTO} from '../../lib/bindings';
 import {fmtRate} from '../../lib/format';
 
-type Props = {stats: GlobalStatsT; queuedCount: number};
+type Props = {
+  stats: GlobalStatsT;
+  queuedCount: number;
+  webConfig: WebConfigDTO;
+  onClickWeb: () => void;
+};
 
 export function StatusBar(props: Props) {
   const s = () => props.stats;
@@ -25,10 +31,23 @@ export function StatusBar(props: Props) {
       <span class="font-mono tabular-nums">{s().seeding_torrents} seeding</span>
       <span class="font-mono tabular-nums">{s().total_peers} peers</span>
 
-      <span class="ml-auto inline-flex items-center gap-1.5">
-        <Wifi class="h-3 w-3 text-seed" />
-        <span class="text-zinc-500">DHT online</span>
-      </span>
+      <div class="ml-auto flex items-center gap-3">
+        <Show when={props.webConfig.enabled}>
+          <button
+            type="button"
+            onClick={props.onClickWeb}
+            class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-accent-300 transition-colors hover:bg-white/[.04]"
+            data-testid="statusbar-web"
+          >
+            <Globe class="h-3 w-3" />
+            <span class="font-mono tabular-nums">Web ON :{props.webConfig.port}</span>
+          </button>
+        </Show>
+        <span class="inline-flex items-center gap-1.5">
+          <Wifi class="h-3 w-3 text-seed" />
+          <span class="text-zinc-500">DHT online</span>
+        </span>
+      </div>
     </footer>
   );
 }

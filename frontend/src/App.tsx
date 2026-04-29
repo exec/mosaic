@@ -146,6 +146,11 @@ export default function App() {
         altSpeedActive={store.state.limits.alt_active}
         onToggleAltSpeed={() => store.toggleAltSpeed()}
         queuedCount={queuedCount()}
+        webConfig={store.state.webConfig}
+        onNavigateWebSettings={() => {
+          store.setView('settings');
+          store.setSettingsPane('web');
+        }}
         settings={
           <SettingsRoute
             pane={store.state.settingsPane}
