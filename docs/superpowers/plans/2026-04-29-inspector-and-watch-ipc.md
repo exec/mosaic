@@ -383,14 +383,15 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 				ip = h
 				port = p
 			}
+			name, _ := pc.PeerClientName.Load().(string)
 			d.Peers = append(d.Peers, PeerEntry{
 				IP:           ip,
 				Port:         port,
-				ClientName:   pc.PeerClientName.Load(),
+				ClientName:   name,
 				Flags:        peerFlagsFor(pc),
-				Progress:     pieceProgressOf(pc),
+				Progress:     pieceProgressOf(t, pc),
 				DownloadRate: int64(pc.DownloadRate()),
-				UploadRate:   int64(pc.UploadRate()),
+				UploadRate:   int64(pc.Stats().LastWriteUploadRate),
 				CountryCode:  "", // anacrolix doesn't ship GeoIP — Plan 4+ may add a local DB
 			})
 		}
@@ -442,25 +443,36 @@ func splitHostPort(addr string) (string, int, error) {
 	return h, port, nil
 }
 
-// peerFlagsFor approximates the qBittorrent-style flag string from anacrolix
-// peer state. Subset: D=downloading, U=uploading, K=peer choking us, ?=peer
-// choked us, I=interested, E=encrypted, X=PEX, H=DHT.
+// peerFlagsFor returns the BitTorrent-style peer flag string. Plan 3 emits an
+// empty string: anacrolix v1.61 does not expose `peerInterested`, `peerChoking`,
+// or any header-obfuscation accessor outside the package, so we cannot read the
+// bits. Plan 4 (or a small upstream PR) should add them back when accessors land.
 func peerFlagsFor(pc *torrent.PeerConn) string {
-	var buf []byte
-	if pc.PeerInterested.Load() { buf = append(buf, 'I') }
-	if pc.PeerChoking.Load()    { buf = append(buf, 'K') }
-	if pc.HeaderObfuscation     { buf = append(buf, 'E') }
-	return string(buf)
+	return ""
 }
 
-func pieceProgressOf(pc *torrent.PeerConn) float64 {
+// pieceProgressOf returns 0..1 of the parent torrent's pieces this peer has.
+// Denominator is t.NumPieces() because *roaring.Bitmap has no Len() method —
+// it's a sparse set, not a fixed-length bitmap.
+func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
 	pp := pc.PeerPieces()
-	if pp.IsEmpty() { return 0 }
-	return float64(pp.GetCardinality()) / float64(pp.Len())
+	if pp.IsEmpty() {
+		return 0
+	}
+	n := t.NumPieces()
+	if n == 0 {
+		return 0
+	}
+	return float64(pp.GetCardinality()) / float64(n)
 }
 ```
 
-> **Heads-up on anacrolix internals:** the exact field names above (`pc.PeerClientName.Load()`, `pc.DownloadRate()`, `pc.PeerPieces()`, `anacrolix_types.PiecePriorityNone`) are from anacrolix/torrent v1.61. If they've drifted, please flag — they're not stable across major versions.
+> **Anacrolix v1.61 alignment notes:** Plan was originally written assuming method names that don't exist on this version. Confirmed substitutions:
+> - `pc.UploadRate()` → `int64(pc.Stats().LastWriteUploadRate)` (no public `UploadRate()` method)
+> - `pc.PeerInterested.Load()` / `pc.PeerChoking.Load()` / `pc.HeaderObfuscation` → unreadable (unexported `bool` fields and missing field). `Flags` ships empty for now.
+> - `pp.Len()` on `*roaring.Bitmap` → `t.NumPieces()` (Bitmap has no `Len()`; we want the parent torrent's piece count).
+> - `pc.PeerClientName.Load()` returns `interface{}` (atomic.Value) — type-assert to string.
+> Confirmed working on v1.61.0: `t.Files()`, `f.DisplayPath/Length/BytesCompleted/Priority`, `t.PeerConns()`, `pc.RemoteAddr`, `pc.PeerClientName`, `pc.PeerPieces()`, `pc.DownloadRate()`, `t.Metainfo().AnnounceList/Announce`, `anacrolix_types.PiecePriorityNone/Normal/High/Now`.
 
 - [ ] **Step 2: Add imports**
 
