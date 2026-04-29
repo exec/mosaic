@@ -1,8 +1,15 @@
 import {For, Show} from 'solid-js';
+import {ChevronDown} from 'lucide-solid';
 import type {DetailDTO} from '../../lib/bindings';
 import {fmtBytes, fmtPercent} from '../../lib/format';
+import {DropdownMenu} from '../ui/DropdownMenu';
 
-type Props = {detail: DetailDTO | null};
+type Priority = 'skip' | 'normal' | 'high' | 'max';
+
+type Props = {
+  detail: DetailDTO | null;
+  onSetPriority: (index: number, priority: Priority) => void;
+};
 
 export function FilesTab(props: Props) {
   return (
@@ -26,6 +33,17 @@ export function FilesTab(props: Props) {
                   />
                 </div>
                 <span class="font-mono tabular-nums text-zinc-500">{fmtPercent(f.progress)}</span>
+                <DropdownMenu trigger={
+                  <button class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs text-zinc-500 transition-colors hover:bg-white/[.04] hover:text-zinc-200">
+                    {f.priority}
+                    <ChevronDown class="h-3 w-3" />
+                  </button>
+                }>
+                  <DropdownMenu.Item onSelect={() => props.onSetPriority(f.index, 'skip')}>Skip</DropdownMenu.Item>
+                  <DropdownMenu.Item onSelect={() => props.onSetPriority(f.index, 'normal')}>Normal</DropdownMenu.Item>
+                  <DropdownMenu.Item onSelect={() => props.onSetPriority(f.index, 'high')}>High</DropdownMenu.Item>
+                  <DropdownMenu.Item onSelect={() => props.onSetPriority(f.index, 'max')}>Max</DropdownMenu.Item>
+                </DropdownMenu>
               </div>
             </div>
           )}

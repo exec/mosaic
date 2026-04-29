@@ -101,6 +101,13 @@ export default function App() {
             bandwidth={store.state.bandwidthRing}
             onTabChange={(t) => store.setInspectorTab(t)}
             onClose={() => store.closeInspector()}
+            onSetFilePriority={async (index, priority) => {
+              const id = store.state.inspectorOpenId;
+              if (!id) return;
+              try {
+                await store.setFilePriorities(id, {[index]: priority});
+              } catch (err) { toast.error(String(err)); }
+            }}
           />
         }
       >

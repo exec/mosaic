@@ -16,6 +16,7 @@ type Props = {
   bandwidth: BandwidthSample[];
   onTabChange: (t: InspectorTab) => void;
   onClose: () => void;
+  onSetFilePriority: (index: number, priority: 'skip' | 'normal' | 'high' | 'max') => void;
 };
 
 export function Inspector(props: Props) {
@@ -32,7 +33,7 @@ export function Inspector(props: Props) {
               <OverviewTab detail={props.detail} />
             </Match>
             <Match when={props.tab === 'files'}>
-              <FilesTab detail={props.detail} />
+              <FilesTab detail={props.detail} onSetPriority={props.onSetFilePriority} />
             </Match>
             <Match when={props.tab === 'peers'}>
               <PeersTab detail={props.detail} />
