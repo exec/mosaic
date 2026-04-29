@@ -35,6 +35,9 @@ type AnacrolixBackend struct {
 
 	rateMu    sync.Mutex
 	prevRates map[TorrentID]rateSample
+
+	pausedMu sync.RWMutex
+	paused   map[TorrentID]bool
 }
 
 type rateSample struct {
@@ -68,6 +71,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		client:    c,
 		bySaveTo:  make(map[TorrentID]string),
 		prevRates: make(map[TorrentID]rateSample),
+		paused:    make(map[TorrentID]bool),
 	}, nil
 }
 
@@ -123,6 +127,9 @@ func (a *AnacrolixBackend) Pause(id TorrentID) error {
 		return errors.New("not found")
 	}
 	t.SetMaxEstablishedConns(0)
+	a.pausedMu.Lock()
+	a.paused[id] = true
+	a.pausedMu.Unlock()
 	return nil
 }
 
@@ -132,6 +139,9 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 		return errors.New("not found")
 	}
 	t.SetMaxEstablishedConns(80)
+	a.pausedMu.Lock()
+	a.paused[id] = false
+	a.pausedMu.Unlock()
 	return nil
 }
 
@@ -144,6 +154,9 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	saveTo := a.bySaveTo[id]
 	delete(a.bySaveTo, id)
 	a.mu.Unlock()
+	a.pausedMu.Lock()
+	delete(a.paused, id)
+	a.pausedMu.Unlock()
 	t.Drop()
 	if deleteFiles && saveTo != "" {
 		if info := t.Info(); info != nil {
@@ -158,9 +171,11 @@ func (a *AnacrolixBackend) List() []Snapshot {
 	out := make([]Snapshot, 0, len(ts))
 	a.rateMu.Lock()
 	defer a.rateMu.Unlock()
+	a.pausedMu.RLock()
+	defer a.pausedMu.RUnlock()
 	for _, t := range ts {
 		id := TorrentID(t.InfoHash().HexString())
-		snap, next := snapshotFor(t, a.prevRates[id])
+		snap, next := snapshotFor(t, a.prevRates[id], a.paused[id])
 		a.prevRates[id] = next
 		out = append(out, snap)
 	}
@@ -174,7 +189,10 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	}
 	a.rateMu.Lock()
 	prev := a.prevRates[id]
-	snap, next := snapshotFor(t, prev)
+	a.pausedMu.RLock()
+	paused := a.paused[id]
+	a.pausedMu.RUnlock()
+	snap, next := snapshotFor(t, prev, paused)
 	a.prevRates[id] = next
 	a.rateMu.Unlock()
 	return snap, nil
@@ -234,7 +252,10 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	}
 	a.rateMu.Lock()
 	prev := a.prevRates[id]
-	snap, next := snapshotFor(t, prev)
+	a.pausedMu.RLock()
+	paused := a.paused[id]
+	a.pausedMu.RUnlock()
+	snap, next := snapshotFor(t, prev, paused)
 	a.prevRates[id] = next
 	a.rateMu.Unlock()
 	d := Detail{Snapshot: snap}
@@ -340,7 +361,7 @@ func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
 	return float64(pp.GetCardinality()) / float64(n)
 }
 
-func snapshotFor(t *torrent.Torrent, prev rateSample) (Snapshot, rateSample) {
+func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool) (Snapshot, rateSample) {
 	stats := t.Stats()
 	name := t.Name()
 	if name == "" {
@@ -372,7 +393,7 @@ func snapshotFor(t *torrent.Torrent, prev rateSample) (Snapshot, rateSample) {
 		RateUp:     rateUp,
 		Peers:      stats.ActivePeers,
 		Seeds:      stats.ConnectedSeeders,
-		Paused:     false, // TODO in plan 2: distinguish via SetMaxEstablishedConns(0)
+		Paused:     paused,
 		Completed:  total > 0 && t.BytesCompleted() == total,
 		AddedAt:    time.Now(), // engine wrapper does not track AddedAt; persistence does
 	}

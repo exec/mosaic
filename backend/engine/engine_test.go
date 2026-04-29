@@ -130,6 +130,26 @@ func TestEngine_Snapshot_HasSeparateBytesAndRateFields(t *testing.T) {
 	require.Equal(t, int64(0), snap.RateUp)
 }
 
+func TestEngine_Pause_ReflectsInSnapshot(t *testing.T) {
+	fb := NewFakeBackend()
+	eng := NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	id, err := eng.AddMagnet(context.Background(), "magnet:?xt=urn:btih:pause", "/tmp")
+	require.NoError(t, err)
+
+	snap, _ := eng.Snapshot(id)
+	require.False(t, snap.Paused, "fresh torrent is not paused")
+
+	require.NoError(t, eng.Pause(id))
+	snap, _ = eng.Snapshot(id)
+	require.True(t, snap.Paused, "after Pause, Snapshot.Paused should be true")
+
+	require.NoError(t, eng.Resume(id))
+	snap, _ = eng.Snapshot(id)
+	require.False(t, snap.Paused, "after Resume, Snapshot.Paused should be false")
+}
+
 func TestEngine_SetFilePriorities(t *testing.T) {
 	fb := NewFakeBackend()
 	eng := NewEngine(fb, 50*time.Millisecond)
