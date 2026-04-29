@@ -178,6 +178,18 @@ func (a *App) DeleteScheduleRule(id int) error {
 	return a.svc.DeleteScheduleRule(a.ctx, id)
 }
 
+func (a *App) GetBlocklist() api.BlocklistDTO {
+	return a.svc.GetBlocklist(a.ctx)
+}
+
+func (a *App) SetBlocklistURL(url string, enabled bool) error {
+	return a.svc.SetBlocklistURL(a.ctx, url, enabled)
+}
+
+func (a *App) RefreshBlocklist() error {
+	return a.svc.RefreshBlocklist(a.ctx)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)

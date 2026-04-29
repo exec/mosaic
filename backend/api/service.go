@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"sync"
@@ -29,6 +32,18 @@ type Service struct {
 	focusMu    sync.RWMutex
 	focusID    engine.TorrentID
 	focusScope engine.DetailScope
+
+	blocklistMu sync.RWMutex
+	blocklist   blocklistState
+}
+
+// blocklistState is the in-memory snapshot of the most recent successful (or
+// failed) blocklist load. The list contents themselves live inside the engine's
+// IP block proxy.
+type blocklistState struct {
+	loadedAt time.Time
+	entries  int
+	lastErr  string
 }
 
 func NewService(
@@ -54,14 +69,16 @@ func NewService(
 }
 
 const (
-	settingDefaultSavePath = "default_save_path"
-	settingMaxActiveDL     = "max_active_downloads"
-	settingMaxActiveSeeds  = "max_active_seeds"
-	settingDownKbps        = "down_kbps"
-	settingUpKbps          = "up_kbps"
-	settingAltDownKbps     = "alt_down_kbps"
-	settingAltUpKbps       = "alt_up_kbps"
-	settingAltActive       = "alt_active"
+	settingDefaultSavePath  = "default_save_path"
+	settingMaxActiveDL      = "max_active_downloads"
+	settingMaxActiveSeeds   = "max_active_seeds"
+	settingDownKbps         = "down_kbps"
+	settingUpKbps           = "up_kbps"
+	settingAltDownKbps      = "alt_down_kbps"
+	settingAltUpKbps        = "alt_up_kbps"
+	settingAltActive        = "alt_active"
+	settingBlocklistURL     = "blocklist_url"
+	settingBlocklistEnabled = "blocklist_enabled"
 )
 
 func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {
@@ -717,6 +734,96 @@ func (s *Service) UpdateScheduleRule(ctx context.Context, r ScheduleRuleDTO) err
 
 func (s *Service) DeleteScheduleRule(ctx context.Context, id int) error {
 	return s.scheduleRules.Delete(ctx, id)
+}
+
+// BlocklistDTO is the transport shape for the IP blocklist config + status.
+type BlocklistDTO struct {
+	URL          string `json:"url"`
+	Enabled      bool   `json:"enabled"`
+	LastLoadedAt int64  `json:"last_loaded_at"`
+	Entries      int    `json:"entries"`
+	Error        string `json:"error,omitempty"`
+}
+
+func (s *Service) GetBlocklist(ctx context.Context) BlocklistDTO {
+	url, _ := s.settings.Get(ctx, settingBlocklistURL)
+	en := s.boolSetting(ctx, settingBlocklistEnabled)
+	s.blocklistMu.RLock()
+	defer s.blocklistMu.RUnlock()
+	dto := BlocklistDTO{URL: url, Enabled: en, Entries: s.blocklist.entries, Error: s.blocklist.lastErr}
+	if !s.blocklist.loadedAt.IsZero() {
+		dto.LastLoadedAt = s.blocklist.loadedAt.Unix()
+	}
+	return dto
+}
+
+func (s *Service) SetBlocklistURL(ctx context.Context, url string, enabled bool) error {
+	if err := s.settings.Set(ctx, settingBlocklistURL, url); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingBlocklistEnabled, enabled); err != nil {
+		return err
+	}
+	if !enabled || url == "" {
+		_ = s.engine.SetIPBlocklist(nil)
+		s.blocklistMu.Lock()
+		s.blocklist = blocklistState{}
+		s.blocklistMu.Unlock()
+		return nil
+	}
+	return s.RefreshBlocklist(ctx)
+}
+
+func (s *Service) RefreshBlocklist(ctx context.Context) error {
+	url, _ := s.settings.Get(ctx, settingBlocklistURL)
+	if url == "" {
+		return errors.New("no blocklist URL configured")
+	}
+
+	httpCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(httpCtx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.blocklistMu.Lock()
+		s.blocklist.lastErr = err.Error()
+		s.blocklistMu.Unlock()
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024)) // 50MB safety cap
+	if err != nil {
+		s.blocklistMu.Lock()
+		s.blocklist.lastErr = err.Error()
+		s.blocklistMu.Unlock()
+		return err
+	}
+
+	if err := s.engine.SetIPBlocklist(bytes.NewReader(body)); err != nil {
+		s.blocklistMu.Lock()
+		s.blocklist.lastErr = err.Error()
+		s.blocklistMu.Unlock()
+		return err
+	}
+
+	s.blocklistMu.Lock()
+	s.blocklist = blocklistState{loadedAt: time.Now(), entries: countLines(body), lastErr: ""}
+	s.blocklistMu.Unlock()
+	return nil
+}
+
+func countLines(b []byte) int {
+	n := 0
+	for _, x := range b {
+		if x == '\n' {
+			n++
+		}
+	}
+	return n
 }
 
 // RestoreOnStartup hydrates engine + scheduler limits from persisted settings.
