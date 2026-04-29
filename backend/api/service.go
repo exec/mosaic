@@ -17,6 +17,8 @@ import (
 type Service struct {
 	engine          *engine.Engine
 	torrents        *persistence.Torrents
+	categories      *persistence.Categories
+	tags            *persistence.Tags
 	defaultSavePath string
 
 	focusMu    sync.RWMutex
@@ -24,26 +26,40 @@ type Service struct {
 	focusScope engine.DetailScope
 }
 
-func NewService(eng *engine.Engine, torrents *persistence.Torrents, defaultSavePath string) *Service {
-	return &Service{engine: eng, torrents: torrents, defaultSavePath: defaultSavePath}
+func NewService(
+	eng *engine.Engine,
+	torrents *persistence.Torrents,
+	categories *persistence.Categories,
+	tags *persistence.Tags,
+	defaultSavePath string,
+) *Service {
+	return &Service{
+		engine:          eng,
+		torrents:        torrents,
+		categories:      categories,
+		tags:            tags,
+		defaultSavePath: defaultSavePath,
+	}
 }
 
 // TorrentDTO is the shape returned to UI/transport callers.
 type TorrentDTO struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Magnet       string  `json:"magnet"`
-	SavePath     string  `json:"save_path"`
-	TotalBytes   int64   `json:"total_bytes"`
-	BytesDone    int64   `json:"bytes_done"`
-	Progress     float64 `json:"progress"` // 0..1
-	DownloadRate int64   `json:"download_rate"`
-	UploadRate   int64   `json:"upload_rate"`
-	Peers        int     `json:"peers"`
-	Seeds        int     `json:"seeds"`
-	Paused       bool    `json:"paused"`
-	Completed    bool    `json:"completed"`
-	AddedAt      int64   `json:"added_at"` // unix seconds
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Magnet       string   `json:"magnet"`
+	SavePath     string   `json:"save_path"`
+	TotalBytes   int64    `json:"total_bytes"`
+	BytesDone    int64    `json:"bytes_done"`
+	Progress     float64  `json:"progress"` // 0..1
+	DownloadRate int64    `json:"download_rate"`
+	UploadRate   int64    `json:"upload_rate"`
+	Peers        int      `json:"peers"`
+	Seeds        int      `json:"seeds"`
+	Paused       bool     `json:"paused"`
+	Completed    bool     `json:"completed"`
+	AddedAt      int64    `json:"added_at"` // unix seconds
+	CategoryID   *int     `json:"category_id"`
+	Tags         []TagDTO `json:"tags"`
 }
 
 func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
@@ -148,7 +164,19 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 			}
 			addedAt = rec.AddedAt
 		}
-		out = append(out, toDTO(snap, addedAt))
+		dto := toDTO(snap, addedAt)
+		if ok {
+			dto.CategoryID = rec.CategoryID
+		}
+		tags, err := s.tags.ForTorrent(ctx, string(snap.ID))
+		if err != nil {
+			return nil, err
+		}
+		dto.Tags = make([]TagDTO, 0, len(tags))
+		for _, tg := range tags {
+			dto.Tags = append(dto.Tags, TagDTO{ID: tg.ID, Name: tg.Name, Color: tg.Color})
+		}
+		out = append(out, dto)
 	}
 	return out, nil
 }
@@ -363,4 +391,85 @@ func priorityToString(p engine.Priority) string {
 		return "max"
 	}
 	return "normal"
+}
+
+type CategoryDTO struct {
+	ID              int    `json:"id"`
+	Name            string `json:"name"`
+	DefaultSavePath string `json:"default_save_path"`
+	Color           string `json:"color"`
+}
+
+type TagDTO struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+func (s *Service) CreateCategory(ctx context.Context, name, defaultPath, color string) (int, error) {
+	return s.categories.Create(ctx, persistence.Category{Name: name, DefaultSavePath: defaultPath, Color: color})
+}
+
+func (s *Service) ListCategories(ctx context.Context) ([]CategoryDTO, error) {
+	cats, err := s.categories.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CategoryDTO, 0, len(cats))
+	for _, c := range cats {
+		out = append(out, CategoryDTO{ID: c.ID, Name: c.Name, DefaultSavePath: c.DefaultSavePath, Color: c.Color})
+	}
+	return out, nil
+}
+
+func (s *Service) UpdateCategory(ctx context.Context, id int, name, defaultPath, color string) error {
+	return s.categories.Update(ctx, persistence.Category{ID: id, Name: name, DefaultSavePath: defaultPath, Color: color})
+}
+
+func (s *Service) DeleteCategory(ctx context.Context, id int) error {
+	return s.categories.Delete(ctx, id)
+}
+
+func (s *Service) CreateTag(ctx context.Context, name, color string) (int, error) {
+	return s.tags.Create(ctx, persistence.Tag{Name: name, Color: color})
+}
+
+func (s *Service) ListTags(ctx context.Context) ([]TagDTO, error) {
+	tags, err := s.tags.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TagDTO, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, TagDTO{ID: t.ID, Name: t.Name, Color: t.Color})
+	}
+	return out, nil
+}
+
+func (s *Service) DeleteTag(ctx context.Context, id int) error {
+	return s.tags.Delete(ctx, id)
+}
+
+func (s *Service) AssignTag(ctx context.Context, infohash string, tagID int) error {
+	return s.tags.Assign(ctx, infohash, tagID)
+}
+
+func (s *Service) UnassignTag(ctx context.Context, infohash string, tagID int) error {
+	return s.tags.Unassign(ctx, infohash, tagID)
+}
+
+func (s *Service) ListTagsFor(ctx context.Context, infohash string) ([]TagDTO, error) {
+	tags, err := s.tags.ForTorrent(ctx, infohash)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TagDTO, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, TagDTO{ID: t.ID, Name: t.Name, Color: t.Color})
+	}
+	return out, nil
+}
+
+func (s *Service) SetTorrentCategory(ctx context.Context, infohash string, categoryID *int) error {
+	return s.torrents.SetCategory(ctx, infohash, categoryID)
 }

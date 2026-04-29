@@ -66,7 +66,11 @@ func main() {
 	eng := engine.NewEngine(backend, 500*time.Millisecond)
 	defer eng.Close()
 
-	svc := api.NewService(eng, persistence.NewTorrents(db), cfg.DefaultSavePath)
+	svc := api.NewService(eng,
+		persistence.NewTorrents(db),
+		persistence.NewCategories(db),
+		persistence.NewTags(db),
+		cfg.DefaultSavePath)
 	app := NewApp(svc)
 
 	err = wails.Run(&options.App{

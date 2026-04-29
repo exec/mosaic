@@ -23,7 +23,11 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 	eng := engine.NewEngine(fb, 50*time.Millisecond)
 	t.Cleanup(func() { _ = eng.Close() })
 
-	svc := NewService(eng, persistence.NewTorrents(db), "/tmp/dl")
+	svc := NewService(eng,
+		persistence.NewTorrents(db),
+		persistence.NewCategories(db),
+		persistence.NewTags(db),
+		"/tmp/dl")
 	return svc, fb
 }
 
@@ -144,6 +148,58 @@ func TestService_InspectorFocus_ScopesByVisibleTabs(t *testing.T) {
 	require.Empty(t, got.Files)
 	require.Len(t, got.PeersList, 1)
 	require.Empty(t, got.Trackers)
+}
+
+func TestService_CategoryCRUD(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	id, err := svc.CreateCategory(ctx, "Movies", "/Volumes/media", "#ef4444")
+	require.NoError(t, err)
+	require.Greater(t, id, 0)
+
+	cats, err := svc.ListCategories(ctx)
+	require.NoError(t, err)
+	require.Len(t, cats, 1)
+	require.Equal(t, "Movies", cats[0].Name)
+
+	require.NoError(t, svc.UpdateCategory(ctx, id, "Cinema", "/v/m", "#000"))
+	cats, _ = svc.ListCategories(ctx)
+	require.Equal(t, "Cinema", cats[0].Name)
+
+	require.NoError(t, svc.DeleteCategory(ctx, id))
+	cats, _ = svc.ListCategories(ctx)
+	require.Empty(t, cats)
+}
+
+func TestService_TagAssignment(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:tag", "")
+	tagID, err := svc.CreateTag(ctx, "#priority", "#3b82f6")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AssignTag(ctx, string(id), tagID))
+
+	tags, err := svc.ListTagsFor(ctx, string(id))
+	require.NoError(t, err)
+	require.Len(t, tags, 1)
+}
+
+func TestService_SetTorrentCategory(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:cat", "")
+	catID, _ := svc.CreateCategory(ctx, "Linux ISOs", "", "#22c55e")
+
+	require.NoError(t, svc.SetTorrentCategory(ctx, string(id), &catID))
+
+	rows, _ := svc.ListTorrents(ctx)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].CategoryID)
+	require.Equal(t, catID, *rows[0].CategoryID)
 }
 
 func TestService_GlobalStats(t *testing.T) {
