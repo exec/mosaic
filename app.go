@@ -87,6 +87,46 @@ func (a *App) ClearInspectorFocus() {
 	a.svc.ClearInspectorFocus()
 }
 
+func (a *App) ListCategories() ([]api.CategoryDTO, error) {
+	return a.svc.ListCategories(a.ctx)
+}
+
+func (a *App) CreateCategory(name, defaultPath, color string) (int, error) {
+	return a.svc.CreateCategory(a.ctx, name, defaultPath, color)
+}
+
+func (a *App) UpdateCategory(id int, name, defaultPath, color string) error {
+	return a.svc.UpdateCategory(a.ctx, id, name, defaultPath, color)
+}
+
+func (a *App) DeleteCategory(id int) error {
+	return a.svc.DeleteCategory(a.ctx, id)
+}
+
+func (a *App) ListTags() ([]api.TagDTO, error) {
+	return a.svc.ListTags(a.ctx)
+}
+
+func (a *App) CreateTag(name, color string) (int, error) {
+	return a.svc.CreateTag(a.ctx, name, color)
+}
+
+func (a *App) DeleteTag(id int) error {
+	return a.svc.DeleteTag(a.ctx, id)
+}
+
+func (a *App) AssignTag(infohash string, tagID int) error {
+	return a.svc.AssignTag(a.ctx, infohash, tagID)
+}
+
+func (a *App) UnassignTag(infohash string, tagID int) error {
+	return a.svc.UnassignTag(a.ctx, infohash, tagID)
+}
+
+func (a *App) SetTorrentCategory(infohash string, categoryID *int) error {
+	return a.svc.SetTorrentCategory(a.ctx, infohash, categoryID)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
