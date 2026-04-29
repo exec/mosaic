@@ -6,6 +6,7 @@ import {WindowShell} from './components/shell/WindowShell';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
 import {TorrentList} from './components/list/TorrentList';
 import {Inspector} from './components/inspector/Inspector';
+import {SettingsRoute} from './components/settings/SettingsRoute';
 import './index.css';
 
 export default function App() {
@@ -114,6 +115,19 @@ export default function App() {
             toast.success('Torrent added');
           } catch (err) { toast.error(String(err)); }
         }}
+        settings={
+          <SettingsRoute
+            defaultSavePath={store.state.defaultSavePath}
+            categories={store.state.categories}
+            tags={store.state.tags}
+            onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
+            onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}
+            onUpdateCategory={(id, name, sp, color) => store.updateCategory(id, name, sp, color)}
+            onDeleteCategory={(id) => store.deleteCategory(id)}
+            onCreateTag={(name, color) => store.createTag(name, color)}
+            onDeleteTag={(id) => store.deleteTag(id)}
+          />
+        }
         inspector={
           <Inspector
             open={store.state.inspectorOpenId !== null}
