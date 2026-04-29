@@ -2,7 +2,7 @@ import {ArrowDown, ArrowUp, Wifi} from 'lucide-solid';
 import type {GlobalStatsT} from '../../lib/bindings';
 import {fmtRate} from '../../lib/format';
 
-type Props = {stats: GlobalStatsT};
+type Props = {stats: GlobalStatsT; queuedCount: number};
 
 export function StatusBar(props: Props) {
   const s = () => props.stats;
@@ -21,6 +21,7 @@ export function StatusBar(props: Props) {
 
       <span class="font-mono tabular-nums">{s().total_torrents} torrents</span>
       <span class="font-mono tabular-nums">{s().active_torrents} active</span>
+      <span class="font-mono tabular-nums">{props.queuedCount} queued</span>
       <span class="font-mono tabular-nums">{s().seeding_torrents} seeding</span>
       <span class="font-mono tabular-nums">{s().total_peers} peers</span>
 

@@ -31,6 +31,7 @@ type Props = {
   onTorrentBytesDropped: (bytes: Uint8Array) => Promise<void>;
   altSpeedActive: boolean;
   onToggleAltSpeed: () => void;
+  queuedCount: number;
   children: JSX.Element; // the main pane (TorrentList)
   inspector?: JSX.Element;
   settings?: JSX.Element;
@@ -81,7 +82,7 @@ export function WindowShell(props: Props) {
           </main>
           <Show when={props.view === 'torrents'}>{props.inspector}</Show>
         </div>
-        <StatusBar stats={props.stats} />
+        <StatusBar stats={props.stats} queuedCount={props.queuedCount} />
       </div>
     </div>
   );

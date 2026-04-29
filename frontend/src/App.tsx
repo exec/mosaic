@@ -34,6 +34,8 @@ export default function App() {
     )
   );
 
+  const queuedCount = createMemo(() => store.state.torrents.filter((t) => t.queued).length);
+
   const onMoveQueue = async (id: string, direction: 'top' | 'up' | 'down' | 'bottom') => {
     const sorted = [...store.state.torrents].sort((a, b) => a.queue_position - b.queue_position);
     const currentIdx = sorted.findIndex((t) => t.id === id);
@@ -138,6 +140,7 @@ export default function App() {
         }}
         altSpeedActive={store.state.limits.alt_active}
         onToggleAltSpeed={() => store.toggleAltSpeed()}
+        queuedCount={queuedCount()}
         settings={
           <SettingsRoute
             defaultSavePath={store.state.defaultSavePath}
