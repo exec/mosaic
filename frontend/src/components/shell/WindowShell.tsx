@@ -1,5 +1,5 @@
-import {type JSX} from 'solid-js';
-import type {Density, StatusFilter} from '../../lib/store';
+import {Match, Show, Switch, type JSX} from 'solid-js';
+import type {AppView, Density, StatusFilter} from '../../lib/store';
 import type {CategoryDTO, GlobalStatsT, TagDTO, Torrent} from '../../lib/bindings';
 import {IconRail} from './IconRail';
 import {FilterRail} from './FilterRail';
@@ -8,6 +8,8 @@ import {StatusBar} from './StatusBar';
 import {DropZone} from './DropZone';
 
 type Props = {
+  view: AppView;
+  onNavigate: (v: AppView) => void;
   torrents: Torrent[];
   filteredTorrents: Torrent[];
   stats: GlobalStatsT;
@@ -29,41 +31,51 @@ type Props = {
   onTorrentBytesDropped: (bytes: Uint8Array) => Promise<void>;
   children: JSX.Element; // the main pane (TorrentList)
   inspector?: JSX.Element;
+  settings?: JSX.Element;
 };
 
 export function WindowShell(props: Props) {
   return (
     <div class="flex h-full">
-      <IconRail />
+      <IconRail view={props.view} onNavigate={props.onNavigate} />
       <div class="flex flex-1 min-w-0 flex-col">
         <div class="flex flex-1 min-h-0">
-          <FilterRail
-            torrents={props.torrents}
-            active={props.statusFilter}
-            categories={props.categories}
-            tags={props.tags}
-            selectedCategoryID={props.selectedCategoryID}
-            selectedTagID={props.selectedTagID}
-            onSelect={props.onStatusFilter}
-            onSelectCategory={props.onSelectCategory}
-            onSelectTag={props.onSelectTag}
-          />
-          <main class="flex flex-1 min-w-0 flex-col">
-            <TopToolbar
-              searchQuery={props.searchQuery}
-              onSearch={props.onSearchQuery}
-              onAddMagnet={props.onAddMagnet}
-              onAddTorrent={props.onAddTorrent}
-              density={props.density}
-              onDensityChange={props.onDensityChange}
+          <Show when={props.view === 'torrents'}>
+            <FilterRail
+              torrents={props.torrents}
+              active={props.statusFilter}
+              categories={props.categories}
+              tags={props.tags}
+              selectedCategoryID={props.selectedCategoryID}
+              selectedTagID={props.selectedTagID}
+              onSelect={props.onStatusFilter}
+              onSelectCategory={props.onSelectCategory}
+              onSelectTag={props.onSelectTag}
             />
-            <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
-              <div class="h-full overflow-auto">
-                {props.children}
-              </div>
-            </DropZone>
+          </Show>
+          <main class="flex flex-1 min-w-0 flex-col">
+            <Switch>
+              <Match when={props.view === 'torrents'}>
+                <TopToolbar
+                  searchQuery={props.searchQuery}
+                  onSearch={props.onSearchQuery}
+                  onAddMagnet={props.onAddMagnet}
+                  onAddTorrent={props.onAddTorrent}
+                  density={props.density}
+                  onDensityChange={props.onDensityChange}
+                />
+                <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
+                  <div class="h-full overflow-auto">
+                    {props.children}
+                  </div>
+                </DropZone>
+              </Match>
+              <Match when={props.view === 'settings'}>
+                {props.settings}
+              </Match>
+            </Switch>
           </main>
-          {props.inspector}
+          <Show when={props.view === 'torrents'}>{props.inspector}</Show>
         </div>
         <StatusBar stats={props.stats} />
       </div>

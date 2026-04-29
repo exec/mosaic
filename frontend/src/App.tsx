@@ -88,6 +88,8 @@ export default function App() {
   return (
     <ThemeProvider>
       <WindowShell
+        view={store.state.view}
+        onNavigate={store.setView}
         torrents={store.state.torrents}
         filteredTorrents={filtered()}
         stats={store.state.stats}
