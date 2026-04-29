@@ -27,6 +27,7 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 		persistence.NewTorrents(db),
 		persistence.NewCategories(db),
 		persistence.NewTags(db),
+		persistence.NewSettings(db),
 		"/tmp/dl")
 	return svc, fb
 }
@@ -211,6 +212,21 @@ func TestService_SetFilePriorities(t *testing.T) {
 		0: "high",
 		1: "skip",
 	}))
+}
+
+func TestService_DefaultSavePath_Persistence(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	got, err := svc.GetDefaultSavePath(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/dl", got, "no override yet — falls back to constructor default")
+
+	require.NoError(t, svc.SetDefaultSavePath(ctx, "/Volumes/torrents"))
+
+	got, err = svc.GetDefaultSavePath(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "/Volumes/torrents", got)
 }
 
 func TestService_GlobalStats(t *testing.T) {

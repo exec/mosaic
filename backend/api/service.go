@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -19,6 +20,7 @@ type Service struct {
 	torrents        *persistence.Torrents
 	categories      *persistence.Categories
 	tags            *persistence.Tags
+	settings        *persistence.Settings
 	defaultSavePath string
 
 	focusMu    sync.RWMutex
@@ -31,6 +33,7 @@ func NewService(
 	torrents *persistence.Torrents,
 	categories *persistence.Categories,
 	tags *persistence.Tags,
+	settings *persistence.Settings,
 	defaultSavePath string,
 ) *Service {
 	return &Service{
@@ -38,8 +41,33 @@ func NewService(
 		torrents:        torrents,
 		categories:      categories,
 		tags:            tags,
+		settings:        settings,
 		defaultSavePath: defaultSavePath,
 	}
+}
+
+const settingDefaultSavePath = "default_save_path"
+
+func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {
+	v, err := s.settings.Get(ctx, settingDefaultSavePath)
+	if errors.Is(err, persistence.ErrNotFound) {
+		return s.defaultSavePath, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return v, nil
+}
+
+func (s *Service) SetDefaultSavePath(ctx context.Context, path string) error {
+	return s.settings.Set(ctx, settingDefaultSavePath, path)
+}
+
+func (s *Service) defaultPath(ctx context.Context) string {
+	if v, err := s.GetDefaultSavePath(ctx); err == nil {
+		return v
+	}
+	return s.defaultSavePath
 }
 
 // TorrentDTO is the shape returned to UI/transport callers.
@@ -87,7 +115,7 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 
 func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engine.TorrentID, error) {
 	if savePath == "" {
-		savePath = s.defaultSavePath
+		savePath = s.defaultPath(ctx)
 	}
 	id, err := s.engine.AddMagnet(ctx, magnet, savePath)
 	if err != nil {
@@ -135,7 +163,7 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath string) (engine.T
 
 func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath string) (engine.TorrentID, error) {
 	if savePath == "" {
-		savePath = s.defaultSavePath
+		savePath = s.defaultPath(ctx)
 	}
 	id, err := s.engine.AddFile(ctx, blob, savePath)
 	if err != nil {

@@ -70,6 +70,7 @@ func main() {
 		persistence.NewTorrents(db),
 		persistence.NewCategories(db),
 		persistence.NewTags(db),
+		persistence.NewSettings(db),
 		cfg.DefaultSavePath)
 	app := NewApp(svc)
 
