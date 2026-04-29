@@ -6,6 +6,7 @@ import {
 
 export type Density = 'cards' | 'table';
 export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused' | 'errored';
+export type AppView = 'torrents' | 'settings';
 
 export type BandwidthSample = {t: number; down: number; up: number};
 
@@ -17,6 +18,10 @@ export type AppState = {
   statusFilter: StatusFilter;
   searchQuery: string;
   loading: boolean;
+
+  // View routing
+  view: AppView;
+  defaultSavePath: string;
 
   // Inspector
   inspectorOpenId: string | null;       // null = closed
@@ -62,6 +67,9 @@ export function createTorrentsStore() {
     searchQuery: '',
     loading: true,
 
+    view: 'torrents',
+    defaultSavePath: '',
+
     inspectorOpenId: null,
     inspectorTab: 'overview',
     inspectorDetail: null,
@@ -80,6 +88,7 @@ export function createTorrentsStore() {
   api.globalStats().then((s) => setState({stats: s})).catch(console.error);
   api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(console.error);
   api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(console.error);
+  api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(console.error);
 
   const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -153,6 +162,11 @@ export function createTorrentsStore() {
     },
     setStatusFilter: (f: StatusFilter) => setState(produce((s) => { s.statusFilter = f; })),
     setSearchQuery: (q: string) => setState(produce((s) => { s.searchQuery = q; })),
+    setView: (v: AppView) => setState(produce((s) => { s.view = v; })),
+    setDefaultSavePath: async (p: string) => {
+      await api.setDefaultSavePath(p);
+      setState(produce((s) => { s.defaultSavePath = p; }));
+    },
 
     // Organization
     refreshCategories: async () => {
@@ -165,6 +179,11 @@ export function createTorrentsStore() {
     },
     createCategory: async (name: string, savePath: string, color: string) => {
       await api.createCategory(name, savePath, color);
+      const cs = await api.listCategories();
+      setState(produce((s) => { s.categories = cs; }));
+    },
+    updateCategory: async (id: number, name: string, savePath: string, color: string) => {
+      await api.updateCategory(id, name, savePath, color);
       const cs = await api.listCategories();
       setState(produce((s) => { s.categories = cs; }));
     },
