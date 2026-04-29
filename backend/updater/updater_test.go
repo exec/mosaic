@@ -8,21 +8,25 @@ import (
 )
 
 type fakeSource struct {
-	latestTag string
-	latestErr error
+	latestTag   string
+	latestAsset string
+	latestErr   error
 }
 
-func (f *fakeSource) DetectLatest(_ context.Context) (string, string, error) {
+func (f *fakeSource) DetectLatest(_ context.Context) (string, string, string, error) {
 	if f.latestErr != nil {
-		return "", "", f.latestErr
+		return "", "", "", f.latestErr
 	}
-	return f.latestTag, "https://example.com/release", nil
+	return f.latestTag, "https://example.com/release", f.latestAsset, nil
 }
 
 func TestCheck_NewerVersion(t *testing.T) {
 	u := New(Config{
 		CurrentVersion: "v0.7.0",
-		Source:         &fakeSource{latestTag: "v0.8.0"},
+		Source: &fakeSource{
+			latestTag:   "v0.8.0",
+			latestAsset: "mosaic_v0.8.0_darwin_arm64.tar.gz",
+		},
 	})
 	info, err := u.Check(context.Background())
 	if err != nil {
@@ -32,7 +36,10 @@ func TestCheck_NewerVersion(t *testing.T) {
 		t.Fatal("expected available=true")
 	}
 	if info.LatestVersion != "v0.8.0" {
-		t.Fatalf("got %q", info.LatestVersion)
+		t.Fatalf("got version %q", info.LatestVersion)
+	}
+	if info.AssetFilename != "mosaic_v0.8.0_darwin_arm64.tar.gz" {
+		t.Fatalf("got asset filename %q", info.AssetFilename)
 	}
 }
 

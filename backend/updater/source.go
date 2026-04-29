@@ -12,11 +12,14 @@ import (
 
 // Source abstracts the release fetcher so tests can supply fakes.
 type Source interface {
-	// DetectLatest returns (versionTag, downloadURL, error). versionTag is the
-	// raw tag (e.g. "v0.8.0"); downloadURL points to the platform-appropriate
-	// asset the caller will hand to Apply. An empty tag with nil error means
-	// "no release available for this OS/arch".
-	DetectLatest(ctx context.Context) (version string, assetURL string, err error)
+	// DetectLatest returns (versionTag, downloadURL, assetFilename, error).
+	// versionTag is "v"-prefixed (e.g. "v0.8.0"); downloadURL points to the
+	// platform-appropriate asset; assetFilename is the canonical filename
+	// including extension (e.g. "mosaic_v0.8.0_darwin_arm64.tar.gz") —
+	// go-selfupdate keys archive decompression off the extension at install
+	// time, so passing it through preserves correctness. An empty tag with
+	// nil error means "no release available for this OS/arch".
+	DetectLatest(ctx context.Context) (version string, assetURL string, assetFilename string, err error)
 }
 
 // GitHubSource wraps go-selfupdate's GitHub source. It lazy-initializes the
@@ -50,20 +53,24 @@ func (s *GitHubSource) lazyInit() (*selfupdate.Updater, error) {
 	return u, nil
 }
 
-func (s *GitHubSource) DetectLatest(ctx context.Context) (string, string, error) {
+func (s *GitHubSource) DetectLatest(ctx context.Context) (string, string, string, error) {
 	u, err := s.lazyInit()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	rel, found, err := u.DetectLatest(ctx, selfupdate.ParseSlug(fmt.Sprintf("%s/%s", s.Owner, s.Repo)))
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if !found || rel == nil {
-		return "", "", nil
+		return "", "", "", nil
 	}
 	if s.Channel != "beta" && rel.Prerelease {
-		return "", "", nil
+		return "", "", "", nil
 	}
-	return rel.Version(), rel.AssetURL, nil
+	// rel.Version() comes back from Masterminds/semver as bare ("0.8.0"); the
+	// rest of the app stores the build-time version with a "v" prefix, so
+	// normalize at this boundary so all downstream version comparisons + UI
+	// strings agree.
+	return "v" + rel.Version(), rel.AssetURL, rel.AssetName, nil
 }

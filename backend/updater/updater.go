@@ -14,11 +14,12 @@ import (
 const DefaultInterval = 24 * time.Hour
 
 // Info is the result of a single Check call. Available + LatestVersion +
-// AssetURL are zero-valued when no upgrade is offered.
+// AssetURL + AssetFilename are zero-valued when no upgrade is offered.
 type Info struct {
 	Available     bool      `json:"available"`
 	LatestVersion string    `json:"latest_version"`
 	AssetURL      string    `json:"asset_url"`
+	AssetFilename string    `json:"asset_filename"`
 	CheckedAt     time.Time `json:"checked_at"`
 }
 
@@ -60,7 +61,7 @@ func (u *Updater) Check(ctx context.Context) (Info, error) {
 		u.set(info)
 		return info, nil
 	}
-	tag, asset, err := u.cfg.Source.DetectLatest(ctx)
+	tag, asset, assetName, err := u.cfg.Source.DetectLatest(ctx)
 	if err != nil {
 		return Info{}, err
 	}
@@ -72,6 +73,7 @@ func (u *Updater) Check(ctx context.Context) (Info, error) {
 		info.Available = true
 		info.LatestVersion = tag
 		info.AssetURL = asset
+		info.AssetFilename = assetName
 		if u.cfg.OnAvailable != nil {
 			u.cfg.OnAvailable(info)
 		}
@@ -103,7 +105,8 @@ func (u *Updater) Schedule(ctx context.Context) {
 }
 
 // Install downloads and applies the asset at info.AssetURL, replacing the
-// running binary. Caller arranges the relaunch prompt.
+// running binary. Caller arranges the relaunch prompt. The AssetFilename's
+// extension drives go-selfupdate's archive decompressor selection.
 func (u *Updater) Install(ctx context.Context, info Info) error {
 	if !info.Available {
 		return fmt.Errorf("no update available")
@@ -112,7 +115,7 @@ func (u *Updater) Install(ctx context.Context, info Info) error {
 	if err != nil {
 		return fmt.Errorf("executable path: %w", err)
 	}
-	return selfupdate.UpdateTo(ctx, info.AssetURL, info.LatestVersion, exe)
+	return selfupdate.UpdateTo(ctx, info.AssetURL, info.AssetFilename, exe)
 }
 
 // compareVersions returns negative / zero / positive for a < / == / > b
