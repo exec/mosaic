@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -29,4 +30,17 @@ func TestOpen_RunsMigrations(t *testing.T) {
 	require.Contains(t, names, "categories")
 	require.Contains(t, names, "tags")
 	require.Contains(t, names, "torrent_tags")
+
+	require.Eventually(t, func() bool {
+		rows, err := db.SQL().Query(`SELECT name FROM pragma_table_info('torrents')`)
+		require.NoError(t, err)
+		defer rows.Close()
+		have := map[string]bool{}
+		for rows.Next() {
+			var n string
+			_ = rows.Scan(&n)
+			have[n] = true
+		}
+		return have["queue_position"] && have["force_start"]
+	}, time.Second, 50*time.Millisecond)
 }
