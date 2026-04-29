@@ -23,3 +23,22 @@ export function fmtPercent(progress: number): string {
   if (progress >= 1) return '100%';
   return `${(progress * 100).toFixed(1)}%`;
 }
+
+export function fmtDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86_400) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.round((seconds - h * 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+  const d = Math.floor(seconds / 86_400);
+  const h = Math.round((seconds - d * 86_400) / 3600);
+  return `${d}d ${h}h`;
+}
+
+export function fmtTimestamp(unixSeconds: number): string {
+  if (!unixSeconds) return '—';
+  const d = new Date(unixSeconds * 1000);
+  return d.toLocaleString();
+}

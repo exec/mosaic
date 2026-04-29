@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'vitest';
-import {fmtBytes, fmtRate, fmtETA, fmtPercent} from './format';
+import {fmtBytes, fmtRate, fmtETA, fmtPercent, fmtDuration, fmtTimestamp} from './format';
 
 describe('fmtBytes', () => {
   test('bytes', () => expect(fmtBytes(0)).toBe('0 B'));
@@ -25,4 +25,19 @@ describe('fmtPercent', () => {
   test('zero', () => expect(fmtPercent(0)).toBe('0.0%'));
   test('partial', () => expect(fmtPercent(0.7234)).toBe('72.3%'));
   test('complete', () => expect(fmtPercent(1)).toBe('100%'));
+});
+
+describe('fmtDuration', () => {
+  test('seconds', () => expect(fmtDuration(45)).toBe('45s'));
+  test('minutes', () => expect(fmtDuration(125)).toBe('2m'));
+  test('hours+minutes', () => expect(fmtDuration(3725)).toBe('1h 2m'));
+  test('days+hours', () => expect(fmtDuration(90_061)).toBe('1d 1h'));
+});
+
+describe('fmtTimestamp', () => {
+  test('zero is em-dash', () => expect(fmtTimestamp(0)).toBe('—'));
+  test('renders a date string', () => {
+    const out = fmtTimestamp(1700000000);
+    expect(out).toMatch(/2023/); // sanity check the year
+  });
 });

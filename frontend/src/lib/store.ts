@@ -1,8 +1,13 @@
 import {createStore, produce} from 'solid-js/store';
-import {api, onStatsTick, onTorrentsTick, type GlobalStatsT, type Torrent} from './bindings';
+import {
+  api, onInspectorTick, onStatsTick, onTorrentsTick,
+  type DetailDTO, type GlobalStatsT, type InspectorTab, type Torrent,
+} from './bindings';
 
 export type Density = 'cards' | 'table';
 export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused' | 'errored';
+
+export type BandwidthSample = {t: number; down: number; up: number};
 
 export type AppState = {
   torrents: Torrent[];
@@ -12,7 +17,19 @@ export type AppState = {
   statusFilter: StatusFilter;
   searchQuery: string;
   loading: boolean;
+
+  // Inspector
+  inspectorOpenId: string | null;       // null = closed
+  inspectorTab: InspectorTab;
+  inspectorDetail: DetailDTO | null;    // latest tick payload
+  bandwidthRing: BandwidthSample[];     // ring buffer for Speed-tab chart, ~1Hz, capped at 24h
 };
+
+const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
+
+function tabsForActive(tab: InspectorTab): InspectorTab[] {
+  return tab === 'overview' ? ['overview'] : ['overview', tab];
+}
 
 const DENSITY_KEY = 'mosaic.density';
 
@@ -38,6 +55,11 @@ export function createTorrentsStore() {
     statusFilter: 'all',
     searchQuery: '',
     loading: true,
+
+    inspectorOpenId: null,
+    inspectorTab: 'overview',
+    inspectorDetail: null,
+    bandwidthRing: [],
   });
 
   api.listTorrents()
@@ -48,6 +70,17 @@ export function createTorrentsStore() {
 
   const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
+  const offI = onInspectorTick((detail) => {
+    setState(produce((s) => {
+      s.inspectorDetail = detail;
+      s.bandwidthRing.push({
+        t: Date.now() / 1000,
+        down: s.stats.total_download_rate,
+        up: s.stats.total_upload_rate,
+      });
+      if (s.bandwidthRing.length > BANDWIDTH_RING_MAX) s.bandwidthRing.shift();
+    }));
+  });
 
   return {
     state,
@@ -78,6 +111,27 @@ export function createTorrentsStore() {
     selectAll: () => setState(produce((s) => { s.selection = new Set(s.torrents.map((t) => t.id)); })),
     clearSelection: () => setState(produce((s) => { s.selection = new Set(); })),
 
+    // Inspector
+    openInspector: async (id: string, tab: InspectorTab = 'overview') => {
+      setState(produce((s) => {
+        s.inspectorOpenId = id;
+        s.inspectorTab = tab;
+        s.inspectorDetail = null;
+        s.bandwidthRing = [];
+      }));
+      await api.setInspectorFocus(id, tabsForActive(tab));
+    },
+    closeInspector: async () => {
+      setState(produce((s) => { s.inspectorOpenId = null; s.inspectorDetail = null; }));
+      await api.clearInspectorFocus();
+    },
+    setInspectorTab: async (tab: InspectorTab) => {
+      setState(produce((s) => { s.inspectorTab = tab; }));
+      if (state.inspectorOpenId) {
+        await api.setInspectorFocus(state.inspectorOpenId, tabsForActive(tab));
+      }
+    },
+
     // View
     setDensity: (d: Density) => {
       localStorage.setItem(DENSITY_KEY, d);
@@ -86,7 +140,7 @@ export function createTorrentsStore() {
     setStatusFilter: (f: StatusFilter) => setState(produce((s) => { s.statusFilter = f; })),
     setSearchQuery: (q: string) => setState(produce((s) => { s.searchQuery = q; })),
 
-    dispose: () => { offT(); offS(); },
+    dispose: () => { offT(); offS(); offI(); },
   };
 }
 
