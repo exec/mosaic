@@ -35,7 +35,7 @@ const Section: Component<{icon: typeof ListFilter; title: string; count?: number
 
 export function FilterRail(props: Props) {
   return (
-    <aside class="flex h-full w-60 shrink-0 flex-col gap-3 border-r border-white/[.04] bg-white/[.01] py-3">
+    <aside class="flex h-full w-60 shrink-0 flex-col gap-3 border-r border-white/[.04] bg-white/[.01] pt-10 pb-3">
       <Section icon={ListFilter} title="Status">
         <ul class="flex flex-col gap-px">
           <For each={statusItems}>
