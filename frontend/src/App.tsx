@@ -14,7 +14,13 @@ export default function App() {
   onCleanup(() => store.dispose());
 
   const filtered = createMemo(() =>
-    filterTorrents(store.state.torrents, store.state.statusFilter, store.state.searchQuery)
+    filterTorrents(
+      store.state.torrents,
+      store.state.statusFilter,
+      store.state.searchQuery,
+      store.state.selectedCategoryID,
+      store.state.selectedTagID,
+    )
   );
 
   const handleSelect = (id: string, e: MouseEvent) => {

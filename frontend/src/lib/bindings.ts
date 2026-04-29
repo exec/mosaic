@@ -1,8 +1,24 @@
 import {
   AddMagnet, GlobalStats, ListTorrents, Pause, PickAndAddTorrent, Remove, Resume,
   SetInspectorFocus, ClearInspectorFocus,
+  ListCategories, CreateCategory, UpdateCategory, DeleteCategory,
+  ListTags, CreateTag, DeleteTag, AssignTag, UnassignTag,
+  SetTorrentCategory, SetFilePriorities,
 } from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
+
+export type CategoryDTO = {
+  id: number;
+  name: string;
+  default_save_path: string;
+  color: string;
+};
+
+export type TagDTO = {
+  id: number;
+  name: string;
+  color: string;
+};
 
 export type Torrent = {
   id: string;
@@ -19,6 +35,8 @@ export type Torrent = {
   paused: boolean;
   completed: boolean;
   added_at: number;
+  category_id: number | null;
+  tags: TagDTO[];
 };
 
 export type GlobalStatsT = {
@@ -92,6 +110,17 @@ export const api = {
   remove: (id: string, deleteFiles: boolean) => Remove(id, deleteFiles),
   setInspectorFocus: (id: string, tabs: InspectorTab[]) => SetInspectorFocus(id, tabs),
   clearInspectorFocus: () => ClearInspectorFocus(),
+  listCategories: () => ListCategories() as Promise<CategoryDTO[]>,
+  createCategory: (name: string, savePath: string, color: string) => CreateCategory(name, savePath, color),
+  updateCategory: (id: number, name: string, savePath: string, color: string) => UpdateCategory(id, name, savePath, color),
+  deleteCategory: (id: number) => DeleteCategory(id),
+  listTags: () => ListTags() as Promise<TagDTO[]>,
+  createTag: (name: string, color: string) => CreateTag(name, color),
+  deleteTag: (id: number) => DeleteTag(id),
+  assignTag: (infohash: string, tagID: number) => AssignTag(infohash, tagID),
+  unassignTag: (infohash: string, tagID: number) => UnassignTag(infohash, tagID),
+  setTorrentCategory: (infohash: string, categoryID: number | null) => SetTorrentCategory(infohash, categoryID),
+  setFilePriorities: (infohash: string, prios: Record<number, 'skip' | 'normal' | 'high' | 'max'>) => SetFilePriorities(infohash, prios),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {

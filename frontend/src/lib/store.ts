@@ -1,7 +1,7 @@
 import {createStore, produce} from 'solid-js/store';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick,
-  type DetailDTO, type GlobalStatsT, type InspectorTab, type Torrent,
+  type CategoryDTO, type DetailDTO, type GlobalStatsT, type InspectorTab, type TagDTO, type Torrent,
 } from './bindings';
 
 export type Density = 'cards' | 'table';
@@ -23,6 +23,12 @@ export type AppState = {
   inspectorTab: InspectorTab;
   inspectorDetail: DetailDTO | null;    // latest tick payload
   bandwidthRing: BandwidthSample[];     // ring buffer for Speed-tab chart, ~1Hz, capped at 24h
+
+  // Organization
+  categories: CategoryDTO[];
+  tags: TagDTO[];
+  selectedCategoryID: number | null;
+  selectedTagID: number | null;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -60,6 +66,11 @@ export function createTorrentsStore() {
     inspectorTab: 'overview',
     inspectorDetail: null,
     bandwidthRing: [],
+
+    categories: [],
+    tags: [],
+    selectedCategoryID: null,
+    selectedTagID: null,
   });
 
   api.listTorrents()
@@ -67,6 +78,8 @@ export function createTorrentsStore() {
     .catch((e) => { console.error(e); setState({loading: false}); });
 
   api.globalStats().then((s) => setState({stats: s})).catch(console.error);
+  api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(console.error);
+  api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(console.error);
 
   const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -140,11 +153,60 @@ export function createTorrentsStore() {
     setStatusFilter: (f: StatusFilter) => setState(produce((s) => { s.statusFilter = f; })),
     setSearchQuery: (q: string) => setState(produce((s) => { s.searchQuery = q; })),
 
+    // Organization
+    refreshCategories: async () => {
+      const cs = await api.listCategories();
+      setState(produce((s) => { s.categories = cs; }));
+    },
+    refreshTags: async () => {
+      const ts = await api.listTags();
+      setState(produce((s) => { s.tags = ts; }));
+    },
+    createCategory: async (name: string, savePath: string, color: string) => {
+      await api.createCategory(name, savePath, color);
+      const cs = await api.listCategories();
+      setState(produce((s) => { s.categories = cs; }));
+    },
+    deleteCategory: async (id: number) => {
+      await api.deleteCategory(id);
+      const cs = await api.listCategories();
+      setState(produce((s) => {
+        s.categories = cs;
+        if (s.selectedCategoryID === id) s.selectedCategoryID = null;
+      }));
+    },
+    createTag: async (name: string, color: string) => {
+      await api.createTag(name, color);
+      const ts = await api.listTags();
+      setState(produce((s) => { s.tags = ts; }));
+    },
+    deleteTag: async (id: number) => {
+      await api.deleteTag(id);
+      const ts = await api.listTags();
+      setState(produce((s) => {
+        s.tags = ts;
+        if (s.selectedTagID === id) s.selectedTagID = null;
+      }));
+    },
+    setTorrentCategory: (infohash: string, categoryID: number | null) => api.setTorrentCategory(infohash, categoryID),
+    assignTag: (infohash: string, tagID: number) => api.assignTag(infohash, tagID),
+    unassignTag: (infohash: string, tagID: number) => api.unassignTag(infohash, tagID),
+    setFilePriorities: (infohash: string, prios: Record<number, 'skip' | 'normal' | 'high' | 'max'>) =>
+      api.setFilePriorities(infohash, prios),
+    setSelectedCategory: (id: number | null) => setState(produce((s) => { s.selectedCategoryID = id; })),
+    setSelectedTag: (id: number | null) => setState(produce((s) => { s.selectedTagID = id; })),
+
     dispose: () => { offT(); offS(); offI(); },
   };
 }
 
-export function filterTorrents(rows: Torrent[], status: StatusFilter, query: string): Torrent[] {
+export function filterTorrents(
+  rows: Torrent[],
+  status: StatusFilter,
+  query: string,
+  categoryID: number | null = null,
+  tagID: number | null = null,
+): Torrent[] {
   let out = rows;
   if (status !== 'all') {
     out = out.filter((t) => {
@@ -156,6 +218,12 @@ export function filterTorrents(rows: Torrent[], status: StatusFilter, query: str
         case 'errored':     return false; // wired in Plan 5 when errors are surfaced
       }
     });
+  }
+  if (categoryID !== null) {
+    out = out.filter((t) => t.category_id === categoryID);
+  }
+  if (tagID !== null) {
+    out = out.filter((t) => t.tags.some((tg) => tg.id === tagID));
   }
   if (query.trim()) {
     const q = query.toLowerCase();
