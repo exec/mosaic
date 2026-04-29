@@ -1,6 +1,6 @@
 import {createSignal, onCleanup} from 'solid-js';
 import {createTorrentsStore} from './lib/store';
-import {TorrentList} from './components/TorrentList';
+import {TorrentList} from './components/list/TorrentList';
 import {AddMagnetModal} from './components/AddMagnetModal';
 import './index.css';
 
@@ -31,6 +31,9 @@ export default function App() {
       <main class="flex-1 overflow-auto">
         <TorrentList
           torrents={store.state.torrents}
+          density={store.state.density}
+          selection={store.state.selection}
+          onSelect={(id) => store.select(id)}
           onPause={(id) => store.pause(id)}
           onResume={(id) => store.resume(id)}
           onRemove={(id) => store.remove(id, false)}
