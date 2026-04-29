@@ -165,10 +165,16 @@ export default function App() {
             feeds={store.state.feeds}
             filtersByFeed={store.state.filtersByFeed}
             webConfig={store.state.webConfig}
+            updaterConfig={store.state.updaterConfig}
+            updateInfo={store.state.updateInfo}
+            appVersion={store.state.appVersion}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
             onSetWebConfig={(c) => store.setWebConfig(c)}
             onSetWebPassword={(p) => store.setWebPassword(p)}
             onRotateAPIKey={() => store.rotateAPIKey()}
+            onSetUpdaterConfig={(c) => store.setUpdaterConfig(c)}
+            onCheckForUpdate={() => store.checkForUpdate()}
+            onInstallUpdate={() => store.installUpdate()}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
             onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}

@@ -1,9 +1,10 @@
 import {Match, Switch} from 'solid-js';
-import type {BlocklistDTO, CategoryDTO, FeedDTO, FilterDTO, LimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO, WebConfigDTO} from '../../lib/bindings';
+import type {BlocklistDTO, CategoryDTO, FeedDTO, FilterDTO, LimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, WebConfigDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
 import {ConnectionPane} from './ConnectionPane';
 import {WebInterfacePane} from './WebInterfacePane';
+import {UpdatesPane} from './UpdatesPane';
 import {SchedulePane} from './SchedulePane';
 import {BlocklistPane} from './BlocklistPane';
 import {RSSPane} from './RSSPane';
@@ -24,10 +25,16 @@ type Props = {
   feeds: FeedDTO[];
   filtersByFeed: Record<number, FilterDTO[]>;
   webConfig: WebConfigDTO;
+  updaterConfig: UpdaterConfigDTO;
+  updateInfo: UpdateInfoDTO | null;
+  appVersion: string;
   onSetDefaultSavePath: (path: string) => Promise<void>;
   onSetWebConfig: (c: WebConfigDTO) => Promise<void>;
   onSetWebPassword: (plain: string) => Promise<void>;
   onRotateAPIKey: () => Promise<string>;
+  onSetUpdaterConfig: (c: UpdaterConfigDTO) => Promise<void>;
+  onCheckForUpdate: () => Promise<UpdateInfoDTO>;
+  onInstallUpdate: () => Promise<void>;
   onSetLimits: (l: LimitsDTO) => Promise<void>;
   onSetQueueLimits: (q: QueueLimitsDTO) => Promise<void>;
   onCreateCategory: (name: string, savePath: string, color: string) => Promise<void>;
@@ -67,6 +74,16 @@ export function SettingsRoute(props: Props) {
               onSetWebConfig={props.onSetWebConfig}
               onSetWebPassword={props.onSetWebPassword}
               onRotateAPIKey={props.onRotateAPIKey}
+            />
+          </Match>
+          <Match when={props.pane === 'updates'}>
+            <UpdatesPane
+              config={props.updaterConfig}
+              info={props.updateInfo}
+              appVersion={props.appVersion}
+              onSet={props.onSetUpdaterConfig}
+              onCheck={props.onCheckForUpdate}
+              onInstall={props.onInstallUpdate}
             />
           </Match>
           <Match when={props.pane === 'schedule'}>
