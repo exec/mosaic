@@ -1,49 +1,111 @@
-import {createSignal, onCleanup} from 'solid-js';
-import {createTorrentsStore} from './lib/store';
+import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
+import {Toaster, toast} from 'solid-sonner';
+import {createTorrentsStore, filterTorrents} from './lib/store';
+import {ThemeProvider} from './components/theme/ThemeProvider';
+import {WindowShell} from './components/shell/WindowShell';
+import {AddMagnetModal} from './components/shell/AddMagnetModal';
 import {TorrentList} from './components/list/TorrentList';
-import {AddMagnetModal} from './components/AddMagnetModal';
 import './index.css';
 
 export default function App() {
   const store = createTorrentsStore();
-  const [modalOpen, setModalOpen] = createSignal(false);
+  const [magnetModal, setMagnetModal] = createSignal(false);
   onCleanup(() => store.dispose());
 
+  const filtered = createMemo(() =>
+    filterTorrents(store.state.torrents, store.state.statusFilter, store.state.searchQuery)
+  );
+
+  const handleSelect = (id: string, e: MouseEvent) => {
+    if (e.metaKey || e.ctrlKey) store.toggleSelect(id);
+    else if (e.shiftKey) store.extendSelectTo(id);
+    else store.select(id);
+  };
+
+  const handleAddTorrent = async () => {
+    try {
+      const id = await store.pickAndAddTorrent();
+      if (id) toast.success('Torrent added');
+    } catch (err) { toast.error(String(err)); }
+  };
+
+  const handleMagnetDropped = async (m: string) => {
+    await store.addMagnet(m);
+    toast.success('Magnet added');
+  };
+
+  // Global keyboard shortcuts
+  onMount(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        e.preventDefault();
+        store.selectAll();
+      } else if (e.key === 'Escape') {
+        store.clearSelection();
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        for (const id of store.state.selection) {
+          const t = store.state.torrents.find((x) => x.id === id);
+          if (!t) continue;
+          if (t.paused) store.resume(id); else store.pause(id);
+        }
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (store.state.selection.size === 0) return;
+        e.preventDefault();
+        for (const id of store.state.selection) store.remove(id, false);
+        store.clearSelection();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    onCleanup(() => window.removeEventListener('keydown', handler));
+  });
+
   return (
-    <div class="h-full flex flex-col">
-      <header class="flex items-center justify-between pl-24 pr-4 py-2 border-b border-zinc-800" style={{'-webkit-app-region': 'drag'}}>
-        <div class="font-semibold text-sm text-zinc-400">Mosaic</div>
-        <div class="flex gap-2" style={{'-webkit-app-region': 'no-drag'}}>
-          <button
-            class="px-3 py-1.5 rounded border border-zinc-700 text-sm hover:bg-zinc-900"
-            onClick={() => store.pickAndAddTorrent().catch(console.error)}
-          >
-            + .torrent
-          </button>
-          <button
-            class="px-3 py-1.5 rounded bg-blue-600 text-sm"
-            onClick={() => setModalOpen(true)}
-          >
-            + Magnet
-          </button>
-        </div>
-      </header>
-      <main class="flex-1 overflow-auto">
+    <ThemeProvider>
+      <WindowShell
+        torrents={store.state.torrents}
+        filteredTorrents={filtered()}
+        stats={store.state.stats}
+        density={store.state.density}
+        statusFilter={store.state.statusFilter}
+        searchQuery={store.state.searchQuery}
+        onDensityChange={store.setDensity}
+        onStatusFilter={store.setStatusFilter}
+        onSearchQuery={store.setSearchQuery}
+        onAddMagnet={() => setMagnetModal(true)}
+        onAddTorrent={handleAddTorrent}
+        onMagnetDropped={handleMagnetDropped}
+      >
         <TorrentList
-          torrents={store.state.torrents}
+          torrents={filtered()}
           density={store.state.density}
           selection={store.state.selection}
-          onSelect={(id) => store.select(id)}
+          onSelect={handleSelect}
           onPause={(id) => store.pause(id)}
           onResume={(id) => store.resume(id)}
-          onRemove={(id) => store.remove(id, false)}
+          onRemove={(id) => { store.remove(id, false); toast('Removed'); }}
         />
-      </main>
+      </WindowShell>
       <AddMagnetModal
-        open={modalOpen()}
-        onClose={() => setModalOpen(false)}
-        onSubmit={async (m) => { await store.addMagnet(m); }}
+        open={magnetModal()}
+        onClose={() => setMagnetModal(false)}
+        onSubmit={async (m) => {
+          await store.addMagnet(m);
+          toast.success('Magnet added');
+        }}
       />
-    </div>
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          style: {
+            background: 'rgba(24, 24, 27, 0.95)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            color: '#e7e7e9',
+            'backdrop-filter': 'blur(12px)',
+          },
+        }}
+      />
+    </ThemeProvider>
   );
 }
