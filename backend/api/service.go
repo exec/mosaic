@@ -26,6 +26,8 @@ type Service struct {
 	tags            *persistence.Tags
 	settings        *persistence.Settings
 	scheduleRules   *persistence.ScheduleRules
+	feeds           *persistence.Feeds
+	filters         *persistence.Filters
 	scheduler       *engine.Scheduler
 	defaultSavePath string
 
@@ -53,6 +55,8 @@ func NewService(
 	tags *persistence.Tags,
 	settings *persistence.Settings,
 	scheduleRules *persistence.ScheduleRules,
+	feeds *persistence.Feeds,
+	filters *persistence.Filters,
 	scheduler *engine.Scheduler,
 	defaultSavePath string,
 ) *Service {
@@ -63,6 +67,8 @@ func NewService(
 		tags:            tags,
 		settings:        settings,
 		scheduleRules:   scheduleRules,
+		feeds:           feeds,
+		filters:         filters,
 		scheduler:       scheduler,
 		defaultSavePath: defaultSavePath,
 	}
@@ -861,4 +867,109 @@ func (s *Service) setBoolSetting(ctx context.Context, key string, b bool) error 
 		v = "true"
 	}
 	return s.settings.Set(ctx, key, v)
+}
+
+// FeedDTO is the transport shape for an RSS/Atom feed subscription.
+type FeedDTO struct {
+	ID          int    `json:"id"`
+	URL         string `json:"url"`
+	Name        string `json:"name"`
+	IntervalMin int    `json:"interval_min"`
+	LastPolled  int64  `json:"last_polled"`
+	ETag        string `json:"etag"`
+	Enabled     bool   `json:"enabled"`
+}
+
+// FilterDTO is the transport shape for a per-feed regex filter rule.
+type FilterDTO struct {
+	ID         int    `json:"id"`
+	FeedID     int    `json:"feed_id"`
+	Regex      string `json:"regex"`
+	CategoryID *int   `json:"category_id"`
+	SavePath   string `json:"save_path"`
+	Enabled    bool   `json:"enabled"`
+}
+
+func toFeedDTO(f persistence.Feed) FeedDTO {
+	dto := FeedDTO{
+		ID: f.ID, URL: f.URL, Name: f.Name, IntervalMin: f.IntervalMin,
+		ETag: f.ETag, Enabled: f.Enabled,
+	}
+	if !f.LastPolled.IsZero() {
+		dto.LastPolled = f.LastPolled.Unix()
+	}
+	return dto
+}
+
+func toFilterDTO(f persistence.Filter) FilterDTO {
+	return FilterDTO{
+		ID: f.ID, FeedID: f.FeedID, Regex: f.Regex, CategoryID: f.CategoryID,
+		SavePath: f.SavePath, Enabled: f.Enabled,
+	}
+}
+
+func (s *Service) ListFeeds(ctx context.Context) ([]FeedDTO, error) {
+	if s.feeds == nil {
+		return nil, nil
+	}
+	rows, err := s.feeds.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FeedDTO, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toFeedDTO(r))
+	}
+	return out, nil
+}
+
+func (s *Service) CreateFeed(ctx context.Context, dto FeedDTO) (int, error) {
+	return s.feeds.Create(ctx, persistence.Feed{
+		URL: dto.URL, Name: dto.Name, IntervalMin: dto.IntervalMin,
+		ETag: dto.ETag, Enabled: dto.Enabled,
+	})
+}
+
+func (s *Service) UpdateFeed(ctx context.Context, dto FeedDTO) error {
+	return s.feeds.Update(ctx, persistence.Feed{
+		ID: dto.ID, URL: dto.URL, Name: dto.Name, IntervalMin: dto.IntervalMin,
+		Enabled: dto.Enabled,
+	})
+}
+
+func (s *Service) DeleteFeed(ctx context.Context, id int) error {
+	return s.feeds.Delete(ctx, id)
+}
+
+func (s *Service) ListFiltersByFeed(ctx context.Context, feedID int) ([]FilterDTO, error) {
+	if s.filters == nil {
+		return nil, nil
+	}
+	rows, err := s.filters.ListByFeed(ctx, feedID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FilterDTO, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toFilterDTO(r))
+	}
+	return out, nil
+}
+
+func (s *Service) CreateFilter(ctx context.Context, dto FilterDTO) (int, error) {
+	return s.filters.Create(ctx, persistence.Filter{
+		FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,
+		SavePath: dto.SavePath, Enabled: dto.Enabled,
+	})
+}
+
+func (s *Service) UpdateFilter(ctx context.Context, dto FilterDTO) error {
+	return s.filters.Update(ctx, persistence.Filter{
+		ID: dto.ID, FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,
+		SavePath: dto.SavePath, Enabled: dto.Enabled,
+	})
+}
+
+func (s *Service) DeleteFilter(ctx context.Context, id int) error {
+	return s.filters.Delete(ctx, id)
 }

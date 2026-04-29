@@ -70,12 +70,16 @@ func main() {
 	defer sched.Close()
 
 	scheduleRules := persistence.NewScheduleRules(db)
+	feeds := persistence.NewFeeds(db)
+	filters := persistence.NewFilters(db)
 	svc := api.NewService(eng,
 		persistence.NewTorrents(db),
 		persistence.NewCategories(db),
 		persistence.NewTags(db),
 		persistence.NewSettings(db),
 		scheduleRules,
+		feeds,
+		filters,
 		sched,
 		cfg.DefaultSavePath)
 	if err := svc.RestoreOnStartup(ctx); err != nil {
@@ -83,6 +87,8 @@ func main() {
 	}
 	scheduleEngine := api.NewScheduleEngine(svc, scheduleRules, time.Local)
 	defer scheduleEngine.Close()
+	rssPoller := api.NewRSSPoller(svc, feeds, filters)
+	defer rssPoller.Close()
 	app := NewApp(svc)
 
 	err = wails.Run(&options.App{

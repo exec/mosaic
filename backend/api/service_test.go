@@ -29,6 +29,8 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 		persistence.NewTags(db),
 		persistence.NewSettings(db),
 		persistence.NewScheduleRules(db),
+		persistence.NewFeeds(db),
+		persistence.NewFilters(db),
 		nil, // no scheduler in unit tests
 		"/tmp/dl")
 	return svc, fb
@@ -278,4 +280,83 @@ func TestService_GlobalStats(t *testing.T) {
 	stats, err = svc.GlobalStats(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.TotalTorrents)
+}
+
+func TestService_FeedCRUD(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	id, err := svc.CreateFeed(ctx, FeedDTO{URL: "https://x.test/rss", Name: "X", IntervalMin: 30, Enabled: true})
+	require.NoError(t, err)
+	require.Greater(t, id, 0)
+
+	feeds, err := svc.ListFeeds(ctx)
+	require.NoError(t, err)
+	require.Len(t, feeds, 1)
+	require.Equal(t, "X", feeds[0].Name)
+	require.Equal(t, 30, feeds[0].IntervalMin)
+	require.True(t, feeds[0].Enabled)
+
+	require.NoError(t, svc.UpdateFeed(ctx, FeedDTO{ID: id, URL: "https://y.test/rss", Name: "Y", IntervalMin: 60, Enabled: false}))
+	feeds, _ = svc.ListFeeds(ctx)
+	require.Equal(t, "Y", feeds[0].Name)
+	require.Equal(t, 60, feeds[0].IntervalMin)
+	require.False(t, feeds[0].Enabled)
+
+	require.NoError(t, svc.DeleteFeed(ctx, id))
+	feeds, _ = svc.ListFeeds(ctx)
+	require.Empty(t, feeds)
+}
+
+func TestService_FilterCRUD(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	feedID, err := svc.CreateFeed(ctx, FeedDTO{URL: "u", Name: "f", IntervalMin: 30, Enabled: true})
+	require.NoError(t, err)
+	catID, err := svc.CreateCategory(ctx, "ISOs", "/iso", "#3b82f6")
+	require.NoError(t, err)
+
+	filterID, err := svc.CreateFilter(ctx, FilterDTO{
+		FeedID: feedID, Regex: `(?i)ubuntu.*amd64`, CategoryID: &catID, SavePath: "/x", Enabled: true,
+	})
+	require.NoError(t, err)
+	require.Greater(t, filterID, 0)
+
+	got, err := svc.ListFiltersByFeed(ctx, feedID)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, `(?i)ubuntu.*amd64`, got[0].Regex)
+	require.NotNil(t, got[0].CategoryID)
+	require.Equal(t, catID, *got[0].CategoryID)
+	require.Equal(t, "/x", got[0].SavePath)
+
+	require.NoError(t, svc.UpdateFilter(ctx, FilterDTO{
+		ID: filterID, FeedID: feedID, Regex: `^debian`, SavePath: "/y", Enabled: false,
+	}))
+	got, _ = svc.ListFiltersByFeed(ctx, feedID)
+	require.Equal(t, `^debian`, got[0].Regex)
+	require.Nil(t, got[0].CategoryID)
+	require.Equal(t, "/y", got[0].SavePath)
+	require.False(t, got[0].Enabled)
+
+	require.NoError(t, svc.DeleteFilter(ctx, filterID))
+	got, _ = svc.ListFiltersByFeed(ctx, feedID)
+	require.Empty(t, got)
+}
+
+func TestService_DeleteFeed_CascadesFilters(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	feedID, _ := svc.CreateFeed(ctx, FeedDTO{URL: "u", Name: "f", IntervalMin: 30, Enabled: true})
+	_, _ = svc.CreateFilter(ctx, FilterDTO{FeedID: feedID, Regex: ".*", Enabled: true})
+	_, _ = svc.CreateFilter(ctx, FilterDTO{FeedID: feedID, Regex: "x", Enabled: true})
+
+	pre, _ := svc.ListFiltersByFeed(ctx, feedID)
+	require.Len(t, pre, 2)
+
+	require.NoError(t, svc.DeleteFeed(ctx, feedID))
+	post, _ := svc.ListFiltersByFeed(ctx, feedID)
+	require.Empty(t, post)
 }
