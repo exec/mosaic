@@ -13,6 +13,7 @@ type TorrentRecord struct {
 	Name        string
 	Magnet      string
 	SavePath    string
+	CategoryID  *int // nullable foreign key
 	AddedAt     time.Time
 	CompletedAt *time.Time
 	Paused      bool
@@ -32,28 +33,33 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 	if r.CompletedAt != nil {
 		completed = sql.NullInt64{Int64: r.CompletedAt.Unix(), Valid: true}
 	}
+	var catID sql.NullInt64
+	if r.CategoryID != nil {
+		catID = sql.NullInt64{Int64: int64(*r.CategoryID), Valid: true}
+	}
 	paused := 0
 	if r.Paused {
 		paused = 1
 	}
 	_, err := t.db.SQL().ExecContext(ctx, `
-INSERT INTO torrents (infohash, name, magnet, save_path, added_at, completed_at, paused)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(infohash) DO UPDATE SET
   name = excluded.name,
   magnet = excluded.magnet,
   save_path = excluded.save_path,
+  category_id = excluded.category_id,
   added_at = excluded.added_at,
   completed_at = excluded.completed_at,
   paused = excluded.paused
-`, r.InfoHash, r.Name, r.Magnet, r.SavePath, r.AddedAt.Unix(), completed, paused)
+`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused)
 	return err
 }
 
 // Get returns a single record by infohash.
 func (t *Torrents) Get(ctx context.Context, infohash string) (TorrentRecord, error) {
 	row := t.db.SQL().QueryRowContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, added_at, completed_at, paused
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused
 FROM torrents WHERE infohash = ?`, infohash)
 	return scanTorrent(row)
 }
@@ -61,7 +67,7 @@ FROM torrents WHERE infohash = ?`, infohash)
 // List returns all records ordered by added_at descending.
 func (t *Torrents) List(ctx context.Context) ([]TorrentRecord, error) {
 	rows, err := t.db.SQL().QueryContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, added_at, completed_at, paused
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused
 FROM torrents ORDER BY added_at DESC`)
 	if err != nil {
 		return nil, err
@@ -84,6 +90,17 @@ func (t *Torrents) Remove(ctx context.Context, infohash string) error {
 	return err
 }
 
+// SetCategory assigns or clears the category for a torrent.
+func (t *Torrents) SetCategory(ctx context.Context, infohash string, categoryID *int) error {
+	var v sql.NullInt64
+	if categoryID != nil {
+		v = sql.NullInt64{Int64: int64(*categoryID), Valid: true}
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET category_id = ? WHERE infohash = ?`, v, infohash)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -92,8 +109,9 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	var r TorrentRecord
 	var addedAt int64
 	var completedAt sql.NullInt64
+	var categoryID sql.NullInt64
 	var paused int
-	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &addedAt, &completedAt, &paused); err != nil {
+	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return r, ErrNotFound
 		}
@@ -103,6 +121,10 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	if completedAt.Valid {
 		t := time.Unix(completedAt.Int64, 0)
 		r.CompletedAt = &t
+	}
+	if categoryID.Valid {
+		v := int(categoryID.Int64)
+		r.CategoryID = &v
 	}
 	r.Paused = paused == 1
 	return r, nil

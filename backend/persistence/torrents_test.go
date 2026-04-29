@@ -63,3 +63,25 @@ func TestTorrents_Remove(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, all)
 }
+
+func TestTorrents_CategoryAssignment(t *testing.T) {
+	db := newTestDB(t)
+	tor := NewTorrents(db)
+	cats := NewCategories(db)
+	ctx := context.Background()
+
+	catID, _ := cats.Create(ctx, Category{Name: "Movies"})
+
+	require.NoError(t, tor.Save(ctx, TorrentRecord{
+		InfoHash: "h1", Name: "n", SavePath: "/p", AddedAt: time.Now(),
+	}))
+	require.NoError(t, tor.SetCategory(ctx, "h1", &catID))
+
+	got, _ := tor.Get(ctx, "h1")
+	require.NotNil(t, got.CategoryID)
+	require.Equal(t, catID, *got.CategoryID)
+
+	require.NoError(t, tor.SetCategory(ctx, "h1", nil))
+	got, _ = tor.Get(ctx, "h1")
+	require.Nil(t, got.CategoryID)
+}
