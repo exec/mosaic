@@ -11,6 +11,8 @@ type Props = {
   onAddTorrent: () => void;
   density: Density;
   onDensityChange: (d: Density) => void;
+  altSpeedActive: boolean;
+  onToggleAltSpeed: () => void;
 };
 
 export function TopToolbar(props: Props) {
@@ -43,8 +45,15 @@ export function TopToolbar(props: Props) {
 
         <span class="mx-1 h-5 w-px bg-white/[.06]" />
 
-        <Tooltip label="Toggle alt-speed limits">
-          <button class="grid h-7 w-7 place-items-center rounded-md text-zinc-400 hover:bg-white/[.04] hover:text-zinc-100" disabled>
+        <Tooltip label={`Alt-speed limits ${props.altSpeedActive ? 'on' : 'off'}`}>
+          <button
+            class="grid h-7 w-7 place-items-center rounded-md transition-colors duration-150"
+            classList={{
+              'bg-accent-500/[.15] text-accent-300': props.altSpeedActive,
+              'text-zinc-400 hover:bg-white/[.04] hover:text-zinc-100': !props.altSpeedActive,
+            }}
+            onClick={props.onToggleAltSpeed}
+          >
             <Zap class="h-3.5 w-3.5" />
           </button>
         </Tooltip>

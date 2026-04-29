@@ -29,6 +29,8 @@ type Props = {
   onAddTorrent: () => void;
   onMagnetDropped: (m: string) => Promise<void>;
   onTorrentBytesDropped: (bytes: Uint8Array) => Promise<void>;
+  altSpeedActive: boolean;
+  onToggleAltSpeed: () => void;
   children: JSX.Element; // the main pane (TorrentList)
   inspector?: JSX.Element;
   settings?: JSX.Element;
@@ -63,6 +65,8 @@ export function WindowShell(props: Props) {
                   onAddTorrent={props.onAddTorrent}
                   density={props.density}
                   onDensityChange={props.onDensityChange}
+                  altSpeedActive={props.altSpeedActive}
+                  onToggleAltSpeed={props.onToggleAltSpeed}
                 />
                 <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
                   <div class="h-full overflow-auto">

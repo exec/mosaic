@@ -115,6 +115,8 @@ export default function App() {
             toast.success('Torrent added');
           } catch (err) { toast.error(String(err)); }
         }}
+        altSpeedActive={store.state.limits.alt_active}
+        onToggleAltSpeed={() => store.toggleAltSpeed()}
         settings={
           <SettingsRoute
             defaultSavePath={store.state.defaultSavePath}
