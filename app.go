@@ -75,11 +75,25 @@ func (a *App) GlobalStats() (api.GlobalStats, error) {
 	return a.svc.GlobalStats(a.ctx)
 }
 
+// SetInspectorFocus tells the backend the inspector is open on torrent `id`
+// with `tabs` visible. The next inspector:tick (and subsequent ticks at 1Hz)
+// will include data scoped to those tabs.
+func (a *App) SetInspectorFocus(id string, tabs []string) error {
+	return a.svc.SetInspectorFocus(id, tabs)
+}
+
+// ClearInspectorFocus stops inspector:tick emission until SetInspectorFocus is called again.
+func (a *App) ClearInspectorFocus() {
+	a.svc.ClearInspectorFocus()
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
+	inspector := time.NewTicker(1 * time.Second)
 	defer torrents.Stop()
 	defer stats.Stop()
+	defer inspector.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,6 +112,16 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "stats:tick", s)
+		case <-inspector.C:
+			detail, err := a.svc.DetailForFocus(ctx)
+			if err != nil {
+				log.Error().Err(err).Msg("detail for focus during tick")
+				continue
+			}
+			if detail == nil {
+				continue
+			}
+			wailsruntime.EventsEmit(ctx, "inspector:tick", detail)
 		}
 	}
 }
