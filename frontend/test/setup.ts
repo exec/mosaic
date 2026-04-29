@@ -1,7 +1,9 @@
-// Vitest 2 + jsdom 29 + vite-plugin-solid don't expose a working `localStorage`
-// global (it surfaces as a plain proxy without Storage's prototype methods).
-// Replace it on `window` with a real Storage-shaped implementation so plan-spec
-// tests like `localStorage.clear()` / `getItem` / `setItem` work.
+// Vitest 2 + vite-plugin-solid don't expose a working `localStorage` global —
+// neither under jsdom nor happy-dom. Standalone happy-dom has a real Storage
+// instance on its Window, but vitest's environment shim exposes only a plain
+// Object stub without Storage's prototype methods (clear/setItem/getItem are
+// undefined). Replace it on `window`/`globalThis` with a Storage-shaped
+// implementation so plan-spec tests like `localStorage.clear()` work.
 class MemoryStorage implements Storage {
   private data = new Map<string, string>();
   get length(): number { return this.data.size; }

@@ -247,18 +247,20 @@ git commit -m "feat(frontend): theme tokens (accent palette, status colors, easi
 
 > Vitest is already a transitive dep via Vite; install it if not present.
 
-- [ ] **Step 1: Add Vitest + jsdom**
+- [ ] **Step 1: Add Vitest + happy-dom**
 
 ```bash
 cd frontend
-npm install -D vitest@^2 jsdom
+npm install -D vitest@^2 happy-dom
 ```
 
-Pin vitest to v2 — vitest@4+ bundles Vite 8 internally, which crashes against the project's pinned vite-plugin-solid@2.11 (uses Vite 5/6 API: "TypeError: defaultServerConditions is not iterable"). jsdom is required up-front because vite-plugin-solid auto-injects `test.environment = 'jsdom'` into vitest's resolved config — pure-logic tests won't run without it.
+Pin vitest to v2 — vitest@4+ bundles Vite 8 internally, which crashes against the project's pinned vite-plugin-solid@2.11 (uses Vite 5/6 API: "TypeError: defaultServerConditions is not iterable"). happy-dom is required up-front because vite-plugin-solid auto-injects a DOM environment into vitest's resolved config — pure-logic tests won't run without one. happy-dom is faster than jsdom and has fewer compatibility surprises with vitest 2.
+
+Note: vitest@2 + vite-plugin-solid does NOT expose a working `localStorage` global under either jsdom or happy-dom (only a plain Object stub without Storage's prototype methods). A small `frontend/test/setup.ts` polyfill is required and is wired up via vite.config.ts's `test.setupFiles` — see Task 7's setup.ts.
 
 - [ ] **Step 2: Add test script to `frontend/package.json`**
 
-In `scripts`, add: `"test": "vitest run --environment jsdom"`.
+In `scripts`, add: `"test": "vitest run --environment happy-dom"`.
 
 - [ ] **Step 3: Write failing tests**
 
@@ -391,9 +393,9 @@ describe('resolveTheme', () => {
 });
 ```
 
-- [ ] **Step 2: Verify vitest is configured for jsdom**
+- [ ] **Step 2: Verify vitest is configured for happy-dom**
 
-The test script in `frontend/package.json` should already be `"vitest run --environment jsdom"` from Task 4 Step 2, and `jsdom` should already be installed (Task 4 Step 1). No action needed here unless one of those is missing.
+The test script in `frontend/package.json` should already be `"vitest run --environment happy-dom"` from Task 4 Step 2, and `happy-dom` should already be installed (Task 4 Step 1). No action needed here unless one of those is missing.
 
 - [ ] **Step 3: Run tests, confirm they fail**
 
