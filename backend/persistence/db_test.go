@@ -26,4 +26,7 @@ func TestOpen_RunsMigrations(t *testing.T) {
 	}
 	require.Contains(t, names, "torrents")
 	require.Contains(t, names, "settings")
+	require.Contains(t, names, "categories")
+	require.Contains(t, names, "tags")
+	require.Contains(t, names, "torrent_tags")
 }
