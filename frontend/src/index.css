@@ -56,3 +56,25 @@ html, body, #app {
   0% { transform: translateX(0); }
   100% { transform: translateX(400%); }
 }
+
+/* Custom scrollbars — subtle on dark */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); border: 2px solid transparent; background-clip: padding-box; }
+
+/* Selection — accent tint */
+::selection { background: oklch(0.65 0.25 290 / 0.35); color: #fff; }
+
+/* Focus-visible default for everything we don't ring explicitly */
+:focus-visible { outline: 2px solid oklch(0.65 0.25 290 / 0.6); outline-offset: 2px; border-radius: 4px; }
+
+/* Disable spurious focus rings on click */
+:focus:not(:focus-visible) { outline: none; }
+
+/* Tailwind-like animate-in helpers (we use solid-sonner + Kobalte data states) */
+.animate-in { animation-duration: 150ms; animation-fill-mode: both; animation-timing-function: var(--ease-app); }
+.fade-in { animation-name: fade-in; }
+.zoom-in-95 { animation-name: zoom-in-95; }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes zoom-in-95 { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
