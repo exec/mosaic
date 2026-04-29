@@ -13,7 +13,7 @@
   font-weight: 100 800;
   font-style: normal;
   font-display: swap;
-  src: url("./assets/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations");
+  src: url("./assets/fonts/JetBrainsMono-Variable.ttf") format("truetype-variations");
 }
 
 :root {
