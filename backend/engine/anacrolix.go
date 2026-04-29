@@ -5,19 +5,47 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/iplist"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 	anacrolix_types "github.com/anacrolix/torrent/types"
 	"golang.org/x/time/rate"
 )
+
+// ipBlocklistProxy is a swappable iplist.Ranger we install once at client
+// construction. anacrolix v1.61 has no runtime setter for IPBlocklist; the
+// Client copies cfg.IPBlocklist into an unexported field. By installing this
+// proxy at construction and mutating its inner ranger via atomic.Pointer, we
+// can swap blocklists at runtime without forking anacrolix.
+type ipBlocklistProxy struct {
+	inner atomic.Pointer[iplist.IPList]
+}
+
+func (p *ipBlocklistProxy) Lookup(ip net.IP) (iplist.Range, bool) {
+	r := p.inner.Load()
+	if r == nil {
+		return iplist.Range{}, false
+	}
+	return r.Lookup(ip)
+}
+
+func (p *ipBlocklistProxy) NumRanges() int {
+	r := p.inner.Load()
+	if r == nil {
+		return 0
+	}
+	return r.NumRanges()
+}
 
 // AnacrolixConfig configures the production Backend.
 type AnacrolixConfig struct {
@@ -52,6 +80,8 @@ type AnacrolixBackend struct {
 	// SetLimit/SetBurst (anacrolix v1.61 has no setter on the Client itself).
 	dlLim *rate.Limiter
 	ulLim *rate.Limiter
+
+	ipBlock *ipBlocklistProxy
 }
 
 type rateSample struct {
@@ -82,6 +112,9 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	tcfg.DownloadRateLimiter = dlLim
 	tcfg.UploadRateLimiter = ulLim
 
+	ipBlock := &ipBlocklistProxy{}
+	tcfg.IPBlocklist = ipBlock
+
 	c, err := torrent.NewClient(tcfg)
 	if err != nil {
 		return nil, fmt.Errorf("anacrolix client: %w", err)
@@ -96,7 +129,23 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		scheduledPause: make(map[TorrentID]bool),
 		dlLim:          dlLim,
 		ulLim:          ulLim,
+		ipBlock:        ipBlock,
 	}, nil
+}
+
+// SetIPBlocklist parses a PeerGuardian-format reader and installs the resulting
+// IPList as the active block list. Passing nil clears it.
+func (a *AnacrolixBackend) SetIPBlocklist(reader io.Reader) error {
+	if reader == nil {
+		a.ipBlock.inner.Store(nil)
+		return nil
+	}
+	list, err := iplist.NewFromReader(reader)
+	if err != nil {
+		return err
+	}
+	a.ipBlock.inner.Store(list)
+	return nil
 }
 
 func idFor(t *torrent.Torrent) TorrentID {

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"io"
 	"sync"
 	"time"
 )
@@ -100,6 +101,7 @@ func (e *Engine) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
 }
 
 func (e *Engine) SetGlobalRateLimits(d, u int) error { return e.backend.SetGlobalRateLimits(d, u) }
+func (e *Engine) SetIPBlocklist(r io.Reader) error   { return e.backend.SetIPBlocklist(r) }
 func (e *Engine) SetQueuePosition(id TorrentID, pos int) {
 	e.backend.SetQueuePosition(id, pos)
 }

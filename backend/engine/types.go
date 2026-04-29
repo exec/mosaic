@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -70,6 +71,7 @@ type Backend interface {
 	DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error)
 	SetFilePriorities(id TorrentID, prios map[int]Priority) error
 	SetGlobalRateLimits(downBytesPerSec, upBytesPerSec int) error // 0 = unlimited
+	SetIPBlocklist(reader io.Reader) error                        // nil clears
 	SetQueuePosition(id TorrentID, pos int)
 	SetForceStart(id TorrentID, force bool)
 	ScheduledPause(id TorrentID, paused bool) // distinct from manual Pause

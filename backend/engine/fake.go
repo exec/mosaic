@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
+	"io"
 	"sync"
 	"time"
 )
@@ -155,6 +156,8 @@ func (f *FakeBackend) GlobalRateLimits() (int, int) {
 	defer f.mu.Unlock()
 	return f.downBPS, f.upBPS
 }
+
+func (f *FakeBackend) SetIPBlocklist(_ io.Reader) error { return nil }
 
 func (f *FakeBackend) SetQueuePosition(id TorrentID, pos int) {
 	f.mu.Lock()
