@@ -64,3 +64,61 @@ type Backend interface {
 	Snapshot(id TorrentID) (Snapshot, error)
 	Close() error
 }
+
+// FileEntry is one file inside a torrent's content tree.
+type FileEntry struct {
+	Index     int    // anacrolix file index, stable across the torrent's life
+	Path      string // forward-slash relative path within the torrent
+	Size      int64
+	BytesDone int64
+	Priority  Priority // Skip/Normal/High/Max
+}
+
+// Priority maps to anacrolix's piece-priority levels.
+type Priority int
+
+const (
+	PrioritySkip   Priority = 0
+	PriorityNormal Priority = 1
+	PriorityHigh   Priority = 2
+	PriorityMax    Priority = 3
+)
+
+// PeerEntry is one connected (or recently connected) peer.
+type PeerEntry struct {
+	IP           string
+	Port         int
+	ClientName   string  // e.g. "qBittorrent 4.6.2"
+	Flags        string  // BitTorrent client flags string ("D K E I O X cd" etc.)
+	Progress     float64 // 0..1
+	DownloadRate int64   // bytes/sec from this peer
+	UploadRate   int64   // bytes/sec to this peer
+	CountryCode  string  // ISO-3166 alpha-2; empty if unknown
+}
+
+// TrackerEntry is one tracker URL announced by the torrent.
+type TrackerEntry struct {
+	URL          string
+	Status       string // "OK", "Updating", "Not contacted", "Error: ..."
+	Seeds        int    // last reported
+	Peers        int
+	Downloaded   int // last reported total downloads
+	LastAnnounce time.Time
+	NextAnnounce time.Time
+}
+
+// DetailScope controls how much detail the engine packs into a Detail.
+type DetailScope struct {
+	Files    bool
+	Peers    bool
+	Trackers bool
+}
+
+// Detail is a Snapshot plus optional per-tab heavy data. Empty slices when
+// the corresponding scope flag is false.
+type Detail struct {
+	Snapshot Snapshot
+	Files    []FileEntry
+	Peers    []PeerEntry
+	Trackers []TrackerEntry
+}
