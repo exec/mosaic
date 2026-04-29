@@ -4,8 +4,14 @@ go 1.25.7
 
 require (
 	github.com/adrg/xdg v0.5.3
+	github.com/anacrolix/torrent v1.61.0
+	github.com/pressly/goose/v3 v3.27.1
+	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.12.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.50.0
 )
 
 require (
@@ -26,7 +32,6 @@ require (
 	github.com/anacrolix/multiless v0.4.0 // indirect
 	github.com/anacrolix/stm v0.5.0 // indirect
 	github.com/anacrolix/sync v0.5.5-0.20251119100342-d78dd1f686f1 // indirect
-	github.com/anacrolix/torrent v1.61.0 // indirect
 	github.com/anacrolix/upnp v0.1.4 // indirect
 	github.com/anacrolix/utp v0.1.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -52,7 +57,6 @@ require (
 	github.com/huandu/xstrings v1.3.2 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
 	github.com/klauspost/cpuid/v2 v2.2.3 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/labstack/echo/v4 v4.13.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
@@ -87,13 +91,10 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/pressly/goose/v3 v3.27.1 // indirect
 	github.com/protolambda/ctxlock v0.1.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417 // indirect
-	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/samber/lo v1.49.1 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
@@ -117,14 +118,10 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.1.6 // indirect
 	modernc.org/libc v1.72.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.50.0 // indirect
 	zombiezen.com/go/sqlite v0.13.1 // indirect
 )
 
