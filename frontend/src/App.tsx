@@ -120,7 +120,11 @@ export default function App() {
             defaultSavePath={store.state.defaultSavePath}
             categories={store.state.categories}
             tags={store.state.tags}
+            limits={store.state.limits}
+            queueLimits={store.state.queueLimits}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
+            onSetLimits={(l) => store.setLimits(l)}
+            onSetQueueLimits={(q) => store.setQueueLimits(q)}
             onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}
             onUpdateCategory={(id, name, sp, color) => store.updateCategory(id, name, sp, color)}
             onDeleteCategory={(id) => store.deleteCategory(id)}

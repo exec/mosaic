@@ -1,10 +1,11 @@
 import {For} from 'solid-js';
-import {Sliders, Folder, Tag, Info} from 'lucide-solid';
+import {Sliders, Wifi, Folder, Tag, Info} from 'lucide-solid';
 
-export type SettingsPane = 'general' | 'categories' | 'tags' | 'about';
+export type SettingsPane = 'general' | 'connection' | 'categories' | 'tags' | 'about';
 
 const items: {value: SettingsPane; label: string; icon: typeof Sliders}[] = [
   {value: 'general',    label: 'General',    icon: Sliders},
+  {value: 'connection', label: 'Connection', icon: Wifi},
   {value: 'categories', label: 'Categories', icon: Folder},
   {value: 'tags',       label: 'Tags',       icon: Tag},
   {value: 'about',      label: 'About',      icon: Info},
