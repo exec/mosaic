@@ -3,15 +3,25 @@ import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents} from './lib/store';
 import {ThemeProvider} from './components/theme/ThemeProvider';
 import {WindowShell} from './components/shell/WindowShell';
-import {AddMagnetModal} from './components/shell/AddMagnetModal';
+import {AddTorrentModal} from './components/shell/AddTorrentModal';
 import {TorrentList} from './components/list/TorrentList';
 import {Inspector} from './components/inspector/Inspector';
 import './index.css';
 
 export default function App() {
   const store = createTorrentsStore();
-  const [magnetModal, setMagnetModal] = createSignal(false);
+  const [addModalOpen, setAddModalOpen] = createSignal(false);
+  const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
   onCleanup(() => store.dispose());
+
+  const applyOrganization = async (id: string, categoryID: number | null, tagIDs: number[]) => {
+    if (categoryID !== null) {
+      try { await store.setTorrentCategory(id, categoryID); } catch (err) { console.error(err); }
+    }
+    for (const tagID of tagIDs) {
+      try { await store.assignTag(id, tagID); } catch (err) { console.error(err); }
+    }
+  };
 
   const filtered = createMemo(() =>
     filterTorrents(
@@ -32,11 +42,14 @@ export default function App() {
     }
   };
 
-  const handleAddTorrent = async () => {
-    try {
-      const id = await store.pickAndAddTorrent();
-      if (id) toast.success('Torrent added');
-    } catch (err) { toast.error(String(err)); }
+  const handleAddTorrent = () => {
+    setAddModalSource('file');
+    setAddModalOpen(true);
+  };
+
+  const handleAddMagnet = () => {
+    setAddModalSource('magnet');
+    setAddModalOpen(true);
   };
 
   const handleMagnetDropped = async (m: string) => {
@@ -90,7 +103,7 @@ export default function App() {
         onSearchQuery={store.setSearchQuery}
         onSelectCategory={store.setSelectedCategory}
         onSelectTag={store.setSelectedTag}
-        onAddMagnet={() => setMagnetModal(true)}
+        onAddMagnet={handleAddMagnet}
         onAddTorrent={handleAddTorrent}
         onMagnetDropped={handleMagnetDropped}
         inspector={
@@ -139,12 +152,23 @@ export default function App() {
           }}
         />
       </WindowShell>
-      <AddMagnetModal
-        open={magnetModal()}
-        onClose={() => setMagnetModal(false)}
-        onSubmit={async (m) => {
-          await store.addMagnet(m);
+      <AddTorrentModal
+        open={addModalOpen()}
+        initialSource={addModalSource()}
+        defaultSavePath=""
+        categories={store.state.categories}
+        tags={store.state.tags}
+        onClose={() => setAddModalOpen(false)}
+        onSubmitMagnet={async (m, _savePath, categoryID, tagIDs) => {
+          const id = await store.addMagnet(m);
+          await applyOrganization(id, categoryID, tagIDs);
           toast.success('Magnet added');
+        }}
+        onPickAndAddTorrent={async (_savePath, categoryID, tagIDs) => {
+          const id = await store.pickAndAddTorrent();
+          if (!id) return; // user cancelled
+          await applyOrganization(id, categoryID, tagIDs);
+          toast.success('Torrent added');
         }}
       />
       <Toaster
