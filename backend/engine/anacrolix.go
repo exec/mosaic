@@ -378,17 +378,26 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	}
 
 	if scope.Trackers {
+		// anacrolix v1.61 doesn't expose per-tracker announce state; the best
+		// signal we have is whether metadata has loaded (Info != nil). Before
+		// metadata, no tracker has produced a useful response yet → "Updating".
+		// After metadata, fall back to "OK" (best-effort). A future plan or
+		// upstream PR can refine this with real per-tracker error state.
+		status := "OK"
+		if t.Info() == nil {
+			status = "Updating"
+		}
 		mi := t.Metainfo()
 		for _, tier := range mi.AnnounceList {
 			for _, url := range tier {
 				d.Trackers = append(d.Trackers, TrackerEntry{
 					URL:    url,
-					Status: "OK",
+					Status: status,
 				})
 			}
 		}
 		if len(d.Trackers) == 0 && mi.Announce != "" {
-			d.Trackers = append(d.Trackers, TrackerEntry{URL: mi.Announce, Status: "OK"})
+			d.Trackers = append(d.Trackers, TrackerEntry{URL: mi.Announce, Status: status})
 		}
 	}
 
