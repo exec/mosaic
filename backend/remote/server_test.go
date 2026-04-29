@@ -48,7 +48,7 @@ func newFixture(t *testing.T) *fixture {
 	)
 
 	sessions := NewSessionStore()
-	router := Mount(svc, sessions, nil, false)
+	router := Mount(svc, sessions, nil, nil, false)
 	return &fixture{svc: svc, fb: fb, sessions: sessions, router: router}
 }
 

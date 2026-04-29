@@ -13,10 +13,9 @@ import (
 // optional static SPA tree skip the auth middleware; everything else under
 // /api/* is gated.
 //
+// hub, if non-nil, exposes a WebSocket upgrade at /api/ws.
 // staticFS, if non-nil, is served at "/". Pass nil during tests.
-//
-// The WebSocket upgrade endpoint is attached separately by MountWS.
-func Mount(svc *api.Service, sessions *SessionStore, staticFS fs.FS, secure bool) chi.Router {
+func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, secure bool) chi.Router {
 	r := chi.NewRouter()
 	h := NewHandlers(svc, sessions, secure)
 	gate := AuthGate(sessions, svc)
@@ -85,6 +84,10 @@ func Mount(svc *api.Service, sessions *SessionStore, staticFS fs.FS, secure bool
 			g.Put("/filters", h.UpdateFilter)
 			g.Delete("/filters/{id}", h.DeleteFilter)
 		})
+		if hub != nil {
+			// WS upgrade — auth is checked inline so the upgrade response is correct.
+			api.Get("/ws", hub.HandleUpgrade(sessions, svc))
+		}
 	})
 
 	if staticFS != nil {
