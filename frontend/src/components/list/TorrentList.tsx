@@ -1,6 +1,6 @@
 import {Match, Show, Switch, For} from 'solid-js';
 import {toast} from 'solid-sonner';
-import type {Torrent} from '../../lib/bindings';
+import type {CategoryDTO, TagDTO, Torrent} from '../../lib/bindings';
 import type {Density} from '../../lib/store';
 import {TorrentCard} from './TorrentCard';
 import {TorrentTable} from './TorrentTable';
@@ -11,10 +11,14 @@ type Props = {
   torrents: Torrent[];
   density: Density;
   selection: Set<string>;
+  categories: CategoryDTO[];
+  tags: TagDTO[];
   onSelect: (id: string, e: MouseEvent) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRemove: (id: string) => void;
+  onSetCategory: (id: string, categoryID: number | null) => void;
+  onToggleTag: (id: string, tagID: number) => void;
 };
 
 export function TorrentList(props: Props) {
@@ -27,6 +31,8 @@ export function TorrentList(props: Props) {
               {(t) => (
                 <TorrentRowMenu
                   torrent={t}
+                  categories={props.categories}
+                  tags={props.tags}
                   onPause={() => props.onPause(t.id)}
                   onResume={() => props.onResume(t.id)}
                   onRemove={() => props.onRemove(t.id)}
@@ -36,6 +42,8 @@ export function TorrentList(props: Props) {
                       toast.success('Magnet copied');
                     }
                   }}
+                  onSetCategory={(categoryID) => props.onSetCategory(t.id, categoryID)}
+                  onToggleTag={(tagID) => props.onToggleTag(t.id, tagID)}
                 >
                   <TorrentCard
                     torrent={t}

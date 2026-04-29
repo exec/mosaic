@@ -1,19 +1,23 @@
 import {ContextMenu} from '../ui/ContextMenu';
-import {Pause, Play, Trash2, Folder, Copy, RotateCw} from 'lucide-solid';
-import type {Torrent} from '../../lib/bindings';
-import type {JSX} from 'solid-js';
-import {Show} from 'solid-js';
+import {Pause, Play, Trash2, Folder, Copy, RotateCw, Tag, ChevronRight, Check} from 'lucide-solid';
+import type {CategoryDTO, TagDTO, Torrent} from '../../lib/bindings';
+import {For, type JSX, Show} from 'solid-js';
 
 type Props = {
   torrent: Torrent;
+  categories: CategoryDTO[];
+  tags: TagDTO[];
   onPause: () => void;
   onResume: () => void;
   onRemove: () => void;
   onCopyMagnet: () => void;
+  onSetCategory: (id: number | null) => void;
+  onToggleTag: (id: number) => void;
   children: JSX.Element;
 };
 
 export function TorrentRowMenu(props: Props) {
+  const hasTag = (id: number) => props.torrent.tags.some((t) => t.id === id);
   return (
     <ContextMenu trigger={props.children}>
       <Show
@@ -34,6 +38,62 @@ export function TorrentRowMenu(props: Props) {
         <RotateCw class="h-3.5 w-3.5" />
         Recheck
       </ContextMenu.Item>
+      <ContextMenu.Separator />
+      <ContextMenu.Sub>
+        <ContextMenu.SubTrigger>
+          <Folder class="h-3.5 w-3.5" />
+          Category
+          <ChevronRight class="ml-auto h-3 w-3" />
+        </ContextMenu.SubTrigger>
+        <ContextMenu.SubContent>
+          <ContextMenu.Item onSelect={() => props.onSetCategory(null)}>
+            <span class="text-zinc-500">None</span>
+          </ContextMenu.Item>
+          <Show when={props.categories.length > 0}>
+            <ContextMenu.Separator />
+          </Show>
+          <For each={props.categories}>
+            {(cat) => (
+              <ContextMenu.Item onSelect={() => props.onSetCategory(cat.id)}>
+                <span class="h-2 w-2 rounded-full" style={{background: cat.color}} />
+                {cat.name}
+                <Show when={props.torrent.category_id === cat.id}>
+                  <Check class="ml-auto h-3 w-3" />
+                </Show>
+              </ContextMenu.Item>
+            )}
+          </For>
+        </ContextMenu.SubContent>
+      </ContextMenu.Sub>
+      <ContextMenu.Sub>
+        <ContextMenu.SubTrigger>
+          <Tag class="h-3.5 w-3.5" />
+          Tags
+          <ChevronRight class="ml-auto h-3 w-3" />
+        </ContextMenu.SubTrigger>
+        <ContextMenu.SubContent>
+          <Show
+            when={props.tags.length > 0}
+            fallback={
+              <ContextMenu.Item disabled>
+                <span class="text-zinc-500">No tags yet</span>
+              </ContextMenu.Item>
+            }
+          >
+            <For each={props.tags}>
+              {(tg) => (
+                <ContextMenu.Item onSelect={() => props.onToggleTag(tg.id)}>
+                  <span class="h-2 w-2 rounded-full" style={{background: tg.color}} />
+                  {tg.name}
+                  <Show when={hasTag(tg.id)}>
+                    <Check class="ml-auto h-3 w-3" />
+                  </Show>
+                </ContextMenu.Item>
+              )}
+            </For>
+          </Show>
+        </ContextMenu.SubContent>
+      </ContextMenu.Sub>
       <ContextMenu.Separator />
       <ContextMenu.Item disabled>
         <Folder class="h-3.5 w-3.5" />

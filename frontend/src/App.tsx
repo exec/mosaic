@@ -108,10 +108,28 @@ export default function App() {
           torrents={filtered()}
           density={store.state.density}
           selection={store.state.selection}
+          categories={store.state.categories}
+          tags={store.state.tags}
           onSelect={handleSelect}
           onPause={(id) => store.pause(id)}
           onResume={(id) => store.resume(id)}
           onRemove={(id) => { store.remove(id, false); toast('Removed'); }}
+          onSetCategory={async (id, categoryID) => {
+            try {
+              await store.setTorrentCategory(id, categoryID);
+            } catch (err) { toast.error(String(err)); }
+          }}
+          onToggleTag={async (id, tagID) => {
+            const t = store.state.torrents.find((x) => x.id === id);
+            if (!t) return;
+            try {
+              if (t.tags.some((tg) => tg.id === tagID)) {
+                await store.unassignTag(id, tagID);
+              } else {
+                await store.assignTag(id, tagID);
+              }
+            } catch (err) { toast.error(String(err)); }
+          }}
         />
       </WindowShell>
       <AddMagnetModal

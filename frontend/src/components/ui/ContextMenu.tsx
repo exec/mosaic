@@ -26,5 +26,14 @@ export const ContextMenu = Object.assign(
       </KContextMenu.Item>
     ),
     Separator: () => <KContextMenu.Separator class="my-1 h-px bg-white/10" />,
+    Sub: (props: {children: JSX.Element}) => <KContextMenu.Sub>{props.children}</KContextMenu.Sub>,
+    SubTrigger: (props: {children: JSX.Element}) => (
+      <KContextMenu.SubTrigger class={itemClass}>{props.children}</KContextMenu.SubTrigger>
+    ),
+    SubContent: (props: {children: JSX.Element}) => (
+      <KContextMenu.Portal>
+        <KContextMenu.SubContent class={contentClass}>{props.children}</KContextMenu.SubContent>
+      </KContextMenu.Portal>
+    ),
   },
 );
