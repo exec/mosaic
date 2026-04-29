@@ -4,6 +4,7 @@ import {ChevronDown, FileDown, FolderOpen, Magnet, X} from 'lucide-solid';
 import {createEffect, createSignal, For, Show} from 'solid-js';
 import {Button} from '../ui/Button';
 import type {CategoryDTO, TagDTO} from '../../lib/bindings';
+import {isWailsRuntime} from '../../lib/runtime';
 
 type Source = 'magnet' | 'file';
 
@@ -16,6 +17,7 @@ type Props = {
   onClose: () => void;
   onSubmitMagnet: (magnet: string, savePath: string, categoryID: number | null, tagIDs: number[]) => Promise<void>;
   onPickAndAddTorrent: (savePath: string, categoryID: number | null, tagIDs: number[]) => Promise<void>;
+  onAddTorrentBytes: (bytes: Uint8Array, savePath: string, categoryID: number | null, tagIDs: number[]) => Promise<void>;
 };
 
 const sectionClass = 'rounded-lg border border-white/[.06] bg-white/[.01] p-3';
@@ -30,6 +32,8 @@ export function AddTorrentModal(props: Props) {
   const [selectedTags, setSelectedTags] = createSignal<Set<number>>(new Set());
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [pickedFile, setPickedFile] = createSignal<File | null>(null);
+  const isWails = isWailsRuntime();
 
   // Reset state whenever the modal opens — especially `source` if initialSource changes.
   createEffect(() => {
@@ -40,6 +44,7 @@ export function AddTorrentModal(props: Props) {
       setCategoryID(null);
       setSelectedTags(new Set<number>());
       setError(null);
+      setPickedFile(null);
     }
   });
 
@@ -61,8 +66,13 @@ export function AddTorrentModal(props: Props) {
       if (source() === 'magnet') {
         if (!magnet().trim()) { setError('Magnet link required'); setBusy(false); return; }
         await props.onSubmitMagnet(magnet().trim(), savePath().trim(), categoryID(), tagIDs);
-      } else {
+      } else if (isWails) {
         await props.onPickAndAddTorrent(savePath().trim(), categoryID(), tagIDs);
+      } else {
+        const file = pickedFile();
+        if (!file) { setError('Choose a .torrent file first'); setBusy(false); return; }
+        const buf = new Uint8Array(await file.arrayBuffer());
+        await props.onAddTorrentBytes(buf, savePath().trim(), categoryID(), tagIDs);
       }
       props.onClose();
     } catch (err) {
@@ -119,10 +129,26 @@ export function AddTorrentModal(props: Props) {
                     disabled={busy()}
                   />
                 </Show>
-                <Show when={source() === 'file'}>
+                <Show when={source() === 'file' && isWails}>
                   <p class="mt-3 text-xs text-zinc-500">
                     Click <span class="text-zinc-300">Choose file…</span> below to open the file picker. The torrent will be added with the save target and options below.
                   </p>
+                </Show>
+                <Show when={source() === 'file' && !isWails}>
+                  <input
+                    type="file"
+                    accept=".torrent"
+                    class="mt-3 block w-full text-xs text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-white/[.06] file:px-3 file:py-1.5 file:text-xs file:text-zinc-100 hover:file:bg-white/[.10]"
+                    onChange={(e) => {
+                      const f = e.currentTarget.files?.[0] ?? null;
+                      setPickedFile(f);
+                    }}
+                    disabled={busy()}
+                    data-testid="torrent-file-input"
+                  />
+                  <Show when={pickedFile()}>
+                    <p class="mt-1 text-xs text-zinc-500">{pickedFile()!.name}</p>
+                  </Show>
                 </Show>
               </section>
 
@@ -209,8 +235,20 @@ export function AddTorrentModal(props: Props) {
 
               <div class="flex justify-end gap-2">
                 <Button type="button" variant="ghost" onClick={props.onClose}>Cancel</Button>
-                <Button type="submit" variant="primary" disabled={busy() || (source() === 'magnet' && !magnet().trim())}>
-                  {busy() ? 'Adding…' : (source() === 'file' ? 'Choose file…' : 'Add')}
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={
+                    busy() ||
+                    (source() === 'magnet' && !magnet().trim()) ||
+                    (source() === 'file' && !isWails && !pickedFile())
+                  }
+                >
+                  {busy()
+                    ? 'Adding…'
+                    : source() === 'file'
+                      ? (isWails ? 'Choose file…' : 'Add')
+                      : 'Add'}
                 </Button>
               </div>
             </form>

@@ -159,7 +159,11 @@ export default function App() {
             blocklist={store.state.blocklist}
             feeds={store.state.feeds}
             filtersByFeed={store.state.filtersByFeed}
+            webConfig={store.state.webConfig}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
+            onSetWebConfig={(c) => store.setWebConfig(c)}
+            onSetWebPassword={(p) => store.setWebPassword(p)}
+            onRotateAPIKey={() => store.rotateAPIKey()}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
             onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}
@@ -244,6 +248,11 @@ export default function App() {
         onPickAndAddTorrent={async (savePath, categoryID, tagIDs) => {
           const id = await store.pickAndAddTorrent(savePath);
           if (!id) return; // user cancelled
+          await applyOrganization(id, categoryID, tagIDs);
+          toast.success('Torrent added');
+        }}
+        onAddTorrentBytes={async (bytes, savePath, categoryID, tagIDs) => {
+          const id = await store.addTorrentBytes(bytes, savePath);
           await applyOrganization(id, categoryID, tagIDs);
           toast.success('Torrent added');
         }}

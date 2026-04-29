@@ -1,8 +1,9 @@
 import {Match, Switch} from 'solid-js';
-import type {BlocklistDTO, CategoryDTO, FeedDTO, FilterDTO, LimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO} from '../../lib/bindings';
+import type {BlocklistDTO, CategoryDTO, FeedDTO, FilterDTO, LimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO, WebConfigDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
 import {ConnectionPane} from './ConnectionPane';
+import {WebInterfacePane} from './WebInterfacePane';
 import {SchedulePane} from './SchedulePane';
 import {BlocklistPane} from './BlocklistPane';
 import {RSSPane} from './RSSPane';
@@ -22,7 +23,11 @@ type Props = {
   blocklist: BlocklistDTO;
   feeds: FeedDTO[];
   filtersByFeed: Record<number, FilterDTO[]>;
+  webConfig: WebConfigDTO;
   onSetDefaultSavePath: (path: string) => Promise<void>;
+  onSetWebConfig: (c: WebConfigDTO) => Promise<void>;
+  onSetWebPassword: (plain: string) => Promise<void>;
+  onRotateAPIKey: () => Promise<string>;
   onSetLimits: (l: LimitsDTO) => Promise<void>;
   onSetQueueLimits: (q: QueueLimitsDTO) => Promise<void>;
   onCreateCategory: (name: string, savePath: string, color: string) => Promise<void>;
@@ -55,6 +60,14 @@ export function SettingsRoute(props: Props) {
           </Match>
           <Match when={props.pane === 'connection'}>
             <ConnectionPane limits={props.limits} queueLimits={props.queueLimits} onSetLimits={props.onSetLimits} onSetQueueLimits={props.onSetQueueLimits} />
+          </Match>
+          <Match when={props.pane === 'web'}>
+            <WebInterfacePane
+              webConfig={props.webConfig}
+              onSetWebConfig={props.onSetWebConfig}
+              onSetWebPassword={props.onSetWebPassword}
+              onRotateAPIKey={props.onRotateAPIKey}
+            />
           </Match>
           <Match when={props.pane === 'schedule'}>
             <SchedulePane
