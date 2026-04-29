@@ -149,6 +149,13 @@ func (f *FakeBackend) SetGlobalRateLimits(downBPS, upBPS int) error {
 	return nil
 }
 
+// GlobalRateLimits returns the most recently set down/up BPS values. Test-only.
+func (f *FakeBackend) GlobalRateLimits() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.downBPS, f.upBPS
+}
+
 func (f *FakeBackend) SetQueuePosition(id TorrentID, pos int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -28,6 +28,7 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 		persistence.NewCategories(db),
 		persistence.NewTags(db),
 		persistence.NewSettings(db),
+		persistence.NewScheduleRules(db),
 		nil, // no scheduler in unit tests
 		"/tmp/dl")
 	return svc, fb

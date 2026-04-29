@@ -22,6 +22,7 @@ type Service struct {
 	categories      *persistence.Categories
 	tags            *persistence.Tags
 	settings        *persistence.Settings
+	scheduleRules   *persistence.ScheduleRules
 	scheduler       *engine.Scheduler
 	defaultSavePath string
 
@@ -36,6 +37,7 @@ func NewService(
 	categories *persistence.Categories,
 	tags *persistence.Tags,
 	settings *persistence.Settings,
+	scheduleRules *persistence.ScheduleRules,
 	scheduler *engine.Scheduler,
 	defaultSavePath string,
 ) *Service {
@@ -45,6 +47,7 @@ func NewService(
 		categories:      categories,
 		tags:            tags,
 		settings:        settings,
+		scheduleRules:   scheduleRules,
 		scheduler:       scheduler,
 		defaultSavePath: defaultSavePath,
 	}
@@ -662,6 +665,58 @@ func (s *Service) SetForceStart(ctx context.Context, infohash string, force bool
 	}
 	s.engine.SetForceStart(engine.TorrentID(infohash), force)
 	return nil
+}
+
+// ScheduleRuleDTO is the transport shape for a time-of-day bandwidth rule.
+type ScheduleRuleDTO struct {
+	ID       int  `json:"id"`
+	DaysMask int  `json:"days_mask"`
+	StartMin int  `json:"start_min"`
+	EndMin   int  `json:"end_min"`
+	DownKbps int  `json:"down_kbps"`
+	UpKbps   int  `json:"up_kbps"`
+	AltOnly  bool `json:"alt_only"`
+	Enabled  bool `json:"enabled"`
+}
+
+func toScheduleRuleDTO(r persistence.ScheduleRule) ScheduleRuleDTO {
+	return ScheduleRuleDTO{
+		ID: r.ID, DaysMask: r.DaysMask, StartMin: r.StartMin, EndMin: r.EndMin,
+		DownKbps: r.DownKbps, UpKbps: r.UpKbps, AltOnly: r.AltOnly, Enabled: r.Enabled,
+	}
+}
+
+func (s *Service) ListScheduleRules(ctx context.Context) ([]ScheduleRuleDTO, error) {
+	if s.scheduleRules == nil {
+		return nil, nil
+	}
+	rules, err := s.scheduleRules.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduleRuleDTO, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, toScheduleRuleDTO(r))
+	}
+	return out, nil
+}
+
+func (s *Service) CreateScheduleRule(ctx context.Context, r ScheduleRuleDTO) (int, error) {
+	return s.scheduleRules.Create(ctx, persistence.ScheduleRule{
+		DaysMask: r.DaysMask, StartMin: r.StartMin, EndMin: r.EndMin,
+		DownKbps: r.DownKbps, UpKbps: r.UpKbps, AltOnly: r.AltOnly, Enabled: r.Enabled,
+	})
+}
+
+func (s *Service) UpdateScheduleRule(ctx context.Context, r ScheduleRuleDTO) error {
+	return s.scheduleRules.Update(ctx, persistence.ScheduleRule{
+		ID: r.ID, DaysMask: r.DaysMask, StartMin: r.StartMin, EndMin: r.EndMin,
+		DownKbps: r.DownKbps, UpKbps: r.UpKbps, AltOnly: r.AltOnly, Enabled: r.Enabled,
+	})
+}
+
+func (s *Service) DeleteScheduleRule(ctx context.Context, id int) error {
+	return s.scheduleRules.Delete(ctx, id)
 }
 
 // RestoreOnStartup hydrates engine + scheduler limits from persisted settings.
