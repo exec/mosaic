@@ -105,8 +105,15 @@ type hubClient struct {
 func (h *Hub) addClient() *hubClient {
 	c := &hubClient{send: make(chan Envelope, 64)}
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.clients == nil {
+		// Hub has been Closed; refuse to register so the caller's defer
+		// removeClient becomes a no-op and we don't keep a doomed channel
+		// alive. Caller treats nil as a closed-channel signal.
+		close(c.send)
+		return c
+	}
 	h.clients[c] = struct{}{}
-	h.mu.Unlock()
 	return c
 }
 
@@ -133,8 +140,12 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, creds CredentialChecker) htt
 			}
 		}
 
+		// XXX revisit if exposing wider: Origin verification is bypassed because
+		// our auth gate (session cookie OR bearer API key) already ran above and
+		// the v1 deployment is LAN-scope only. If we ever expose this beyond the
+		// LAN, swap to an explicit OriginPatterns whitelist instead.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			InsecureSkipVerify: true, // we don't enforce Origin; auth gate already ran
+			InsecureSkipVerify: true,
 		})
 		if err != nil {
 			return
