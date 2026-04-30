@@ -14,6 +14,7 @@ import (
 
 	"mosaic/backend/api"
 	"mosaic/backend/engine"
+	"mosaic/backend/platform"
 	"mosaic/backend/remote"
 )
 
@@ -32,6 +33,13 @@ func NewApp(svc *api.Service, hub *remote.Hub) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	go a.streamTicks(ctx)
+	// macOS routes Finder-clicked .torrent files and browser-clicked magnet:
+	// URLs through Apple Events, not argv. Register NSAppleEventManager
+	// handlers that funnel both into HandleLaunchArgs. No-op on other OSes.
+	platform.InstallAppleEventHandlers(
+		func(path string) { a.HandleLaunchArgs([]string{path}) },
+		func(url string) { a.HandleLaunchArgs([]string{url}) },
+	)
 	// Handle any magnet: URL or .torrent path passed on the command line at
 	// first launch (Windows + Linux always; macOS when launched via `open`).
 	// SecondInstanceLaunch (configured in main.go) routes args from a second
