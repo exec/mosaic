@@ -6,6 +6,7 @@ package updater
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
@@ -61,11 +62,32 @@ func (s *GitHubSource) lazyInit() (*selfupdate.Updater, error) {
 	if err != nil {
 		return nil, fmt.Errorf("github source: %w", err)
 	}
-	u, err := selfupdate.NewUpdater(selfupdate.Config{
+	cfg := selfupdate.Config{
 		Source:     src,
 		Validator:  &selfupdate.ChecksumValidator{UniqueFilename: ChecksumManifestFilename},
 		Prerelease: s.Channel == "beta",
-	})
+	}
+	// Asset selection per platform — our release artifacts use a fixed naming
+	// scheme (`Mosaic-vX.Y.Z-<os>-<arch[-variant]>.<ext>`) and we publish
+	// multiple files per OS. Without these hints go-selfupdate's default
+	// matcher (which expects runtime.GOARCH literally in the filename) fails
+	// to find any asset on macOS, and ambiguously picks one on linux+windows.
+	switch runtime.GOOS {
+	case "darwin":
+		// macOS ships a universal .dmg; runtime.GOARCH is arm64 or amd64 but
+		// the asset is "darwin-universal". UniversalArch tells the lib to fall
+		// back to that token when the arch-specific match fails.
+		cfg.UniversalArch = "universal"
+	case "linux":
+		// We publish .deb + .rpm + .AppImage; only the AppImage is a single
+		// self-contained ELF the lib can swap with the running binary.
+		cfg.Filters = []string{`linux-amd64\.AppImage$`}
+	case "windows":
+		// We publish an NSIS installer + a portable .exe; the portable .exe
+		// is the swap-in-place candidate.
+		cfg.Filters = []string{`windows-amd64-portable\.exe$`}
+	}
+	u, err := selfupdate.NewUpdater(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new updater: %w", err)
 	}
