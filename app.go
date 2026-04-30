@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -270,6 +273,24 @@ func (a *App) NotifyUpdateAvailable(info api.UpdateInfoDTO) {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "update:available", info)
+}
+
+// OpenFolder reveals the given path in the OS file manager. Desktop-only —
+// browser shells have no equivalent affordance.
+func (a *App) OpenFolder(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty path")
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "windows":
+		cmd = exec.Command("explorer", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
 }
 
 func (a *App) streamTicks(ctx context.Context) {

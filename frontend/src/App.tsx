@@ -1,6 +1,7 @@
 import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents} from './lib/store';
+import {api} from './lib/bindings';
 import {ThemeProvider} from './components/theme/ThemeProvider';
 import {WindowShell} from './components/shell/WindowShell';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
@@ -251,6 +252,10 @@ export default function App() {
           }}
           onMoveQueue={onMoveQueue}
           onToggleForceStart={onToggleForceStart}
+          onOpenFolder={async (savePath) => {
+            try { await api.openFolder(savePath); }
+            catch (err) { toast.error(String(err)); }
+          }}
         />
       </WindowShell>
       <AddTorrentModal

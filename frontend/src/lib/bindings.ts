@@ -231,6 +231,7 @@ export const api = {
   setUpdaterConfig: (c: UpdaterConfigDTO) => transport.invoke<void>('SetUpdaterConfig', c),
   checkForUpdate: () => transport.invoke<UpdateInfoDTO>('CheckForUpdate'),
   installUpdate: () => transport.invoke<void>('InstallUpdate'),
+  openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {
