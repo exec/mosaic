@@ -7,6 +7,10 @@ BIN_DIR="${ROOT}/build/bin"
 
 cd "${ROOT}"
 
+echo "==> prime module cache"
+go mod download
+go build ./...
+
 echo "==> wails build linux/amd64"
 wails build \
     -platform linux/amd64 \

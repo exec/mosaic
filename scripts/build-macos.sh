@@ -21,6 +21,10 @@ BIN_DIR="${ROOT}/build/bin"
 
 cd "${ROOT}"
 
+echo "==> prime module cache (wails's go/packages analysis fails on cold cache)"
+go mod download
+go build ./...
+
 echo "==> wails build (universal)"
 wails build \
     -platform darwin/universal \

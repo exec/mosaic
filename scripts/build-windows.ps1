@@ -18,6 +18,12 @@ $Root = Resolve-Path "$PSScriptRoot/.."
 Set-Location $Root
 $BinDir = "$Root/build/bin"
 
+Write-Host "==> prime module cache"
+go mod download
+if ($LASTEXITCODE -ne 0) { throw "go mod download failed" }
+go build ./...
+if ($LASTEXITCODE -ne 0) { throw "go build prime failed" }
+
 Write-Host "==> wails build windows/amd64"
 wails build `
     -platform windows/amd64 `
