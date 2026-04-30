@@ -102,6 +102,23 @@ Section
     WriteRegStr HKCR "magnet\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXECUTABLE},0"
     WriteRegStr HKCR "magnet\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXECUTABLE}" "%1"'
 
+    # .torrent file association: define a class then point .torrent at it.
+    WriteRegStr HKCR ".torrent" "" "MosaicTorrent"
+    WriteRegStr HKCR ".torrent" "Content Type" "application/x-bittorrent"
+    WriteRegStr HKCR "MosaicTorrent" "" "BitTorrent file"
+    WriteRegStr HKCR "MosaicTorrent\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXECUTABLE},0"
+    WriteRegStr HKCR "MosaicTorrent\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXECUTABLE}" "%1"'
+
+    # Register Mosaic in Windows's "Default apps" infrastructure so the user
+    # can pick it as default for .torrent + magnet from Settings (Win10/11
+    # gates the actual default selection — apps can register but only the
+    # user can confirm).
+    WriteRegStr HKLM "SOFTWARE\RegisteredApplications" "${INFO_PRODUCTNAME}" "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities"
+    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities" "ApplicationName" "${INFO_PRODUCTNAME}"
+    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities" "ApplicationDescription" "BitTorrent client"
+    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities\FileAssociations" ".torrent" "MosaicTorrent"
+    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities\URLAssociations" "magnet" "MosaicTorrent"
+
     !insertmacro wails.writeUninstaller
 SectionEnd
 
@@ -118,8 +135,12 @@ Section "uninstall"
     !insertmacro wails.unassociateFiles
     !insertmacro wails.unassociateCustomProtocols
 
-    # Clean up magnet handler registry entries.
+    # Clean up magnet handler + .torrent class + Default Apps registration.
     DeleteRegKey HKCR "magnet"
+    DeleteRegKey HKCR ".torrent"
+    DeleteRegKey HKCR "MosaicTorrent"
+    DeleteRegKey HKLM "SOFTWARE\${INFO_PRODUCTNAME}"
+    DeleteRegValue HKLM "SOFTWARE\RegisteredApplications" "${INFO_PRODUCTNAME}"
 
     !insertmacro wails.deleteUninstaller
 SectionEnd

@@ -16,6 +16,8 @@ contents:
     dst: /usr/share/applications/mosaic.desktop
   - src: build/appicon.png
     dst: /usr/share/icons/hicolor/512x512/apps/mosaic.png
+scripts:
+  postinstall: scripts/linux-postinstall.sh
 overrides:
   deb:
     depends:

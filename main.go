@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"mosaic/backend/api"
 	"mosaic/backend/config"
@@ -146,6 +147,21 @@ func main() {
 		Mac: &mac.Options{
 			TitleBar:   mac.TitleBarHiddenInset(),
 			Appearance: mac.NSAppearanceNameDarkAqua,
+		},
+		// SingleInstanceLock: when the user double-clicks a .torrent or follows
+		// a magnet: URL while Mosaic is already open, the OS launches a second
+		// process; this callback forwards its args to the running instance and
+		// raises the window. Without this every magnet click would spawn a new
+		// (broken) instance.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "io.github.exec.mosaic",
+			OnSecondInstanceLaunch: func(d options.SecondInstanceData) {
+				if app.ctx != nil {
+					wailsruntime.WindowUnminimise(app.ctx)
+					wailsruntime.WindowShow(app.ctx)
+				}
+				go app.HandleLaunchArgs(d.Args)
+			},
 		},
 		OnStartup: app.startup,
 		Bind: []any{

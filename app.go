@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -30,6 +32,36 @@ func NewApp(svc *api.Service, hub *remote.Hub) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	go a.streamTicks(ctx)
+	// Handle any magnet: URL or .torrent path passed on the command line at
+	// first launch (Windows + Linux always; macOS when launched via `open`).
+	// SecondInstanceLaunch (configured in main.go) routes args from a second
+	// process invocation to a.HandleLaunchArgs as well.
+	if len(os.Args) > 1 {
+		go a.HandleLaunchArgs(os.Args[1:])
+	}
+}
+
+// HandleLaunchArgs classifies each arg as a magnet URL or a .torrent file
+// path and routes it to the engine. Unknown args are silently ignored
+// (Wails or the OS may pass internal flags we don't care about).
+// Exported so main.go's SingleInstanceLock OnSecondInstanceLaunch can call it.
+func (a *App) HandleLaunchArgs(args []string) {
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "magnet:"):
+			if _, err := a.svc.AddMagnet(a.ctx, arg, ""); err != nil {
+				log.Warn().Err(err).Msg("launch arg: AddMagnet failed")
+			} else {
+				log.Info().Str("magnet", arg).Msg("added magnet from launch arg")
+			}
+		case strings.HasSuffix(strings.ToLower(arg), ".torrent"):
+			if _, err := a.svc.AddTorrentFile(a.ctx, arg, ""); err != nil {
+				log.Warn().Err(err).Str("path", arg).Msg("launch arg: AddTorrentFile failed")
+			} else {
+				log.Info().Str("path", arg).Msg("added .torrent from launch arg")
+			}
+		}
+	}
 }
 
 // AddMagnet adds a magnet link. Returns the torrent ID.
