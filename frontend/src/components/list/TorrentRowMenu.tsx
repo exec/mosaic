@@ -2,6 +2,7 @@ import {ContextMenu} from '../ui/ContextMenu';
 import {Pause, Play, Trash2, Folder, Copy, RotateCw, Tag, ChevronRight, Check, ListOrdered} from 'lucide-solid';
 import type {CategoryDTO, TagDTO, Torrent} from '../../lib/bindings';
 import {For, type JSX, Show} from 'solid-js';
+import {isWailsRuntime} from '../../lib/runtime';
 
 export type QueueDirection = 'top' | 'up' | 'down' | 'bottom';
 
@@ -13,6 +14,7 @@ type Props = {
   onResume: () => void;
   onRemove: () => void;
   onCopyMagnet: () => void;
+  onOpenFolder: () => void;
   onSetCategory: (id: number | null) => void;
   onToggleTag: (id: number) => void;
   onMoveQueue: (direction: QueueDirection) => void;
@@ -127,10 +129,12 @@ export function TorrentRowMenu(props: Props) {
         </ContextMenu.SubContent>
       </ContextMenu.Sub>
       <ContextMenu.Separator />
-      <ContextMenu.Item disabled>
-        <Folder class="h-3.5 w-3.5" />
-        Open folder
-      </ContextMenu.Item>
+      <Show when={isWailsRuntime()}>
+        <ContextMenu.Item onSelect={props.onOpenFolder}>
+          <Folder class="h-3.5 w-3.5" />
+          Open folder
+        </ContextMenu.Item>
+      </Show>
       <ContextMenu.Item onSelect={props.onCopyMagnet}>
         <Copy class="h-3.5 w-3.5" />
         Copy magnet

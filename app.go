@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -9,17 +12,19 @@ import (
 
 	"mosaic/backend/api"
 	"mosaic/backend/engine"
+	"mosaic/backend/remote"
 )
 
 // App is the Wails-bound type. Methods on App become callable from the
 // frontend via the auto-generated bindings in frontend/wailsjs/.
 type App struct {
 	svc *api.Service
+	hub *remote.Hub // optional fan-out for browser clients; nil-safe
 	ctx context.Context
 }
 
-func NewApp(svc *api.Service) *App {
-	return &App{svc: svc}
+func NewApp(svc *api.Service, hub *remote.Hub) *App {
+	return &App{svc: svc, hub: hub}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -222,6 +227,72 @@ func (a *App) DeleteFilter(id int) error {
 	return a.svc.DeleteFilter(a.ctx, id)
 }
 
+func (a *App) GetWebConfig() api.WebConfigDTO {
+	return a.svc.GetWebConfig(a.ctx)
+}
+
+func (a *App) SetWebConfig(c api.WebConfigDTO) error {
+	return a.svc.SetWebConfig(a.ctx, c)
+}
+
+func (a *App) SetWebPassword(plain string) error {
+	return a.svc.SetWebPassword(a.ctx, plain)
+}
+
+func (a *App) RotateAPIKey() (string, error) {
+	return a.svc.RotateAPIKey(a.ctx)
+}
+
+// AppVersion returns the build-time version string (e.g. "v0.7.0" or "dev").
+func (a *App) AppVersion() string {
+	return version
+}
+
+func (a *App) GetUpdaterConfig() api.UpdaterConfigDTO {
+	return a.svc.GetUpdaterConfig(a.ctx)
+}
+
+func (a *App) SetUpdaterConfig(c api.UpdaterConfigDTO) error {
+	return a.svc.SetUpdaterConfig(a.ctx, c)
+}
+
+func (a *App) CheckForUpdate() (api.UpdateInfoDTO, error) {
+	return a.svc.CheckForUpdate(a.ctx)
+}
+
+func (a *App) InstallUpdate() error {
+	return a.svc.InstallUpdate(a.ctx)
+}
+
+// NotifyUpdateAvailable emits the Wails-side `update:available` event so the
+// desktop SPA can render its toast. Called from main.go's updater OnAvailable
+// callback, off the updater goroutine; safe to invoke before startup() has
+// run (a.ctx may be nil) — emission is silently skipped in that case.
+func (a *App) NotifyUpdateAvailable(info api.UpdateInfoDTO) {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.EventsEmit(a.ctx, "update:available", info)
+}
+
+// OpenFolder reveals the given path in the OS file manager. Desktop-only —
+// browser shells have no equivalent affordance.
+func (a *App) OpenFolder(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty path")
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "windows":
+		cmd = exec.Command("explorer", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
@@ -240,6 +311,9 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "torrents:tick", rows)
+			if a.hub != nil {
+				a.hub.PublishTorrents(rows)
+			}
 		case <-stats.C:
 			s, err := a.svc.GlobalStats(ctx)
 			if err != nil {
@@ -247,6 +321,9 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "stats:tick", s)
+			if a.hub != nil {
+				a.hub.PublishStats(s)
+			}
 		case <-inspector.C:
 			detail, err := a.svc.DetailForFocus(ctx)
 			if err != nil {
@@ -257,6 +334,9 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "inspector:tick", detail)
+			if a.hub != nil {
+				a.hub.PublishInspector(*detail)
+			}
 		}
 	}
 }

@@ -1,5 +1,5 @@
 import {For, Show, type Component} from 'solid-js';
-import {ChevronDown, ListFilter, Folder, Tag, Globe} from 'lucide-solid';
+import {ChevronDown, ListFilter, Folder, Tag} from 'lucide-solid';
 import type {StatusFilter} from '../../lib/store';
 import type {CategoryDTO, TagDTO, Torrent} from '../../lib/bindings';
 
@@ -133,9 +133,6 @@ export function FilterRail(props: Props) {
         </Show>
       </Section>
 
-      <Section icon={Globe} title="Trackers">
-        <p class="px-2 text-xs text-zinc-600">Coming in Plan 4b</p>
-      </Section>
     </aside>
   );
 }

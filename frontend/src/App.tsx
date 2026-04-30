@@ -1,15 +1,33 @@
 import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents} from './lib/store';
+import {api} from './lib/bindings';
+import {isWailsRuntime} from './lib/runtime';
 import {ThemeProvider} from './components/theme/ThemeProvider';
+import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
 import {WindowShell} from './components/shell/WindowShell';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
+import {UpdateToast} from './components/shell/UpdateToast';
 import {TorrentList} from './components/list/TorrentList';
 import {Inspector} from './components/inspector/Inspector';
 import {SettingsRoute} from './components/settings/SettingsRoute';
 import './index.css';
 
 export default function App() {
+  if (isWailsRuntime()) {
+    return <ThemeProvider><Toaster position="bottom-right" toastOptions={{style: {background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(255,255,255,0.1)', color: '#e7e7e9', 'backdrop-filter': 'blur(12px)'}}} /><AuthenticatedApp /></ThemeProvider>;
+  }
+  return (
+    <ThemeProvider>
+      <Toaster position="bottom-right" toastOptions={{style: {background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(255,255,255,0.1)', color: '#e7e7e9', 'backdrop-filter': 'blur(12px)'}}} />
+      <BrowserAuthGate>
+        <AuthenticatedApp />
+      </BrowserAuthGate>
+    </ThemeProvider>
+  );
+}
+
+function AuthenticatedApp() {
   const store = createTorrentsStore();
   const [addModalOpen, setAddModalOpen] = createSignal(false);
   const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
@@ -110,7 +128,7 @@ export default function App() {
   });
 
   return (
-    <ThemeProvider>
+    <>
       <WindowShell
         view={store.state.view}
         settingsPane={store.state.settingsPane}
@@ -118,6 +136,14 @@ export default function App() {
         onNavigateRSS={() => {
           store.setView('settings');
           store.setSettingsPane('rss');
+        }}
+        onNavigateSchedule={() => {
+          store.setView('settings');
+          store.setSettingsPane('schedule');
+        }}
+        onNavigateAbout={() => {
+          store.setView('settings');
+          store.setSettingsPane('about');
         }}
         torrents={store.state.torrents}
         filteredTorrents={filtered()}
@@ -146,6 +172,11 @@ export default function App() {
         altSpeedActive={store.state.limits.alt_active}
         onToggleAltSpeed={() => store.toggleAltSpeed()}
         queuedCount={queuedCount()}
+        webConfig={store.state.webConfig}
+        onNavigateWebSettings={() => {
+          store.setView('settings');
+          store.setSettingsPane('web');
+        }}
         settings={
           <SettingsRoute
             pane={store.state.settingsPane}
@@ -159,7 +190,17 @@ export default function App() {
             blocklist={store.state.blocklist}
             feeds={store.state.feeds}
             filtersByFeed={store.state.filtersByFeed}
+            webConfig={store.state.webConfig}
+            updaterConfig={store.state.updaterConfig}
+            updateInfo={store.state.updateInfo}
+            appVersion={store.state.appVersion}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
+            onSetWebConfig={(c) => store.setWebConfig(c)}
+            onSetWebPassword={(p) => store.setWebPassword(p)}
+            onRotateAPIKey={() => store.rotateAPIKey()}
+            onSetUpdaterConfig={(c) => store.setUpdaterConfig(c)}
+            onCheckForUpdate={() => store.checkForUpdate()}
+            onInstallUpdate={() => store.installUpdate()}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
             onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}
@@ -227,6 +268,10 @@ export default function App() {
           }}
           onMoveQueue={onMoveQueue}
           onToggleForceStart={onToggleForceStart}
+          onOpenFolder={async (savePath) => {
+            try { await api.openFolder(savePath); }
+            catch (err) { toast.error(String(err)); }
+          }}
         />
       </WindowShell>
       <AddTorrentModal
@@ -247,18 +292,17 @@ export default function App() {
           await applyOrganization(id, categoryID, tagIDs);
           toast.success('Torrent added');
         }}
-      />
-      <Toaster
-        position="bottom-right"
-        toastOptions={{
-          style: {
-            background: 'rgba(24, 24, 27, 0.95)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            color: '#e7e7e9',
-            'backdrop-filter': 'blur(12px)',
-          },
+        onAddTorrentBytes={async (bytes, savePath, categoryID, tagIDs) => {
+          const id = await store.addTorrentBytes(bytes, savePath);
+          await applyOrganization(id, categoryID, tagIDs);
+          toast.success('Torrent added');
         }}
       />
-    </ThemeProvider>
+      <UpdateToast
+        info={store.state.updateInfo}
+        onInstall={() => { store.setView('settings'); store.setSettingsPane('updates'); }}
+        onDismiss={() => {}}
+      />
+    </>
   );
 }

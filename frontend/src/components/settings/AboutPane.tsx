@@ -6,19 +6,27 @@ const PROGRESS = [
   {label: 'Plan 3 — Inspector + Watch IPC', done: true},
   {label: 'Plan 4a — Organization', done: true},
   {label: 'Plan 4b — Settings panel', done: true},
-  {label: 'Plan 4c — Bandwidth controls', done: false},
-  {label: 'Plan 5 — RSS auto-add', done: false},
-  {label: 'Plan 6 — Remote interface', done: false},
-  {label: 'Plan 7 — Auto-update', done: false},
+  {label: 'Plan 4c — Bandwidth controls', done: true},
+  {label: 'Plan 4d — Scheduling & blocklist', done: true},
+  {label: 'Plan 5 — RSS auto-add', done: true},
+  {label: 'Plan 6 — Remote interface', done: true},
+  {label: 'Plan 7 — Auto-update', done: true},
   {label: 'Plan 8 — Packaging & signing', done: false},
 ];
 
-export function AboutPane() {
+type Props = {
+  appVersion: string;
+};
+
+export function AboutPane(props: Props) {
   return (
     <div class="mx-auto max-w-2xl px-6 py-6">
       <div class="mb-4 border-b border-white/[.04] pb-3">
         <h2 class="text-lg font-semibold text-zinc-100">About Mosaic</h2>
         <p class="mt-0.5 text-sm text-zinc-500">A polished cross-platform BitTorrent client — Go + Wails + anacrolix.</p>
+        <p class="mt-2 text-xs font-mono text-zinc-400">
+          Version <span class="text-zinc-200">{props.appVersion}</span>
+        </p>
       </div>
 
       <div class="rounded-md border border-white/[.06] bg-white/[.02] p-4 mb-6">

@@ -17,6 +17,7 @@ type Props = {
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRemove: (id: string) => void;
+  onOpenFolder: (savePath: string) => void;
   onSetCategory: (id: string, categoryID: number | null) => void;
   onToggleTag: (id: string, tagID: number) => void;
   onMoveQueue: (id: string, direction: QueueDirection) => void;
@@ -44,6 +45,7 @@ export function TorrentList(props: Props) {
                       toast.success('Magnet copied');
                     }
                   }}
+                  onOpenFolder={() => props.onOpenFolder(t.save_path)}
                   onSetCategory={(categoryID) => props.onSetCategory(t.id, categoryID)}
                   onToggleTag={(tagID) => props.onToggleTag(t.id, tagID)}
                   onMoveQueue={(direction) => props.onMoveQueue(t.id, direction)}

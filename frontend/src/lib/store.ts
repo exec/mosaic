@@ -1,9 +1,11 @@
-import {createStore, produce} from 'solid-js/store';
+import {createStore, produce, reconcile} from 'solid-js/store';
 import {
-  api, onInspectorTick, onStatsTick, onTorrentsTick,
+  api, onInspectorTick, onStatsTick, onTorrentsTick, onUpdateAvailable,
   type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
   type GlobalStatsT, type InspectorTab,
   type LimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
+  type UpdaterConfigDTO, type UpdateInfoDTO,
+  type WebConfigDTO,
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
 
@@ -50,6 +52,14 @@ export type AppState = {
   // RSS
   feeds: FeedDTO[];
   filtersByFeed: Record<number, FilterDTO[]>;
+
+  // Web interface
+  webConfig: WebConfigDTO;
+
+  // Auto-update
+  updaterConfig: UpdaterConfigDTO;
+  updateInfo: UpdateInfoDTO | null;
+  appVersion: string;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -93,6 +103,21 @@ const emptyBlocklist: BlocklistDTO = {
   entries: 0,
 };
 
+const emptyWebConfig: WebConfigDTO = {
+  enabled: false,
+  port: 8080,
+  bind_all: false,
+  username: 'admin',
+  api_key: '',
+};
+
+const emptyUpdaterConfig: UpdaterConfigDTO = {
+  enabled: true,
+  channel: 'stable',
+  last_checked_at: 0,
+  last_seen_version: '',
+};
+
 export function createTorrentsStore() {
   const [state, setState] = createStore<AppState>({
     torrents: [],
@@ -125,6 +150,12 @@ export function createTorrentsStore() {
 
     feeds: [],
     filtersByFeed: {},
+
+    webConfig: emptyWebConfig,
+
+    updaterConfig: emptyUpdaterConfig,
+    updateInfo: null,
+    appVersion: 'dev',
   });
 
   api.listTorrents()
@@ -140,8 +171,11 @@ export function createTorrentsStore() {
   api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(console.error);
   api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(console.error);
   api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(console.error);
+  api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(console.error);
+  api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(console.error);
+  api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(console.error);
 
-  const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
+  const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
   const offI = onInspectorTick((detail) => {
     setState(produce((s) => {
@@ -154,6 +188,7 @@ export function createTorrentsStore() {
       if (s.bandwidthRing.length > BANDWIDTH_RING_MAX) s.bandwidthRing.shift();
     }));
   });
+  const offU = onUpdateAvailable((info) => setState(produce((s) => { s.updateInfo = info; })));
 
   return {
     state,
@@ -367,7 +402,41 @@ export function createTorrentsStore() {
       setState(produce((s) => { s.filtersByFeed[feedID] = rows ?? []; }));
     },
 
-    dispose: () => { offT(); offS(); offI(); },
+    // Web interface
+    refreshWebConfig: async () => {
+      const c = await api.getWebConfig();
+      setState(produce((s) => { s.webConfig = c; }));
+    },
+    setWebConfig: async (c: WebConfigDTO) => {
+      await api.setWebConfig(c);
+      const fresh = await api.getWebConfig();
+      setState(produce((s) => { s.webConfig = fresh; }));
+    },
+    setWebPassword: (plain: string) => api.setWebPassword(plain),
+    rotateAPIKey: async () => {
+      const key = await api.rotateAPIKey();
+      setState(produce((s) => { s.webConfig = {...s.webConfig, api_key: key}; }));
+      return key;
+    },
+
+    // Auto-update
+    refreshUpdaterConfig: async () => {
+      const c = await api.getUpdaterConfig();
+      setState(produce((s) => { s.updaterConfig = c; }));
+    },
+    setUpdaterConfig: async (c: UpdaterConfigDTO) => {
+      await api.setUpdaterConfig(c);
+      const fresh = await api.getUpdaterConfig();
+      setState(produce((s) => { s.updaterConfig = fresh; }));
+    },
+    checkForUpdate: async () => {
+      const info = await api.checkForUpdate();
+      setState(produce((s) => { s.updateInfo = info; }));
+      return info;
+    },
+    installUpdate: () => api.installUpdate(),
+
+    dispose: () => { offT(); offS(); offI(); offU(); },
   };
 }
 
