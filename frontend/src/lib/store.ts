@@ -1,4 +1,4 @@
-import {createStore, produce} from 'solid-js/store';
+import {createStore, produce, reconcile} from 'solid-js/store';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick, onUpdateAvailable,
   type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
@@ -175,7 +175,7 @@ export function createTorrentsStore() {
   api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(console.error);
   api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(console.error);
 
-  const offT = onTorrentsTick((rows) => setState(produce((s) => { s.torrents = rows; })));
+  const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
   const offI = onInspectorTick((detail) => {
     setState(produce((s) => {
