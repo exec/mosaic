@@ -32,6 +32,10 @@ go build ./...
 if ($LASTEXITCODE -ne 0) { throw "go build prime failed" }
 
 Write-Host "==> wails build windows/amd64"
+# CGO_ENABLED=0 produces a self-contained .exe — without it the build links
+# against libgcc_s_seh-1.dll from mingw which isn't present on user machines.
+# Our backend (anacrolix/torrent + modernc.org/sqlite) is pure Go.
+$env:CGO_ENABLED = "0"
 wails build `
     -platform windows/amd64 `
     -ldflags "-X main.version=$Version" `
