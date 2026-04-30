@@ -1,7 +1,9 @@
 // Wails IPC transport: thin adapter that forwards to the auto-generated
-// bindings on `window.go.main.App`, and pipes Wails events through `EventsOn`.
+// bindings on `window.go.main.App`, and pipes Wails events through
+// `window.runtime.EventsOn` (the runtime is injected by Wails at startup;
+// we don't import from the generated wailsjs/ directory because that path
+// is gitignored and absent in CI).
 
-import {EventsOn} from '../../wailsjs/runtime/runtime';
 import type {Transport} from './transport';
 
 export function makeWailsTransport(): Transport {
@@ -18,8 +20,11 @@ export function makeWailsTransport(): Transport {
       return fn(...marshalled) as Promise<T>;
     },
     on(event, handler) {
+      const w = window as any;
+      const eventsOn = w?.runtime?.EventsOn;
+      if (typeof eventsOn !== 'function') return () => {};
       // Wails returns its own off-fn. Wrap to a stable () => void.
-      const off = EventsOn(event, handler) as unknown as () => void;
+      const off = eventsOn(event, handler) as unknown as () => void;
       return off ?? (() => {});
     },
   };
