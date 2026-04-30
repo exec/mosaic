@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -523,6 +524,15 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 		}
 		out = append(out, dto)
 	}
+	// Stable order — engine.List() iterates anacrolix's internal map (random
+	// per call), which would swap rows on every tick. Sort by added_at desc
+	// (newest first), tie-broken by id so identical-second adds don't flip.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AddedAt != out[j].AddedAt {
+			return out[i].AddedAt > out[j].AddedAt
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 
