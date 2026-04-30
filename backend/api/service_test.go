@@ -360,3 +360,179 @@ func TestService_DeleteFeed_CascadesFilters(t *testing.T) {
 	post, _ := svc.ListFiltersByFeed(ctx, feedID)
 	require.Empty(t, post)
 }
+
+func TestService_GetWebConfig_Defaults(t *testing.T) {
+	svc, _ := newTestService(t)
+	cfg := svc.GetWebConfig(context.Background())
+	require.False(t, cfg.Enabled)
+	require.Equal(t, 8080, cfg.Port)
+	require.False(t, cfg.BindAll)
+	require.Equal(t, "admin", cfg.Username)
+	require.Empty(t, cfg.APIKey)
+}
+
+func TestService_SetWebConfig_RoundTrip(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{
+		Enabled: true, Port: 9091, BindAll: true, Username: "remote",
+	}))
+	got := svc.GetWebConfig(ctx)
+	require.True(t, got.Enabled)
+	require.Equal(t, 9091, got.Port)
+	require.True(t, got.BindAll)
+	require.Equal(t, "remote", got.Username)
+}
+
+func TestService_SetWebPassword_VerifyCredentials(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{
+		Enabled: true, Port: 8080, Username: "alice",
+	}))
+	require.NoError(t, svc.SetWebPassword(ctx, "s3cret"))
+
+	require.True(t, svc.VerifyWebCredentials(ctx, "alice", "s3cret"))
+	require.False(t, svc.VerifyWebCredentials(ctx, "alice", "wrong"))
+	require.False(t, svc.VerifyWebCredentials(ctx, "bob", "s3cret"))
+}
+
+func TestService_VerifyWebCredentials_NoPasswordSet(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{Username: "alice"}))
+	require.False(t, svc.VerifyWebCredentials(ctx, "alice", "anything"))
+}
+
+func TestService_RotateAPIKey_AndVerify(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	require.False(t, svc.VerifyAPIKey(ctx, "anything"))
+
+	key, err := svc.RotateAPIKey(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, key)
+
+	require.True(t, svc.VerifyAPIKey(ctx, key))
+	require.False(t, svc.VerifyAPIKey(ctx, "not-the-key"))
+	require.False(t, svc.VerifyAPIKey(ctx, ""))
+
+	// Rotate replaces; old key should no longer verify.
+	newKey, err := svc.RotateAPIKey(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, key, newKey)
+	require.False(t, svc.VerifyAPIKey(ctx, key))
+	require.True(t, svc.VerifyAPIKey(ctx, newKey))
+}
+
+func TestService_GetWebConfig_ReturnsStoredAPIKey(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	key, err := svc.RotateAPIKey(ctx)
+	require.NoError(t, err)
+	require.Equal(t, key, svc.GetWebConfig(ctx).APIKey)
+}
+
+func TestUpdaterConfig_DefaultsAndRoundTrip(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	cfg := svc.GetUpdaterConfig(ctx)
+	require.True(t, cfg.Enabled, "updater should be enabled by default")
+	require.Equal(t, "stable", cfg.Channel)
+	require.Zero(t, cfg.LastCheckedAt)
+	require.Empty(t, cfg.LastSeenVersion)
+
+	require.NoError(t, svc.SetUpdaterConfig(ctx, UpdaterConfigDTO{Enabled: false, Channel: "beta"}))
+	got := svc.GetUpdaterConfig(ctx)
+	require.False(t, got.Enabled)
+	require.Equal(t, "beta", got.Channel)
+}
+
+func TestUpdaterConfig_RejectsUnknownChannel(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	err := svc.SetUpdaterConfig(ctx, UpdaterConfigDTO{Enabled: true, Channel: "nightly"})
+	require.Error(t, err)
+}
+
+func TestCheckForUpdate_NoUpdater(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	info, err := svc.CheckForUpdate(ctx)
+	require.Error(t, err, "expected updater-disabled error")
+	require.False(t, info.Available)
+	require.Empty(t, info.CurrentVersion, "appVersion is unset on a fresh test service")
+}
+
+func TestInstallUpdate_NoUpdater(t *testing.T) {
+	svc, _ := newTestService(t)
+	require.Error(t, svc.InstallUpdate(context.Background()))
+}
+
+// serviceWithDB lets two Service instances share one DB file across the test
+// (to simulate a process restart).
+func serviceWithDB(t *testing.T, dbPath string) (*Service, *engine.FakeBackend) {
+	t.Helper()
+	db, err := persistence.Open(context.Background(), dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	fb := engine.NewFakeBackend()
+	eng := engine.NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+	return NewService(eng,
+		persistence.NewTorrents(db),
+		persistence.NewCategories(db),
+		persistence.NewTags(db),
+		persistence.NewSettings(db),
+		persistence.NewScheduleRules(db),
+		persistence.NewFeeds(db),
+		persistence.NewFilters(db),
+		nil,
+		"/tmp/dl"), fb
+}
+
+func TestRestoreOnStartup_ReAddsPersistedMagnet(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+
+	// Session 1: add a magnet + persist it.
+	svc1, fb1 := serviceWithDB(t, dbPath)
+	_, err := svc1.AddMagnet(context.Background(), "magnet:?xt=urn:btih:abc", "")
+	require.NoError(t, err)
+	require.Len(t, fb1.List(), 1)
+
+	// Session 2: fresh engine (empty), same DB. Restore should re-add.
+	svc2, fb2 := serviceWithDB(t, dbPath)
+	require.Empty(t, fb2.List(), "fresh engine starts empty")
+	require.NoError(t, svc2.RestoreOnStartup(context.Background()))
+	require.Len(t, fb2.List(), 1, "magnet torrent should be re-added")
+}
+
+func TestRestoreOnStartup_ReAddsPersistedFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+
+	svc1, fb1 := serviceWithDB(t, dbPath)
+	// FakeBackend.AddFile records the bytes verbatim; any non-empty blob suffices.
+	_, err := svc1.AddTorrentBytes(context.Background(), []byte("fake-torrent-bytes"), "")
+	require.NoError(t, err)
+	require.Len(t, fb1.List(), 1)
+
+	svc2, fb2 := serviceWithDB(t, dbPath)
+	require.Empty(t, fb2.List())
+	require.NoError(t, svc2.RestoreOnStartup(context.Background()))
+	require.Len(t, fb2.List(), 1, "file-added torrent should be re-added via persisted metainfo")
+}
+
+func TestRestoreOnStartup_SkipsOrphanRecord(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+	svc, fb := serviceWithDB(t, dbPath)
+
+	// Insert a record with neither magnet nor metainfo (the pre-fix legacy state).
+	require.NoError(t, svc.torrents.Save(context.Background(), persistence.TorrentRecord{
+		InfoHash: "deadbeef", Name: "orphan", SavePath: "/tmp/dl", AddedAt: time.Now(),
+	}))
+
+	require.NoError(t, svc.RestoreOnStartup(context.Background()))
+	require.Empty(t, fb.List(), "orphan should be skipped, not crash")
+}

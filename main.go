@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,10 +20,16 @@ import (
 	"mosaic/backend/logging"
 	"mosaic/backend/persistence"
 	"mosaic/backend/platform"
+	"mosaic/backend/remote"
+	"mosaic/backend/updater"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+// version is overridden at build time with `-ldflags "-X main.version=v0.7.0"`.
+// Defaults to "dev" so `wails dev` runs cleanly.
+var version = "dev"
 
 func main() {
 	paths, err := platform.Paths("Mosaic")
@@ -89,7 +96,44 @@ func main() {
 	defer scheduleEngine.Close()
 	rssPoller := api.NewRSSPoller(svc, feeds, filters)
 	defer rssPoller.Close()
-	app := NewApp(svc)
+
+	// Optional HTTPS+WS remote interface. Reads its enabled/port/bind state
+	// from settings; restarts whenever SetWebConfig fires the change hook.
+	staticFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		log.Fatal().Err(err).Msg("embed sub frontend/dist")
+	}
+	hub := remote.NewHub()
+	defer hub.Close()
+	remoteSrv := remote.NewServer(svc, hub, remote.NewSessionStore(), staticFS, paths.DataDir)
+	defer remoteSrv.Stop()
+	svc.OnWebConfigChange(remoteSrv.Apply)
+	remoteSrv.Apply(svc.GetWebConfig(ctx))
+
+	app := NewApp(svc, hub)
+
+	// Auto-update: GitHub-backed updater, fan out new releases to both the
+	// Wails desktop session and any connected browser sessions. Schedule only
+	// runs the goroutine when the user hasn't disabled checks in Settings.
+	upd := updater.New(updater.Config{
+		CurrentVersion: version,
+		Source: &updater.GitHubSource{
+			Owner:   "exec",
+			Repo:    "mosaic",
+			Channel: svc.UpdaterChannel(ctx),
+		},
+		OnAvailable: func(info updater.Info) {
+			dto := svc.MakeUpdateInfoDTO(info)
+			if hub != nil {
+				hub.PublishUpdate(dto)
+			}
+			app.NotifyUpdateAvailable(dto)
+		},
+	})
+	svc.AttachUpdater(upd, version)
+	if svc.UpdaterEnabled(ctx) {
+		go upd.Schedule(ctx)
+	}
 
 	err = wails.Run(&options.App{
 		Title:  "Mosaic",

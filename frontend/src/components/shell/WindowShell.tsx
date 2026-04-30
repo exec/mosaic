@@ -1,6 +1,6 @@
 import {Match, Show, Switch, type JSX} from 'solid-js';
 import type {AppView, Density, StatusFilter} from '../../lib/store';
-import type {CategoryDTO, GlobalStatsT, TagDTO, Torrent} from '../../lib/bindings';
+import type {CategoryDTO, GlobalStatsT, TagDTO, Torrent, WebConfigDTO} from '../../lib/bindings';
 import type {SettingsPane} from '../settings/SettingsSidebar';
 import {IconRail} from './IconRail';
 import {FilterRail} from './FilterRail';
@@ -13,6 +13,8 @@ type Props = {
   settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
   onNavigateRSS: () => void;
+  onNavigateSchedule: () => void;
+  onNavigateAbout: () => void;
   torrents: Torrent[];
   filteredTorrents: Torrent[];
   stats: GlobalStatsT;
@@ -35,6 +37,8 @@ type Props = {
   altSpeedActive: boolean;
   onToggleAltSpeed: () => void;
   queuedCount: number;
+  webConfig: WebConfigDTO;
+  onNavigateWebSettings: () => void;
   children: JSX.Element; // the main pane (TorrentList)
   inspector?: JSX.Element;
   settings?: JSX.Element;
@@ -48,6 +52,8 @@ export function WindowShell(props: Props) {
         settingsPane={props.settingsPane}
         onNavigate={props.onNavigate}
         onNavigateRSS={props.onNavigateRSS}
+        onNavigateSchedule={props.onNavigateSchedule}
+        onNavigateAbout={props.onNavigateAbout}
       />
       <div class="flex flex-1 min-w-0 flex-col">
         <div class="flex flex-1 min-h-0">
@@ -90,7 +96,12 @@ export function WindowShell(props: Props) {
           </main>
           <Show when={props.view === 'torrents'}>{props.inspector}</Show>
         </div>
-        <StatusBar stats={props.stats} queuedCount={props.queuedCount} />
+        <StatusBar
+          stats={props.stats}
+          queuedCount={props.queuedCount}
+          webConfig={props.webConfig}
+          onClickWeb={props.onNavigateWebSettings}
+        />
       </div>
     </div>
   );

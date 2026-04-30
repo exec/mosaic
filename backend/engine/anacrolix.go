@@ -156,7 +156,12 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	if err := os.MkdirAll(savePath, 0o755); err != nil {
 		return "", err
 	}
-	t, err := a.client.AddMagnet(magnet)
+	spec, err := torrent.TorrentSpecFromMagnetUri(magnet)
+	if err != nil {
+		return "", err
+	}
+	spec.Storage = storage.NewFile(savePath)
+	t, _, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
 	}
@@ -182,7 +187,9 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	if err != nil {
 		return "", err
 	}
-	t, err := a.client.AddTorrent(mi)
+	spec := torrent.TorrentSpecFromMetaInfo(mi)
+	spec.Storage = storage.NewFile(savePath)
+	t, _, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
 	}

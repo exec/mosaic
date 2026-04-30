@@ -3,17 +3,23 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"mosaic/backend/engine"
 	"mosaic/backend/persistence"
+	"mosaic/backend/remote/cred"
+	"mosaic/backend/updater"
 )
 
 // Service is the only place business logic lives. Wails handlers and (later)
@@ -37,6 +43,12 @@ type Service struct {
 
 	blocklistMu sync.RWMutex
 	blocklist   blocklistState
+
+	webHookMu       sync.RWMutex
+	onWebCfgChanged func(WebConfigDTO)
+
+	updater    *updater.Updater // may be nil if not yet attached
+	appVersion string
 }
 
 // blocklistState is the in-memory snapshot of the most recent successful (or
@@ -85,7 +97,240 @@ const (
 	settingAltActive        = "alt_active"
 	settingBlocklistURL     = "blocklist_url"
 	settingBlocklistEnabled = "blocklist_enabled"
+
+	settingWebEnabled  = "web_enabled"
+	settingWebPort     = "web_port"
+	settingWebBindAll  = "web_bind_all"
+	settingWebUsername = "web_username"
+	settingWebPassHash = "web_password_hash"
+	settingWebAPIKey   = "web_api_key"
+
+	settingUpdaterEnabled         = "updater_enabled"
+	settingUpdaterChannel         = "updater_channel"
+	settingUpdaterLastChecked     = "updater_last_checked_at"
+	settingUpdaterLastSeenVersion = "updater_last_seen_version"
 )
+
+// WebConfigDTO is the transport shape for the optional HTTP+WS interface.
+// APIKey is only populated by RotateAPIKey (shown once); GetWebConfig returns
+// the stored key so the UI can display it after navigation.
+type WebConfigDTO struct {
+	Enabled  bool   `json:"enabled"`
+	Port     int    `json:"port"`
+	BindAll  bool   `json:"bind_all"`
+	Username string `json:"username"`
+	APIKey   string `json:"api_key"`
+}
+
+func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
+	port := s.intSetting(ctx, settingWebPort)
+	if port == 0 {
+		port = 8080
+	}
+	user, _ := s.settings.Get(ctx, settingWebUsername)
+	if user == "" {
+		user = "admin"
+	}
+	key, _ := s.settings.Get(ctx, settingWebAPIKey)
+	return WebConfigDTO{
+		Enabled:  s.boolSetting(ctx, settingWebEnabled),
+		Port:     port,
+		BindAll:  s.boolSetting(ctx, settingWebBindAll),
+		Username: user,
+		APIKey:   key,
+	}
+}
+
+func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
+	if err := s.setBoolSetting(ctx, settingWebEnabled, c.Enabled); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingWebPort, c.Port); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingWebBindAll, c.BindAll); err != nil {
+		return err
+	}
+	if err := s.settings.Set(ctx, settingWebUsername, c.Username); err != nil {
+		return err
+	}
+	s.fireWebConfigChanged(s.GetWebConfig(ctx))
+	return nil
+}
+
+// OnWebConfigChange registers a callback invoked (synchronously) after a
+// SetWebConfig call commits. The callback receives the freshly-read DTO so
+// the remote.Server can restart with the new bind/port/enabled state.
+// Pass nil to unregister.
+func (s *Service) OnWebConfigChange(cb func(WebConfigDTO)) {
+	s.webHookMu.Lock()
+	s.onWebCfgChanged = cb
+	s.webHookMu.Unlock()
+}
+
+func (s *Service) fireWebConfigChanged(c WebConfigDTO) {
+	s.webHookMu.RLock()
+	cb := s.onWebCfgChanged
+	s.webHookMu.RUnlock()
+	if cb != nil {
+		cb(c)
+	}
+}
+
+func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
+	hash, err := cred.HashPassword(plain)
+	if err != nil {
+		return err
+	}
+	return s.settings.Set(ctx, settingWebPassHash, hash)
+}
+
+func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
+	key := cred.RandomToken()
+	if err := s.settings.Set(ctx, settingWebAPIKey, key); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// VerifyWebCredentials returns true if username + password match the stored
+// hash; used by the auth middleware on login.
+func (s *Service) VerifyWebCredentials(ctx context.Context, username, plain string) bool {
+	user, _ := s.settings.Get(ctx, settingWebUsername)
+	hash, _ := s.settings.Get(ctx, settingWebPassHash)
+	if user == "" || hash == "" {
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 {
+		return false
+	}
+	return cred.VerifyPassword(plain, hash)
+}
+
+func (s *Service) VerifyAPIKey(ctx context.Context, key string) bool {
+	stored, _ := s.settings.Get(ctx, settingWebAPIKey)
+	if stored == "" || key == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(stored)) == 1
+}
+
+// UpdaterConfigDTO is the persisted updater preferences shape (channel +
+// enabled toggle + cached last-check metadata for UI display).
+type UpdaterConfigDTO struct {
+	Enabled         bool   `json:"enabled"`
+	Channel         string `json:"channel"`           // "stable" | "beta"
+	LastCheckedAt   int64  `json:"last_checked_at"`   // unix seconds
+	LastSeenVersion string `json:"last_seen_version"`
+}
+
+// UpdateInfoDTO mirrors updater.Info plus CurrentVersion so the UI can render
+// "X → Y" without needing a separate AppVersion call.
+type UpdateInfoDTO struct {
+	Available      bool   `json:"available"`
+	LatestVersion  string `json:"latest_version"`
+	AssetURL       string `json:"asset_url"`
+	AssetFilename  string `json:"asset_filename"`
+	CheckedAt      int64  `json:"checked_at"` // unix seconds
+	CurrentVersion string `json:"current_version"`
+}
+
+// AttachUpdater wires the live *updater.Updater + build-time version into the
+// Service after construction. main.go calls this once at startup; tests can
+// leave it unset to exercise the disabled-updater path.
+func (s *Service) AttachUpdater(u *updater.Updater, version string) {
+	s.updater = u
+	s.appVersion = version
+}
+
+// AppVersion returns the build-time version string the Service was attached
+// with. Empty string if AttachUpdater was never called.
+func (s *Service) AppVersion() string {
+	return s.appVersion
+}
+
+// UpdaterEnabled reports whether the auto-update goroutine should run. The
+// setting defaults to true (if absent in the settings table). Stored as
+// "true" / "false" strings via setBoolSetting.
+func (s *Service) UpdaterEnabled(ctx context.Context) bool {
+	v, err := s.settings.Get(ctx, settingUpdaterEnabled)
+	if err != nil || v == "" {
+		return true
+	}
+	return v == "true"
+}
+
+// UpdaterChannel returns the configured update channel ("stable" by default).
+func (s *Service) UpdaterChannel(ctx context.Context) string {
+	ch, _ := s.settings.Get(ctx, settingUpdaterChannel)
+	if ch == "" {
+		return "stable"
+	}
+	return ch
+}
+
+func (s *Service) GetUpdaterConfig(ctx context.Context) UpdaterConfigDTO {
+	seen, _ := s.settings.Get(ctx, settingUpdaterLastSeenVersion)
+	return UpdaterConfigDTO{
+		Enabled:         s.UpdaterEnabled(ctx),
+		Channel:         s.UpdaterChannel(ctx),
+		LastCheckedAt:   int64(s.intSetting(ctx, settingUpdaterLastChecked)),
+		LastSeenVersion: seen,
+	}
+}
+
+func (s *Service) SetUpdaterConfig(ctx context.Context, c UpdaterConfigDTO) error {
+	if c.Channel != "stable" && c.Channel != "beta" {
+		return fmt.Errorf("channel must be stable or beta")
+	}
+	if err := s.setBoolSetting(ctx, settingUpdaterEnabled, c.Enabled); err != nil {
+		return err
+	}
+	return s.settings.Set(ctx, settingUpdaterChannel, c.Channel)
+}
+
+func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
+	if s.updater == nil {
+		return UpdateInfoDTO{CurrentVersion: s.appVersion}, fmt.Errorf("updater disabled")
+	}
+	info, err := s.updater.Check(ctx)
+	if err != nil {
+		return UpdateInfoDTO{CurrentVersion: s.appVersion}, err
+	}
+	_ = s.setIntSetting(ctx, settingUpdaterLastChecked, int(info.CheckedAt.Unix()))
+	if info.Available {
+		_ = s.settings.Set(ctx, settingUpdaterLastSeenVersion, info.LatestVersion)
+	}
+	return UpdateInfoDTO{
+		Available:      info.Available,
+		LatestVersion:  info.LatestVersion,
+		AssetURL:       info.AssetURL,
+		AssetFilename:  info.AssetFilename,
+		CheckedAt:      info.CheckedAt.Unix(),
+		CurrentVersion: s.appVersion,
+	}, nil
+}
+
+func (s *Service) InstallUpdate(ctx context.Context) error {
+	if s.updater == nil {
+		return fmt.Errorf("updater disabled")
+	}
+	last := s.updater.Last()
+	return s.updater.Install(ctx, last)
+}
+
+// MakeUpdateInfoDTO converts a raw updater.Info to the API DTO. Used by main.go
+// to wrap OnAvailable callback payloads for the WS/Wails event emission.
+func (s *Service) MakeUpdateInfoDTO(info updater.Info) UpdateInfoDTO {
+	return UpdateInfoDTO{
+		Available:      info.Available,
+		LatestVersion:  info.LatestVersion,
+		AssetURL:       info.AssetURL,
+		AssetFilename:  info.AssetFilename,
+		CheckedAt:      info.CheckedAt.Unix(),
+		CurrentVersion: s.appVersion,
+	}
+}
 
 func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {
 	v, err := s.settings.Get(ctx, settingDefaultSavePath)
@@ -203,6 +448,7 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string)
 		Name:     snap.Name,
 		SavePath: savePath,
 		AddedAt:  time.Now(),
+		Metainfo: blob,
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
 	}
@@ -226,6 +472,7 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 		Name:     snap.Name,
 		SavePath: savePath,
 		AddedAt:  time.Now(),
+		Metainfo: blob,
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
 	}
@@ -277,6 +524,15 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 		}
 		out = append(out, dto)
 	}
+	// Stable order — engine.List() iterates anacrolix's internal map (random
+	// per call), which would swap rows on every tick. Sort by added_at desc
+	// (newest first), tie-broken by id so identical-second adds don't flip.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AddedAt != out[j].AddedAt {
+			return out[i].AddedAt > out[j].AddedAt
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 
@@ -832,15 +1088,37 @@ func countLines(b []byte) int {
 	return n
 }
 
-// RestoreOnStartup hydrates engine + scheduler limits from persisted settings.
-// Call this once after constructing the Service so the fresh process picks up
-// what the user configured last time.
+// RestoreOnStartup hydrates engine + scheduler limits from persisted settings
+// AND re-adds every persisted torrent to the engine so prior-session downloads
+// resume on next launch. Call this once after constructing the Service.
 func (s *Service) RestoreOnStartup(ctx context.Context) error {
 	q := s.GetQueueLimits(ctx)
 	if s.scheduler != nil {
 		s.scheduler.SetLimits(q.MaxActiveDownloads, q.MaxActiveSeeds)
 	}
-	return s.applyLimits(ctx)
+	if err := s.applyLimits(ctx); err != nil {
+		return err
+	}
+
+	records, err := s.torrents.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list persisted torrents: %w", err)
+	}
+	for _, r := range records {
+		switch {
+		case len(r.Metainfo) > 0:
+			if _, err := s.engine.AddFile(ctx, r.Metainfo, r.SavePath); err != nil {
+				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add file torrent failed")
+			}
+		case r.Magnet != "":
+			if _, err := s.engine.AddMagnet(ctx, r.Magnet, r.SavePath); err != nil {
+				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add magnet failed")
+			}
+		default:
+			log.Warn().Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: skipping orphan record (no magnet, no metainfo)")
+		}
+	}
+	return nil
 }
 
 func (s *Service) intSetting(ctx context.Context, key string) int {

@@ -94,6 +94,14 @@ Section
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
 
+    # Register Mosaic as a magnet: URL handler. Always-on (no separate
+    # components page in this installer); paired with the DeleteRegKey in the
+    # uninstall section below.
+    WriteRegStr HKCR "magnet" "" "URL:Magnet Protocol"
+    WriteRegStr HKCR "magnet" "URL Protocol" ""
+    WriteRegStr HKCR "magnet\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXECUTABLE},0"
+    WriteRegStr HKCR "magnet\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXECUTABLE}" "%1"'
+
     !insertmacro wails.writeUninstaller
 SectionEnd
 
@@ -109,6 +117,9 @@ Section "uninstall"
 
     !insertmacro wails.unassociateFiles
     !insertmacro wails.unassociateCustomProtocols
+
+    # Clean up magnet handler registry entries.
+    DeleteRegKey HKCR "magnet"
 
     !insertmacro wails.deleteUninstaller
 SectionEnd

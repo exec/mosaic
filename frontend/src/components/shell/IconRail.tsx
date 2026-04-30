@@ -1,20 +1,19 @@
 import {For, type Component} from 'solid-js';
-import {Activity, Search, Calendar, Rss, Settings, Info} from 'lucide-solid';
+import {Activity, Calendar, Rss, Settings, Info} from 'lucide-solid';
 import {Tooltip} from '../ui/Tooltip';
 import type {AppView} from '../../lib/store';
 import type {SettingsPane} from '../settings/SettingsSidebar';
 
-type Item = {id: string; label: string; icon: typeof Activity; soon?: string};
+type Item = {id: string; label: string; icon: typeof Activity};
 
 const top: Item[] = [
   {id: 'torrents', label: 'Torrents', icon: Activity},
-  {id: 'search',   label: 'Search',   icon: Search,   soon: 'Plan 5+'},
-  {id: 'schedule', label: 'Schedule', icon: Calendar, soon: 'Plan 4c'},
+  {id: 'schedule', label: 'Schedule', icon: Calendar},
   {id: 'rss',      label: 'RSS',      icon: Rss},
 ];
 const bottom: Item[] = [
   {id: 'settings', label: 'Settings', icon: Settings},
-  {id: 'about',    label: 'About',    icon: Info,     soon: 'soon'},
+  {id: 'about',    label: 'About',    icon: Info},
 ];
 
 type Props = {
@@ -22,31 +21,37 @@ type Props = {
   settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
   onNavigateRSS: () => void;
+  onNavigateSchedule: () => void;
+  onNavigateAbout: () => void;
 };
 
 export function IconRail(props: Props) {
   const isActive = (id: string): boolean => {
     if (id === 'rss') return props.view === 'settings' && props.settingsPane === 'rss';
-    if (id === 'settings') return props.view === 'settings' && props.settingsPane !== 'rss';
+    if (id === 'schedule') return props.view === 'settings' && props.settingsPane === 'schedule';
+    if (id === 'about') return props.view === 'settings' && props.settingsPane === 'about';
+    if (id === 'settings') {
+      return props.view === 'settings' && !['rss', 'schedule', 'about'].includes(props.settingsPane);
+    }
     return props.view === id;
   };
 
   const Btn: Component<{item: Item}> = (p) => (
-    <Tooltip label={p.item.soon ? `${p.item.label} — coming ${p.item.soon}` : p.item.label} placement="right">
+    <Tooltip label={p.item.label} placement="right">
       <button
         type="button"
-        disabled={!!p.item.soon}
         onClick={() => {
-          if (p.item.soon) return;
-          if (p.item.id === 'rss') {
-            props.onNavigateRSS();
-            return;
-          }
-          if (p.item.id === 'torrents' || p.item.id === 'settings') {
-            props.onNavigate(p.item.id as AppView);
+          switch (p.item.id) {
+            case 'rss':      props.onNavigateRSS(); return;
+            case 'schedule': props.onNavigateSchedule(); return;
+            case 'about':    props.onNavigateAbout(); return;
+            case 'torrents':
+            case 'settings':
+              props.onNavigate(p.item.id as AppView);
+              return;
           }
         }}
-        class="relative grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-colors duration-150 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default disabled:hover:text-zinc-500"
+        class="relative grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-colors duration-150 hover:text-zinc-200"
         classList={{'!text-zinc-100': isActive(p.item.id)}}
       >
         <p.item.icon class="h-4 w-4" />
