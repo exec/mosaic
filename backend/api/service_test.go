@@ -470,3 +470,69 @@ func TestInstallUpdate_NoUpdater(t *testing.T) {
 	svc, _ := newTestService(t)
 	require.Error(t, svc.InstallUpdate(context.Background()))
 }
+
+// serviceWithDB lets two Service instances share one DB file across the test
+// (to simulate a process restart).
+func serviceWithDB(t *testing.T, dbPath string) (*Service, *engine.FakeBackend) {
+	t.Helper()
+	db, err := persistence.Open(context.Background(), dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	fb := engine.NewFakeBackend()
+	eng := engine.NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+	return NewService(eng,
+		persistence.NewTorrents(db),
+		persistence.NewCategories(db),
+		persistence.NewTags(db),
+		persistence.NewSettings(db),
+		persistence.NewScheduleRules(db),
+		persistence.NewFeeds(db),
+		persistence.NewFilters(db),
+		nil,
+		"/tmp/dl"), fb
+}
+
+func TestRestoreOnStartup_ReAddsPersistedMagnet(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+
+	// Session 1: add a magnet + persist it.
+	svc1, fb1 := serviceWithDB(t, dbPath)
+	_, err := svc1.AddMagnet(context.Background(), "magnet:?xt=urn:btih:abc", "")
+	require.NoError(t, err)
+	require.Len(t, fb1.List(), 1)
+
+	// Session 2: fresh engine (empty), same DB. Restore should re-add.
+	svc2, fb2 := serviceWithDB(t, dbPath)
+	require.Empty(t, fb2.List(), "fresh engine starts empty")
+	require.NoError(t, svc2.RestoreOnStartup(context.Background()))
+	require.Len(t, fb2.List(), 1, "magnet torrent should be re-added")
+}
+
+func TestRestoreOnStartup_ReAddsPersistedFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+
+	svc1, fb1 := serviceWithDB(t, dbPath)
+	// FakeBackend.AddFile records the bytes verbatim; any non-empty blob suffices.
+	_, err := svc1.AddTorrentBytes(context.Background(), []byte("fake-torrent-bytes"), "")
+	require.NoError(t, err)
+	require.Len(t, fb1.List(), 1)
+
+	svc2, fb2 := serviceWithDB(t, dbPath)
+	require.Empty(t, fb2.List())
+	require.NoError(t, svc2.RestoreOnStartup(context.Background()))
+	require.Len(t, fb2.List(), 1, "file-added torrent should be re-added via persisted metainfo")
+}
+
+func TestRestoreOnStartup_SkipsOrphanRecord(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+	svc, fb := serviceWithDB(t, dbPath)
+
+	// Insert a record with neither magnet nor metainfo (the pre-fix legacy state).
+	require.NoError(t, svc.torrents.Save(context.Background(), persistence.TorrentRecord{
+		InfoHash: "deadbeef", Name: "orphan", SavePath: "/tmp/dl", AddedAt: time.Now(),
+	}))
+
+	require.NoError(t, svc.RestoreOnStartup(context.Background()))
+	require.Empty(t, fb.List(), "orphan should be skipped, not crash")
+}

@@ -19,6 +19,9 @@ type TorrentRecord struct {
 	Paused        bool
 	QueuePosition int // 0 = top
 	ForceStart    bool
+	// Metainfo is the raw .torrent file bytes for file-added torrents. Empty
+	// for magnet-only adds (the magnet URI itself is enough to round-trip).
+	Metainfo []byte
 }
 
 // Torrents is the DAO for the torrents table.
@@ -48,8 +51,8 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 		forceStart = 1
 	}
 	_, err := t.db.SQL().ExecContext(ctx, `
-INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(infohash) DO UPDATE SET
   name = excluded.name,
   magnet = excluded.magnet,
@@ -59,15 +62,23 @@ ON CONFLICT(infohash) DO UPDATE SET
   completed_at = excluded.completed_at,
   paused = excluded.paused,
   queue_position = excluded.queue_position,
-  force_start = excluded.force_start
-`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart)
+  force_start = excluded.force_start,
+  metainfo = COALESCE(excluded.metainfo, torrents.metainfo)
+`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo))
 	return err
+}
+
+func nullableBytes(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
 }
 
 // Get returns a single record by infohash.
 func (t *Torrents) Get(ctx context.Context, infohash string) (TorrentRecord, error) {
 	row := t.db.SQL().QueryRowContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo
 FROM torrents WHERE infohash = ?`, infohash)
 	return scanTorrent(row)
 }
@@ -75,7 +86,7 @@ FROM torrents WHERE infohash = ?`, infohash)
 // List returns all records ordered by added_at descending.
 func (t *Torrents) List(ctx context.Context) ([]TorrentRecord, error) {
 	rows, err := t.db.SQL().QueryContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo
 FROM torrents ORDER BY added_at DESC`)
 	if err != nil {
 		return nil, err
@@ -138,7 +149,8 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	var categoryID sql.NullInt64
 	var paused int
 	var forceStart int
-	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart); err != nil {
+	var metainfo []byte
+	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return r, ErrNotFound
 		}
@@ -155,5 +167,6 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	}
 	r.Paused = paused == 1
 	r.ForceStart = forceStart == 1
+	r.Metainfo = metainfo
 	return r, nil
 }

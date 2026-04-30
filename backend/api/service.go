@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"mosaic/backend/engine"
 	"mosaic/backend/persistence"
 	"mosaic/backend/remote/cred"
@@ -445,6 +447,7 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string)
 		Name:     snap.Name,
 		SavePath: savePath,
 		AddedAt:  time.Now(),
+		Metainfo: blob,
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
 	}
@@ -468,6 +471,7 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 		Name:     snap.Name,
 		SavePath: savePath,
 		AddedAt:  time.Now(),
+		Metainfo: blob,
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
 	}
@@ -1074,15 +1078,37 @@ func countLines(b []byte) int {
 	return n
 }
 
-// RestoreOnStartup hydrates engine + scheduler limits from persisted settings.
-// Call this once after constructing the Service so the fresh process picks up
-// what the user configured last time.
+// RestoreOnStartup hydrates engine + scheduler limits from persisted settings
+// AND re-adds every persisted torrent to the engine so prior-session downloads
+// resume on next launch. Call this once after constructing the Service.
 func (s *Service) RestoreOnStartup(ctx context.Context) error {
 	q := s.GetQueueLimits(ctx)
 	if s.scheduler != nil {
 		s.scheduler.SetLimits(q.MaxActiveDownloads, q.MaxActiveSeeds)
 	}
-	return s.applyLimits(ctx)
+	if err := s.applyLimits(ctx); err != nil {
+		return err
+	}
+
+	records, err := s.torrents.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list persisted torrents: %w", err)
+	}
+	for _, r := range records {
+		switch {
+		case len(r.Metainfo) > 0:
+			if _, err := s.engine.AddFile(ctx, r.Metainfo, r.SavePath); err != nil {
+				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add file torrent failed")
+			}
+		case r.Magnet != "":
+			if _, err := s.engine.AddMagnet(ctx, r.Magnet, r.SavePath); err != nil {
+				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add magnet failed")
+			}
+		default:
+			log.Warn().Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: skipping orphan record (no magnet, no metainfo)")
+		}
+	}
+	return nil
 }
 
 func (s *Service) intSetting(ctx context.Context, key string) int {
