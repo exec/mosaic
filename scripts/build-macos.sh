@@ -24,9 +24,12 @@ cd "${ROOT}"
 echo "==> build frontend first so main.go's go:embed has its target"
 (cd frontend && npm run build)
 
-echo "==> prime module cache (wails's go/packages analysis fails on cold cache)"
+echo "==> prime module cache"
+# Just download — actually compiling here produced a stray ./mosaic binary at
+# repo root that ate enough disk on macos-14 runners (~14GB free) to fail
+# 'hdiutil create' downstream three times in a row. -skipembedcreate on the
+# wails build below dodges the original go/packages choke this was added for.
 go mod download
-go build ./...
 
 echo "==> wails build (universal)"
 # -skipembedcreate dodges wails's go/packages pre-analysis which chokes on

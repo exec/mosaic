@@ -12,7 +12,6 @@ echo "==> build frontend first so main.go's go:embed has its target"
 
 echo "==> prime module cache"
 go mod download
-go build ./...
 
 echo "==> wails build linux/amd64"
 wails build \

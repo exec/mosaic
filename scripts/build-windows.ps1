@@ -28,8 +28,6 @@ if ($rc -ne 0) { throw "frontend build failed" }
 Write-Host "==> prime module cache"
 go mod download
 if ($LASTEXITCODE -ne 0) { throw "go mod download failed" }
-go build ./...
-if ($LASTEXITCODE -ne 0) { throw "go build prime failed" }
 
 Write-Host "==> wails build windows/amd64"
 # CGO_ENABLED=0 produces a self-contained .exe — without it the build links
