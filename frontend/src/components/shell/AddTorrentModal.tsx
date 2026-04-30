@@ -212,20 +212,6 @@ export function AddTorrentModal(props: Props) {
                     </div>
                   </Show>
 
-                  <div class="flex flex-col gap-1.5 text-xs text-zinc-500">
-                    <label class="inline-flex items-center gap-2">
-                      <input type="checkbox" checked disabled class="accent-accent-500" />
-                      <span>Start torrent immediately</span>
-                    </label>
-                    <label class="inline-flex items-center gap-2 opacity-50">
-                      <input type="checkbox" disabled />
-                      <span>Skip hash check (Plan 4b)</span>
-                    </label>
-                    <label class="inline-flex items-center gap-2 opacity-50">
-                      <input type="checkbox" disabled />
-                      <span>Sequential download (Plan 4b)</span>
-                    </label>
-                  </div>
                 </div>
               </section>
 

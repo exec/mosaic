@@ -1,7 +1,6 @@
-import {Search, Magnet, FileDown, LayoutGrid, List, Zap, Settings} from 'lucide-solid';
+import {Search, Magnet, FileDown, LayoutGrid, List, Zap} from 'lucide-solid';
 import {Button} from '../ui/Button';
 import {Tooltip} from '../ui/Tooltip';
-import {ThemeToggle} from '../theme/ThemeToggle';
 import type {Density} from '../../lib/store';
 
 type Props = {
@@ -77,14 +76,6 @@ export function TopToolbar(props: Props) {
               <List class="h-3 w-3" />
             </button>
           </div>
-        </Tooltip>
-
-        <ThemeToggle />
-
-        <Tooltip label="Settings">
-          <button class="grid h-7 w-7 place-items-center rounded-md text-zinc-400 hover:bg-white/[.04] hover:text-zinc-100" disabled>
-            <Settings class="h-3.5 w-3.5" />
-          </button>
         </Tooltip>
       </div>
     </header>
