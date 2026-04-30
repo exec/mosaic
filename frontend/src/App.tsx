@@ -2,7 +2,9 @@ import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents} from './lib/store';
 import {api} from './lib/bindings';
+import {isWailsRuntime} from './lib/runtime';
 import {ThemeProvider} from './components/theme/ThemeProvider';
+import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
 import {WindowShell} from './components/shell/WindowShell';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
 import {UpdateToast} from './components/shell/UpdateToast';
@@ -12,6 +14,20 @@ import {SettingsRoute} from './components/settings/SettingsRoute';
 import './index.css';
 
 export default function App() {
+  if (isWailsRuntime()) {
+    return <ThemeProvider><Toaster position="bottom-right" toastOptions={{style: {background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(255,255,255,0.1)', color: '#e7e7e9', 'backdrop-filter': 'blur(12px)'}}} /><AuthenticatedApp /></ThemeProvider>;
+  }
+  return (
+    <ThemeProvider>
+      <Toaster position="bottom-right" toastOptions={{style: {background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(255,255,255,0.1)', color: '#e7e7e9', 'backdrop-filter': 'blur(12px)'}}} />
+      <BrowserAuthGate>
+        <AuthenticatedApp />
+      </BrowserAuthGate>
+    </ThemeProvider>
+  );
+}
+
+function AuthenticatedApp() {
   const store = createTorrentsStore();
   const [addModalOpen, setAddModalOpen] = createSignal(false);
   const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
@@ -112,7 +128,7 @@ export default function App() {
   });
 
   return (
-    <ThemeProvider>
+    <>
       <WindowShell
         view={store.state.view}
         settingsPane={store.state.settingsPane}
@@ -287,17 +303,6 @@ export default function App() {
         onInstall={() => { store.setView('settings'); store.setSettingsPane('updates'); }}
         onDismiss={() => {}}
       />
-      <Toaster
-        position="bottom-right"
-        toastOptions={{
-          style: {
-            background: 'rgba(24, 24, 27, 0.95)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            color: '#e7e7e9',
-            'backdrop-filter': 'blur(12px)',
-          },
-        }}
-      />
-    </ThemeProvider>
+    </>
   );
 }

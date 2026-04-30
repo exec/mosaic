@@ -232,6 +232,8 @@ export const api = {
   checkForUpdate: () => transport.invoke<UpdateInfoDTO>('CheckForUpdate'),
   installUpdate: () => transport.invoke<void>('InstallUpdate'),
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
+  login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
+  logout: () => transport.invoke<void>('Logout'),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {
