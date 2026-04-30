@@ -78,9 +78,11 @@ func (s *GitHubSource) lazyInit() (*selfupdate.Updater, error) {
 		// Mach-O binary), NOT the .dmg. The .dmg is an HFS+ disk image —
 		// go-selfupdate can't unwrap it; if you point it at a .dmg, the lib
 		// blindly writes those bytes over the running Mach-O and bricks the
-		// app on next launch ("not supported on this Mac"). The .tar.gz
-		// inner filename matches what the lib expects after stripping
-		// .tar.gz, so its decompressor extracts the binary correctly.
+		// app on next launch ("not supported on this Mac"). The inner file
+		// inside the .tar.gz must be named exactly "mosaic" (lowercase) so
+		// the lib's case-sensitive matchExecutableName matches against
+		// filepath.Base(cmdPath) — see scripts/build-macos.sh and
+		// TestUpdaterTarballMatchesLibContract for the contract.
 		cfg.UniversalArch = "universal"
 		cfg.Filters = []string{`darwin-universal\.tar\.gz$`}
 	case "linux":

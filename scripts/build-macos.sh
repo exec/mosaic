@@ -110,12 +110,18 @@ fi
 
 # Auto-update tarball — go-selfupdate's binary swap can't unwrap a .dmg
 # (it's a disk image, not an archive). Ship a .tar.gz containing just the
-# universal Mach-O binary, named to match what go-selfupdate expects after
-# stripping the .tar.gz extension. Used by Plan-7 auto-update on macOS;
-# fresh installs still go through the .dmg.
+# universal Mach-O binary; fresh installs still go through the .dmg.
+#
+# Inner filename MUST match the lib's case-sensitive matcher in
+# decompress.go:matchExecutableName — it derives cmd from filepath.Base of
+# the running binary (i.e. lowercase "mosaic" on disk inside the .app) and
+# its regex is `^<cmd>([_-]v?<ver>)?([_-]<os>[_-]<arch>)?(\.exe)?$`. So
+# "mosaic" matches; "Mosaic-v0.1.22-darwin-universal" does NOT (capital M).
+# Earlier releases shipped the capital-M form and broke auto-update with
+# "executable not found in tar: \"mosaic\"" — fixed here.
 TAR_OUT="${BIN_DIR}/Mosaic-${VERSION}-darwin-universal.tar.gz"
 TAR_TMP="$(mktemp -d)"
-INNER="Mosaic-${VERSION}-darwin-universal"
+INNER="mosaic"
 cp "${APP}/Contents/MacOS/mosaic" "${TAR_TMP}/${INNER}"
 chmod +x "${TAR_TMP}/${INNER}"
 tar -czf "${TAR_OUT}" -C "${TAR_TMP}" "${INNER}"
