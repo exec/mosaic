@@ -1,3 +1,5 @@
+//go:build darwin
+
 // macOS Apple Event handler bridge.
 //
 // Finder file-open ('Open With Mosaic') and browser magnet:// clicks both

@@ -1,3 +1,5 @@
+//go:build darwin
+
 #ifndef MOSAIC_MACOS_APPLEEVENTS_H
 #define MOSAIC_MACOS_APPLEEVENTS_H
 
