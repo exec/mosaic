@@ -12,6 +12,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/menu"
+	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
@@ -221,18 +223,23 @@ func main() {
 		go upd.Schedule(ctx)
 	}
 
-	// Close-to-tray: on Linux/Windows, when the user has both
-	// desktop.tray_enabled AND desktop.close_to_tray on, the X-button hides
-	// the window instead of quitting. macOS keeps its native
-	// hide-window-on-close convention (the Wails Mac options handle it).
-	// The tray's "Quit Mosaic" item bypasses this hook by setting
-	// app.quitFully via QuitFully() before calling runtime.Quit.
+	// Close-to-tray on Linux/Windows is gated on desktop.tray_enabled +
+	// desktop.close_to_tray. On macOS we ALWAYS hide instead of quit when
+	// the user clicks the red X — that's the platform convention (app stays
+	// in the Dock; user clicks the Dock icon to bring the window back), and
+	// Wails's default of "terminate when last window closes" is wrong here.
+	// The mosaicMenu below routes Cmd+Q through QuitFully() which sets the
+	// bypass flag so the actual quit goes through; the tray's "Quit Mosaic"
+	// item does the same on Linux/Windows.
 	onBeforeClose := func(_ context.Context) (prevent bool) {
 		if app.QuittingFully() {
 			return false
 		}
 		if goruntime.GOOS == "darwin" {
-			return false
+			if app.ctx != nil {
+				wailsruntime.WindowHide(app.ctx)
+			}
+			return true
 		}
 		cfg := svc.GetDesktopIntegration(ctx)
 		if !cfg.TrayEnabled || !cfg.CloseToTray {
@@ -242,6 +249,29 @@ func main() {
 			wailsruntime.WindowHide(app.ctx)
 		}
 		return true
+	}
+
+	// macOS-only menu. Wails terminates on last-window-close by default and
+	// its built-in Cmd+Q goes through runtime.Quit without our bypass flag,
+	// so under the always-hide-on-X policy above the user would have no way
+	// to quit. Replace the menu so Cmd+Q calls QuitFully (which sets the
+	// flag, then runtime.Quit, so OnBeforeClose returns false and quit
+	// actually proceeds). EditMenu re-supplies the standard Cmd+C/V/X/A/Z
+	// shortcuts that we lose by setting our own menu.
+	var appMenu *menu.Menu
+	if goruntime.GOOS == "darwin" {
+		appMenu = menu.NewMenu()
+		mosaicMenu := appMenu.AddSubmenu("Mosaic")
+		mosaicMenu.AddText("Hide Mosaic", keys.CmdOrCtrl("h"), func(_ *menu.CallbackData) {
+			if app.ctx != nil {
+				wailsruntime.WindowHide(app.ctx)
+			}
+		})
+		mosaicMenu.AddSeparator()
+		mosaicMenu.AddText("Quit Mosaic", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
+			app.QuitFully()
+		})
+		appMenu.Append(menu.EditMenu())
 	}
 
 	opts := &options.App{
@@ -261,6 +291,7 @@ func main() {
 			Appearance: mac.NSAppearanceNameDarkAqua,
 		},
 		OnBeforeClose: onBeforeClose,
+		Menu:          appMenu,
 		// SingleInstanceLock: when the user double-clicks a .torrent or follows
 		// a magnet: URL while Mosaic is already open, the OS launches a second
 		// process; this callback forwards its args to the running instance and
