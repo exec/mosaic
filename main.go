@@ -12,8 +12,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/menu"
-	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
@@ -224,22 +222,19 @@ func main() {
 	}
 
 	// Close-to-tray on Linux/Windows is gated on desktop.tray_enabled +
-	// desktop.close_to_tray. On macOS we ALWAYS hide instead of quit when
-	// the user clicks the red X — that's the platform convention (app stays
-	// in the Dock; user clicks the Dock icon to bring the window back), and
-	// Wails's default of "terminate when last window closes" is wrong here.
-	// The mosaicMenu below routes Cmd+Q through QuitFully() which sets the
-	// bypass flag so the actual quit goes through; the tray's "Quit Mosaic"
-	// item does the same on Linux/Windows.
+	// desktop.close_to_tray. On macOS we set HideWindowOnClose: true below,
+	// which routes the X button through Wails's WindowDelegate to
+	// [NSApp hide:nil] — hides the whole app like Cmd+H. Dock click then
+	// auto-unhides (system behavior), so reopen "just works" without an
+	// applicationShouldHandleReopen handler. OnBeforeClose only fires from
+	// Cmd+Q / dock right-click → Quit on darwin, both of which we want to
+	// honor — return false so Wails proceeds with termination.
 	onBeforeClose := func(_ context.Context) (prevent bool) {
 		if app.QuittingFully() {
 			return false
 		}
 		if goruntime.GOOS == "darwin" {
-			if app.ctx != nil {
-				wailsruntime.WindowHide(app.ctx)
-			}
-			return true
+			return false
 		}
 		cfg := svc.GetDesktopIntegration(ctx)
 		if !cfg.TrayEnabled || !cfg.CloseToTray {
@@ -251,29 +246,6 @@ func main() {
 		return true
 	}
 
-	// macOS-only menu. Wails terminates on last-window-close by default and
-	// its built-in Cmd+Q goes through runtime.Quit without our bypass flag,
-	// so under the always-hide-on-X policy above the user would have no way
-	// to quit. Replace the menu so Cmd+Q calls QuitFully (which sets the
-	// flag, then runtime.Quit, so OnBeforeClose returns false and quit
-	// actually proceeds). EditMenu re-supplies the standard Cmd+C/V/X/A/Z
-	// shortcuts that we lose by setting our own menu.
-	var appMenu *menu.Menu
-	if goruntime.GOOS == "darwin" {
-		appMenu = menu.NewMenu()
-		mosaicMenu := appMenu.AddSubmenu("Mosaic")
-		mosaicMenu.AddText("Hide Mosaic", keys.CmdOrCtrl("h"), func(_ *menu.CallbackData) {
-			if app.ctx != nil {
-				wailsruntime.WindowHide(app.ctx)
-			}
-		})
-		mosaicMenu.AddSeparator()
-		mosaicMenu.AddText("Quit Mosaic", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
-			app.QuitFully()
-		})
-		appMenu.Append(menu.EditMenu())
-	}
-
 	opts := &options.App{
 		Title:  "Mosaic",
 		Width:  1200,
@@ -283,6 +255,12 @@ func main() {
 		// load — only the OS window is hidden until the user opens it from
 		// the tray.
 		StartHidden: desktopCfg.StartMinimized && desktopCfg.TrayEnabled && goruntime.GOOS != "darwin",
+		// On macOS, X button hides the app (Cmd+H equivalent) at the AppKit
+		// layer instead of triggering OnBeforeClose. Dock-click auto-unhides.
+		// Cmd+Q and dock right-click → Quit still terminate cleanly via the
+		// default Wails app menu → applicationShouldTerminate → OnBeforeClose
+		// (which returns false on darwin per the hook above).
+		HideWindowOnClose: goruntime.GOOS == "darwin",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -291,7 +269,6 @@ func main() {
 			Appearance: mac.NSAppearanceNameDarkAqua,
 		},
 		OnBeforeClose: onBeforeClose,
-		Menu:          appMenu,
 		// SingleInstanceLock: when the user double-clicks a .torrent or follows
 		// a magnet: URL while Mosaic is already open, the OS launches a second
 		// process; this callback forwards its args to the running instance and
