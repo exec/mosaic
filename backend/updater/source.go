@@ -75,9 +75,12 @@ func (s *GitHubSource) lazyInit() (*selfupdate.Updater, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		// macOS ships a universal .dmg; runtime.GOARCH is arm64 or amd64 but
-		// the asset is "darwin-universal". UniversalArch tells the lib to fall
-		// back to that token when the arch-specific match fails.
+		// the asset is "darwin-universal". UniversalArch alone proved
+		// insufficient in v0.1.9 testing (lib's default darwin matcher didn't
+		// pick up our .dmg) — pin the asset with an explicit filter, same
+		// pattern as linux/windows below.
 		cfg.UniversalArch = "universal"
+		cfg.Filters = []string{`darwin-universal\.dmg$`}
 	case "linux":
 		// We publish .deb + .rpm + .AppImage; only the AppImage is a single
 		// self-contained ELF the lib can swap with the running binary.

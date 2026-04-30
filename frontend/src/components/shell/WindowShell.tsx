@@ -49,6 +49,16 @@ type Props = {
 export function WindowShell(props: Props) {
   return (
     <div class="relative flex h-full">
+      {/* Always-on drag strip across the top. pointer-events:none so clicks
+          pass through to whatever's below (toolbar buttons / settings sidebar
+          headers). On Windows we stop short of the WindowControls overlay. */}
+      <div
+        class="pointer-events-none absolute left-0 top-0 z-30 h-7"
+        style={{
+          'right': props.isWindows ? '138px' : '0',
+          '-webkit-app-region': 'drag',
+        }}
+      />
       <IconRail
         view={props.view}
         settingsPane={props.settingsPane}

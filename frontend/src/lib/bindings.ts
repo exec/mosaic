@@ -255,3 +255,16 @@ export function onInspectorTick(handler: (detail: DetailDTO) => void): () => voi
 export function onUpdateAvailable(handler: (info: UpdateInfoDTO) => void): () => void {
   return transport.on('update:available', handler);
 }
+
+export type LaunchNotice = {
+  event: 'received' | 'magnet_added' | 'magnet_error' | 'torrent_added' | 'torrent_error';
+  count?: number;
+  args?: string[];
+  id?: string;
+  path?: string;
+  error?: string;
+};
+
+export function onLaunchNotice(handler: (n: LaunchNotice) => void): () => void {
+  return transport.on('launch:notice', handler);
+}

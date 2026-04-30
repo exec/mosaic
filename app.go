@@ -45,23 +45,44 @@ func (a *App) startup(ctx context.Context) {
 // path and routes it to the engine. Unknown args are silently ignored
 // (Wails or the OS may pass internal flags we don't care about).
 // Exported so main.go's SingleInstanceLock OnSecondInstanceLaunch can call it.
+//
+// Each invocation emits a `launch:notice` Wails event with the outcome so the
+// SPA can toast immediately — useful both as user feedback and as a
+// diagnostic when file-association routing seems silent.
 func (a *App) HandleLaunchArgs(args []string) {
+	log.Info().Strs("args", args).Msg("HandleLaunchArgs invoked")
+	a.emitLaunchNotice(map[string]any{"event": "received", "count": len(args), "args": args})
 	for _, arg := range args {
 		switch {
 		case strings.HasPrefix(arg, "magnet:"):
-			if _, err := a.svc.AddMagnet(a.ctx, arg, ""); err != nil {
+			id, err := a.svc.AddMagnet(a.ctx, arg, "")
+			if err != nil {
 				log.Warn().Err(err).Msg("launch arg: AddMagnet failed")
-			} else {
-				log.Info().Str("magnet", arg).Msg("added magnet from launch arg")
+				a.emitLaunchNotice(map[string]any{"event": "magnet_error", "error": err.Error(), "magnet": arg})
+				continue
 			}
+			log.Info().Str("magnet", arg).Str("id", string(id)).Msg("added magnet from launch arg")
+			a.emitLaunchNotice(map[string]any{"event": "magnet_added", "id": string(id)})
 		case strings.HasSuffix(strings.ToLower(arg), ".torrent"):
-			if _, err := a.svc.AddTorrentFile(a.ctx, arg, ""); err != nil {
+			id, err := a.svc.AddTorrentFile(a.ctx, arg, "")
+			if err != nil {
 				log.Warn().Err(err).Str("path", arg).Msg("launch arg: AddTorrentFile failed")
-			} else {
-				log.Info().Str("path", arg).Msg("added .torrent from launch arg")
+				a.emitLaunchNotice(map[string]any{"event": "torrent_error", "error": err.Error(), "path": arg})
+				continue
 			}
+			log.Info().Str("path", arg).Str("id", string(id)).Msg("added .torrent from launch arg")
+			a.emitLaunchNotice(map[string]any{"event": "torrent_added", "id": string(id), "path": arg})
+		default:
+			log.Debug().Str("arg", arg).Msg("launch arg: ignored (not a magnet: or .torrent)")
 		}
 	}
+}
+
+func (a *App) emitLaunchNotice(payload map[string]any) {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.EventsEmit(a.ctx, "launch:notice", payload)
 }
 
 // AddMagnet adds a magnet link. Returns the torrent ID.

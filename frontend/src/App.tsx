@@ -1,7 +1,7 @@
 import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents} from './lib/store';
-import {api} from './lib/bindings';
+import {api, onLaunchNotice} from './lib/bindings';
 import {isWailsRuntime} from './lib/runtime';
 import {ThemeProvider} from './components/theme/ThemeProvider';
 import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
@@ -41,6 +41,21 @@ function AuthenticatedApp() {
     if (!isWailsRuntime()) return;
     try { setPlatform(await api.platform()); } catch (err) { console.error(err); }
   });
+
+  // Surface launch-arg outcomes (magnet click in browser → OS launches Mosaic
+  // with the URL; double-click .torrent in Explorer/Finder → OS launches
+  // Mosaic with the path) as toasts so the user sees feedback even if the
+  // torrents:tick hasn't refreshed yet.
+  const offLaunch = onLaunchNotice((n) => {
+    switch (n.event) {
+      case 'magnet_added':  toast.success('Magnet added from launch'); break;
+      case 'torrent_added': toast.success(`Added ${n.path ?? '.torrent'}`); break;
+      case 'magnet_error':  toast.error(`Magnet failed: ${n.error}`); break;
+      case 'torrent_error': toast.error(`Torrent failed: ${n.error}`); break;
+      // 'received' is debug-only; don't toast it.
+    }
+  });
+  onCleanup(() => offLaunch());
 
   const applyOrganization = async (id: string, categoryID: number | null, tagIDs: number[]) => {
     if (categoryID !== null) {
