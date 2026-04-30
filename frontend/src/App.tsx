@@ -27,6 +27,15 @@ export default function App() {
   );
 }
 
+// userErr trims an unknown thrown value to a one-line user-friendly message.
+// Strips the noisy 'Error: ' prefix the platform adds and clamps long stacks
+// so an unbounded backend error doesn't blow up the toast.
+function userErr(e: unknown): string {
+  const s = e instanceof Error ? e.message : String(e);
+  const trimmed = s.replace(/^Error:\s*/, '').trim();
+  return trimmed.length > 200 ? trimmed.slice(0, 197) + '…' : trimmed;
+}
+
 function AuthenticatedApp() {
   const store = createTorrentsStore();
   const [addModalOpen, setAddModalOpen] = createSignal(false);
@@ -48,10 +57,10 @@ function AuthenticatedApp() {
   // torrents:tick hasn't refreshed yet.
   const offLaunch = onLaunchNotice((n) => {
     switch (n.event) {
-      case 'magnet_added':  toast.success('Magnet added from launch'); break;
-      case 'torrent_added': toast.success(`Added ${n.path ?? '.torrent'}`); break;
-      case 'magnet_error':  toast.error(`Magnet failed: ${n.error}`); break;
-      case 'torrent_error': toast.error(`Torrent failed: ${n.error}`); break;
+      case 'magnet_added':  toast.success('Magnet added'); break;
+      case 'torrent_added': toast.success('Torrent added'); break;
+      case 'magnet_error':  toast.error(`Couldn't add magnet — ${n.error}`); break;
+      case 'torrent_error': toast.error(`Couldn't add torrent — ${n.error}`); break;
       // 'received' is debug-only; don't toast it.
     }
   });
@@ -101,7 +110,7 @@ function AuthenticatedApp() {
     try {
       await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
     } catch (err) {
-      toast.error(`Couldn't reorder: ${String(err)}`);
+      toast.error(`Couldn't reorder — ${userErr(err)}`);
     }
   };
 
@@ -109,7 +118,7 @@ function AuthenticatedApp() {
     try {
       await store.setForceStart(id, !current);
     } catch (err) {
-      toast.error(`Force-start toggle failed: ${String(err)}`);
+      toast.error(`Force-start failed — ${userErr(err)}`);
     }
   };
 
@@ -225,7 +234,7 @@ function AuthenticatedApp() {
           try {
             await store.addTorrentBytes(bytes, '');
             toast.success('Torrent added');
-          } catch (err) { toast.error(String(err)); }
+          } catch (err) { toast.error(`Couldn't add torrent — ${userErr(err)}`); }
         }}
         altSpeedActive={store.state.limits.alt_active}
         onToggleAltSpeed={() => store.toggleAltSpeed()}
@@ -293,7 +302,7 @@ function AuthenticatedApp() {
               if (!id) return;
               try {
                 await store.setFilePriorities(id, {[index]: priority});
-              } catch (err) { toast.error(String(err)); }
+              } catch (err) { toast.error(`Couldn't set file priority — ${userErr(err)}`); }
             }}
           />
         }
@@ -308,14 +317,14 @@ function AuthenticatedApp() {
           onPause={(id) => store.pause(id)}
           onResume={(id) => store.resume(id)}
           onRecheck={async (id) => {
-            try { await api.recheck(id); toast.success('Rechecking…'); }
-            catch (err) { toast.error(String(err)); }
+            try { await api.recheck(id); toast.success('Recheck started'); }
+            catch (err) { toast.error(`Recheck failed — ${userErr(err)}`); }
           }}
-          onRemove={(id) => { store.remove(id, false); toast('Removed'); }}
+          onRemove={(id) => { store.remove(id, false); toast.success('Torrent removed'); }}
           onSetCategory={async (id, categoryID) => {
             try {
               await store.setTorrentCategory(id, categoryID);
-            } catch (err) { toast.error(String(err)); }
+            } catch (err) { toast.error(`Couldn't set category — ${userErr(err)}`); }
           }}
           onToggleTag={async (id, tagID) => {
             const t = store.state.torrents.find((x) => x.id === id);
@@ -326,13 +335,13 @@ function AuthenticatedApp() {
               } else {
                 await store.assignTag(id, tagID);
               }
-            } catch (err) { toast.error(String(err)); }
+            } catch (err) { toast.error(`Couldn't update tag — ${userErr(err)}`); }
           }}
           onMoveQueue={onMoveQueue}
           onToggleForceStart={onToggleForceStart}
           onOpenFolder={async (savePath) => {
             try { await api.openFolder(savePath); }
-            catch (err) { toast.error(String(err)); }
+            catch (err) { toast.error(`Couldn't open folder — ${userErr(err)}`); }
           }}
         />
       </WindowShell>
