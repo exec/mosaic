@@ -29,11 +29,15 @@ go mod download
 go build ./...
 
 echo "==> wails build (universal)"
+# -skipembedcreate dodges wails's go/packages pre-analysis which chokes on
+# anacrolix/torrent's CGO transitive deps (pion/webrtc). Same flag we use
+# in 'wails dev' locally.
 wails build \
     -platform darwin/universal \
     -ldflags "-X main.version=${VERSION}" \
     -clean \
-    -skipbindings
+    -skipbindings \
+    -skipembedcreate
 
 APP="${BIN_DIR}/mosaic.app"
 DMG_OUT="${BIN_DIR}/Mosaic-${VERSION}-darwin-universal.dmg"

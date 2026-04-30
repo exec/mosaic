@@ -19,7 +19,8 @@ wails build \
     -platform linux/amd64 \
     -ldflags "-X main.version=${VERSION}" \
     -clean \
-    -skipbindings
+    -skipbindings \
+    -skipembedcreate
 
 ELF="${BIN_DIR}/mosaic"
 file "${ELF}" | grep -q "ELF 64-bit"

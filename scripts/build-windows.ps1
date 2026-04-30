@@ -37,7 +37,8 @@ wails build `
     -ldflags "-X main.version=$Version" `
     -nsis `
     -clean `
-    -skipbindings
+    -skipbindings `
+    -skipembedcreate
 if ($LASTEXITCODE -ne 0) { throw "wails build failed" }
 
 $Exe = "$BinDir/mosaic.exe"
