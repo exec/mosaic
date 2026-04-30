@@ -13,6 +13,10 @@ type Props = {
   settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
   onNavigateRSS: () => void;
+  onNavigateSchedule: () => void;
+  onNavigateAbout: () => void;
+  onFocusSearch: () => void;
+  searchInputRef?: (el: HTMLInputElement) => void;
   torrents: Torrent[];
   filteredTorrents: Torrent[];
   stats: GlobalStatsT;
@@ -50,6 +54,9 @@ export function WindowShell(props: Props) {
         settingsPane={props.settingsPane}
         onNavigate={props.onNavigate}
         onNavigateRSS={props.onNavigateRSS}
+        onNavigateSchedule={props.onNavigateSchedule}
+        onNavigateAbout={props.onNavigateAbout}
+        onFocusSearch={props.onFocusSearch}
       />
       <div class="flex flex-1 min-w-0 flex-col">
         <div class="flex flex-1 min-h-0">
@@ -78,6 +85,7 @@ export function WindowShell(props: Props) {
                   onDensityChange={props.onDensityChange}
                   altSpeedActive={props.altSpeedActive}
                   onToggleAltSpeed={props.onToggleAltSpeed}
+                  searchInputRef={props.searchInputRef}
                 />
                 <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
                   <div class="h-full overflow-auto">

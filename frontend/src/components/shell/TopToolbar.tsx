@@ -13,6 +13,7 @@ type Props = {
   onDensityChange: (d: Density) => void;
   altSpeedActive: boolean;
   onToggleAltSpeed: () => void;
+  searchInputRef?: (el: HTMLInputElement) => void;
 };
 
 export function TopToolbar(props: Props) {
@@ -29,6 +30,7 @@ export function TopToolbar(props: Props) {
           placeholder="Search torrents…"
           value={props.searchQuery}
           onInput={(e) => props.onSearch(e.currentTarget.value)}
+          ref={(el) => props.searchInputRef?.(el)}
           class="w-full rounded-md border border-white/[.06] bg-white/[.02] py-1.5 pl-8 pr-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent-500/50 focus:bg-white/[.04] focus:outline-none focus:ring-1 focus:ring-accent-500/30"
         />
       </div>

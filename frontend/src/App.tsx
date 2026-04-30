@@ -14,6 +14,11 @@ export default function App() {
   const store = createTorrentsStore();
   const [addModalOpen, setAddModalOpen] = createSignal(false);
   const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
+  let searchInputEl: HTMLInputElement | undefined;
+  const focusSearch = () => {
+    if (store.state.view !== 'torrents') store.setView('torrents');
+    queueMicrotask(() => searchInputEl?.focus());
+  };
   onCleanup(() => store.dispose());
 
   const applyOrganization = async (id: string, categoryID: number | null, tagIDs: number[]) => {
@@ -120,6 +125,16 @@ export default function App() {
           store.setView('settings');
           store.setSettingsPane('rss');
         }}
+        onNavigateSchedule={() => {
+          store.setView('settings');
+          store.setSettingsPane('schedule');
+        }}
+        onNavigateAbout={() => {
+          store.setView('settings');
+          store.setSettingsPane('about');
+        }}
+        onFocusSearch={focusSearch}
+        searchInputRef={(el) => { searchInputEl = el; }}
         torrents={store.state.torrents}
         filteredTorrents={filtered()}
         stats={store.state.stats}
