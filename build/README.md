@@ -33,3 +33,24 @@ build with `wails build`.
 - `info.json` - Application details used for Windows builds. The data here will be used by the Windows installer,
   as well as the application itself (right click the exe -> properties -> details)
 - `wails.exe.manifest` - The main application manifest file.
+
+---
+
+## Local builds
+
+Run the platform-specific helper script:
+
+- **macOS:** `bash scripts/build-macos.sh`
+- **Linux:** `bash scripts/build-linux.sh`
+- **Windows:** `pwsh scripts/build-windows.ps1`
+
+Set `VERSION=v0.8.0` to override the build-time version constant.
+
+Signing requires the env vars documented in `.github/SIGNING.md`. Without
+them the script produces an unsigned binary (clearly logged).
+
+## CI
+
+- `test.yml` — runs on every PR (Go + frontend tests, build).
+- `release.yml` — runs on `v*.*.*` tag push; produces the matrix of
+  signed/notarized artifacts and drafts a GitHub release.
