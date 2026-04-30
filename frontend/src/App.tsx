@@ -2,6 +2,7 @@ import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents} from './lib/store';
 import {api, onLaunchNotice} from './lib/bindings';
+import {transport} from './lib/transport';
 import {isWailsRuntime} from './lib/runtime';
 import {ThemeProvider} from './components/theme/ThemeProvider';
 import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
@@ -65,6 +66,15 @@ function AuthenticatedApp() {
     }
   });
   onCleanup(() => offLaunch());
+
+  // The backend tray menu's "Settings…" item emits this event. Switch to the
+  // settings view; we land on the Desktop pane since the tray is the most
+  // likely entry point. Backend may also re-show the window — that's its job.
+  const offNavSettings = transport.on('navigate:settings', () => {
+    store.setView('settings');
+    store.setSettingsPane('desktop');
+  });
+  onCleanup(() => offNavSettings());
 
   const applyOrganization = async (id: string, categoryID: number | null, tagIDs: number[]) => {
     const failures: string[] = [];
@@ -262,6 +272,7 @@ function AuthenticatedApp() {
             updaterConfig={store.state.updaterConfig}
             updateInfo={store.state.updateInfo}
             appVersion={store.state.appVersion}
+            desktopIntegration={store.state.desktopIntegration}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
             onSetWebConfig={(c) => store.setWebConfig(c)}
             onSetWebPassword={(p) => store.setWebPassword(p)}
@@ -269,6 +280,7 @@ function AuthenticatedApp() {
             onSetUpdaterConfig={(c) => store.setUpdaterConfig(c)}
             onCheckForUpdate={() => store.checkForUpdate()}
             onInstallUpdate={() => store.installUpdate()}
+            onSetDesktopIntegration={(d) => store.setDesktopIntegration(d)}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
             onSetPeerLimits={(p) => store.setPeerLimits(p)}

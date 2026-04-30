@@ -47,8 +47,16 @@ type Service struct {
 	webHookMu       sync.RWMutex
 	onWebCfgChanged func(WebConfigDTO)
 
+	desktopHookMu    sync.RWMutex
+	onDesktopChanged func(DesktopIntegrationDTO)
+
 	updater    *updater.Updater // may be nil if not yet attached
 	appVersion string
+
+	// updateInstalledNotifier, if set, is invoked after a successful
+	// InstallUpdate so the OS-level desktop notification fires. Wired via
+	// AttachUpdateInstalledNotifier; nil-safe (InstallUpdate just skips).
+	updateInstalledNotifier UpdateInstalledNotifier
 
 	// sessions, if attached, is the remote-server SessionStore. It's wired in
 	// post-construction (via AttachSessionRevoker) to avoid an import cycle
@@ -134,6 +142,16 @@ const (
 	settingUpdaterChannel         = "updater_channel"
 	settingUpdaterLastChecked     = "updater_last_checked_at"
 	settingUpdaterLastSeenVersion = "updater_last_seen_version"
+
+	// Desktop integration (system tray + notifications + close-to-tray).
+	// Stored as bool strings via setBoolSetting; reads are presence-aware so
+	// "" (never set) maps to the spec defaults below — see GetDesktopIntegration.
+	settingDesktopTrayEnabled      = "desktop.tray_enabled"
+	settingDesktopCloseToTray      = "desktop.close_to_tray"
+	settingDesktopStartMinimized   = "desktop.start_minimized"
+	settingDesktopNotifyOnComplete = "desktop.notify_on_complete"
+	settingDesktopNotifyOnError    = "desktop.notify_on_error"
+	settingDesktopNotifyOnUpdate   = "desktop.notify_on_update"
 )
 
 // WebConfigDTO is the transport shape for the optional HTTP+WS interface.
@@ -358,7 +376,17 @@ func (s *Service) InstallUpdate(ctx context.Context) error {
 		return fmt.Errorf("updater disabled")
 	}
 	last := s.updater.Last()
-	return s.updater.Install(ctx, last)
+	if err := s.updater.Install(ctx, last); err != nil {
+		return err
+	}
+	// Fire the desktop notification (if a Notifier was attached and the user
+	// hasn't disabled the notify_on_update toggle — the Notifier itself does
+	// the toggle gating). Done here rather than from a hook in the updater
+	// package because updater.Updater doesn't expose an OnInstalled callback.
+	if s.updateInstalledNotifier != nil {
+		s.updateInstalledNotifier.NotifyUpdateInstalled(last.LatestVersion)
+	}
+	return nil
 }
 
 // MakeUpdateInfoDTO converts a raw updater.Info to the API DTO. Used by main.go
@@ -371,6 +399,87 @@ func (s *Service) MakeUpdateInfoDTO(info updater.Info) UpdateInfoDTO {
 		AssetFilename:  info.AssetFilename,
 		CheckedAt:      info.CheckedAt.Unix(),
 		CurrentVersion: s.appVersion,
+	}
+}
+
+// DesktopIntegrationDTO is the transport shape for system-tray + notifications
+// + close-to-tray preferences. The frontend keys off these JSON names; do not
+// rename without coordinating with the frontend agent owning the settings UI.
+type DesktopIntegrationDTO struct {
+	TrayEnabled      bool `json:"tray_enabled"`       // default true
+	CloseToTray      bool `json:"close_to_tray"`      // default false on Linux/Windows; ignored on macOS
+	StartMinimized   bool `json:"start_minimized"`    // default false — start hidden in tray, no window
+	NotifyOnComplete bool `json:"notify_on_complete"` // default true
+	NotifyOnError    bool `json:"notify_on_error"`    // default true
+	NotifyOnUpdate   bool `json:"notify_on_update"`   // default true
+}
+
+// boolSettingDefault reads a bool setting with a presence-aware default —
+// "" (never written) returns def, otherwise "true"/"false" parses normally.
+// This is the shape we want for DesktopIntegrationDTO defaults: a fresh DB
+// must yield TrayEnabled=true even though boolSetting alone would return false.
+func (s *Service) boolSettingDefault(ctx context.Context, key string, def bool) bool {
+	v, err := s.settings.Get(ctx, key)
+	if err != nil || v == "" {
+		return def
+	}
+	return v == "true"
+}
+
+func (s *Service) GetDesktopIntegration(ctx context.Context) DesktopIntegrationDTO {
+	return DesktopIntegrationDTO{
+		TrayEnabled:      s.boolSettingDefault(ctx, settingDesktopTrayEnabled, true),
+		CloseToTray:      s.boolSettingDefault(ctx, settingDesktopCloseToTray, false),
+		StartMinimized:   s.boolSettingDefault(ctx, settingDesktopStartMinimized, false),
+		NotifyOnComplete: s.boolSettingDefault(ctx, settingDesktopNotifyOnComplete, true),
+		NotifyOnError:    s.boolSettingDefault(ctx, settingDesktopNotifyOnError, true),
+		NotifyOnUpdate:   s.boolSettingDefault(ctx, settingDesktopNotifyOnUpdate, true),
+	}
+}
+
+// SetDesktopIntegration persists the user's desktop-integration preferences
+// and fires the change hook so the running tray/notifications goroutines can
+// reconfigure themselves. No validation: the user is allowed to disable
+// everything (a perfectly reasonable choice).
+func (s *Service) SetDesktopIntegration(ctx context.Context, c DesktopIntegrationDTO) error {
+	if err := s.setBoolSetting(ctx, settingDesktopTrayEnabled, c.TrayEnabled); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopCloseToTray, c.CloseToTray); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopStartMinimized, c.StartMinimized); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopNotifyOnComplete, c.NotifyOnComplete); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopNotifyOnError, c.NotifyOnError); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopNotifyOnUpdate, c.NotifyOnUpdate); err != nil {
+		return err
+	}
+	s.fireDesktopIntegrationChanged(c)
+	return nil
+}
+
+// OnDesktopIntegrationChange registers a synchronous callback invoked after a
+// SetDesktopIntegration commit. main.go uses this to push the updated
+// notification toggles into the live notifications.Subscriber. Pass nil to
+// unregister. Only one callback is supported.
+func (s *Service) OnDesktopIntegrationChange(cb func(DesktopIntegrationDTO)) {
+	s.desktopHookMu.Lock()
+	s.onDesktopChanged = cb
+	s.desktopHookMu.Unlock()
+}
+
+func (s *Service) fireDesktopIntegrationChanged(c DesktopIntegrationDTO) {
+	s.desktopHookMu.RLock()
+	cb := s.onDesktopChanged
+	s.desktopHookMu.RUnlock()
+	if cb != nil {
+		cb(c)
 	}
 }
 
@@ -528,6 +637,48 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 func (s *Service) Pause(id engine.TorrentID) error   { return s.engine.Pause(id) }
 func (s *Service) Resume(id engine.TorrentID) error  { return s.engine.Resume(id) }
 func (s *Service) Recheck(id engine.TorrentID) error { return s.engine.Recheck(id) }
+
+// PauseAll pauses every torrent currently known to the engine. Errors on
+// individual torrents are logged but don't abort the loop — best-effort
+// semantics so a single missing/dead torrent can't strand the rest.
+// Used by the system-tray "Pause all" item.
+func (s *Service) PauseAll(_ context.Context) {
+	for _, snap := range s.engine.List() {
+		if snap.Paused {
+			continue
+		}
+		if err := s.engine.Pause(snap.ID); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("PauseAll: pause failed")
+		}
+	}
+}
+
+// ResumeAll is the mirror of PauseAll. Used by the system-tray "Resume all"
+// item when the engine is in the globally-paused state.
+func (s *Service) ResumeAll(_ context.Context) {
+	for _, snap := range s.engine.List() {
+		if !snap.Paused {
+			continue
+		}
+		if err := s.engine.Resume(snap.ID); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("ResumeAll: resume failed")
+		}
+	}
+}
+
+// UpdateInstalledNotifier is the post-install hook the desktop-integration
+// notifications package implements. Defining the contract as an interface
+// here keeps the api package free of a notifications-package import.
+type UpdateInstalledNotifier interface {
+	NotifyUpdateInstalled(version string)
+}
+
+// AttachUpdateInstalledNotifier wires the notifications subscriber into the
+// Service so InstallUpdate can fire the OS-level notification on success.
+// Pass nil (or never call) to disable the post-install notification.
+func (s *Service) AttachUpdateInstalledNotifier(n UpdateInstalledNotifier) {
+	s.updateInstalledNotifier = n
+}
 
 func (s *Service) Remove(ctx context.Context, id engine.TorrentID, deleteFiles bool) error {
 	if err := s.engine.Remove(id, deleteFiles); err != nil {

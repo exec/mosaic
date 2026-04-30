@@ -493,6 +493,74 @@ func serviceWithDB(t *testing.T, dbPath string) (*Service, *engine.FakeBackend) 
 		"/tmp/dl"), fb
 }
 
+func TestDesktopIntegration_DefaultsOnFreshDB(t *testing.T) {
+	svc, _ := newTestService(t)
+	got := svc.GetDesktopIntegration(context.Background())
+
+	// Spec defaults: tray on, close-to-tray off, start-minimized off,
+	// all three notification toggles on. Frontend depends on these.
+	require.True(t, got.TrayEnabled, "TrayEnabled should default to true")
+	require.False(t, got.CloseToTray, "CloseToTray should default to false")
+	require.False(t, got.StartMinimized, "StartMinimized should default to false")
+	require.True(t, got.NotifyOnComplete)
+	require.True(t, got.NotifyOnError)
+	require.True(t, got.NotifyOnUpdate)
+}
+
+func TestDesktopIntegration_SetRoundtrips(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	in := DesktopIntegrationDTO{
+		TrayEnabled:      false,
+		CloseToTray:      true,
+		StartMinimized:   true,
+		NotifyOnComplete: false,
+		NotifyOnError:    true,
+		NotifyOnUpdate:   false,
+	}
+	require.NoError(t, svc.SetDesktopIntegration(ctx, in))
+
+	got := svc.GetDesktopIntegration(ctx)
+	require.Equal(t, in, got)
+}
+
+// TestDesktopIntegration_AllFalseAccepted documents that we don't validate
+// the combo: a user disabling every toggle is a legitimate choice (silence
+// the app entirely).
+func TestDesktopIntegration_AllFalseAccepted(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// All-false combo — no validation, no error.
+	require.NoError(t, svc.SetDesktopIntegration(ctx, DesktopIntegrationDTO{}))
+
+	got := svc.GetDesktopIntegration(ctx)
+	require.False(t, got.TrayEnabled)
+	require.False(t, got.CloseToTray)
+	require.False(t, got.StartMinimized)
+	require.False(t, got.NotifyOnComplete)
+	require.False(t, got.NotifyOnError)
+	require.False(t, got.NotifyOnUpdate)
+}
+
+func TestDesktopIntegration_OnChangeFiresWithLatest(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	var seen DesktopIntegrationDTO
+	called := 0
+	svc.OnDesktopIntegrationChange(func(c DesktopIntegrationDTO) {
+		seen = c
+		called++
+	})
+
+	in := DesktopIntegrationDTO{TrayEnabled: true, NotifyOnError: true}
+	require.NoError(t, svc.SetDesktopIntegration(ctx, in))
+	require.Equal(t, 1, called)
+	require.Equal(t, in, seen)
+}
+
 func TestRestoreOnStartup_ReAddsPersistedMagnet(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "t.db")
 

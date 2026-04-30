@@ -2,7 +2,8 @@ import {createStore, produce, reconcile} from 'solid-js/store';
 import {toast} from 'solid-sonner';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick, onUpdateAvailable,
-  type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
+  type BlocklistDTO, type CategoryDTO, type DesktopIntegrationDTO, type DetailDTO,
+  type FeedDTO, type FilterDTO,
   type GlobalStatsT, type InspectorTab,
   type LimitsDTO, type PeerLimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
   type UpdaterConfigDTO, type UpdateInfoDTO,
@@ -62,6 +63,9 @@ export type AppState = {
   updaterConfig: UpdaterConfigDTO;
   updateInfo: UpdateInfoDTO | null;
   appVersion: string;
+
+  // Desktop integration (tray + notifications)
+  desktopIntegration: DesktopIntegrationDTO;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -127,6 +131,15 @@ const emptyUpdaterConfig: UpdaterConfigDTO = {
   last_seen_version: '',
 };
 
+const defaultDesktopIntegration: DesktopIntegrationDTO = {
+  tray_enabled: true,
+  close_to_tray: false,
+  start_minimized: false,
+  notify_on_complete: true,
+  notify_on_error: true,
+  notify_on_update: true,
+};
+
 export function createTorrentsStore() {
   const [state, setState] = createStore<AppState>({
     torrents: [],
@@ -166,6 +179,8 @@ export function createTorrentsStore() {
     updaterConfig: emptyUpdaterConfig,
     updateInfo: null,
     appVersion: 'dev',
+
+    desktopIntegration: defaultDesktopIntegration,
   });
 
   // Boot fetches. Each failure is logged AND surfaces a single aggregated
@@ -197,6 +212,7 @@ export function createTorrentsStore() {
   api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(bootFailed('web config'));
   api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(bootFailed('updater config'));
   api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(bootFailed('app version'));
+  api.getDesktopIntegration().then((d) => setState(produce((s) => { s.desktopIntegration = d; }))).catch(bootFailed('desktop integration'));
 
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -462,6 +478,16 @@ export function createTorrentsStore() {
       return info;
     },
     installUpdate: () => api.installUpdate(),
+
+    // Desktop integration
+    refreshDesktopIntegration: async () => {
+      const d = await api.getDesktopIntegration();
+      setState(produce((s) => { s.desktopIntegration = d; }));
+    },
+    setDesktopIntegration: async (d: DesktopIntegrationDTO) => {
+      await api.setDesktopIntegration(d);
+      setState(produce((s) => { s.desktopIntegration = d; }));
+    },
 
     dispose: () => { offT(); offS(); offI(); offU(); },
   };

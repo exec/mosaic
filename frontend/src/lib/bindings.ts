@@ -180,6 +180,15 @@ export type UpdateInfoDTO = {
   current_version: string;
 };
 
+export type DesktopIntegrationDTO = {
+  tray_enabled: boolean;          // default true
+  close_to_tray: boolean;         // default false on Linux/Windows; ignored on macOS
+  start_minimized: boolean;       // default false
+  notify_on_complete: boolean;    // default true
+  notify_on_error: boolean;       // default true
+  notify_on_update: boolean;      // default true
+};
+
 export const api = {
   addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
   pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
@@ -243,6 +252,8 @@ export const api = {
   setUpdaterConfig: (c: UpdaterConfigDTO) => transport.invoke<void>('SetUpdaterConfig', c),
   checkForUpdate: () => transport.invoke<UpdateInfoDTO>('CheckForUpdate'),
   installUpdate: () => transport.invoke<void>('InstallUpdate'),
+  getDesktopIntegration: () => transport.invoke<DesktopIntegrationDTO>('GetDesktopIntegration'),
+  setDesktopIntegration: (c: DesktopIntegrationDTO) => transport.invoke<void>('SetDesktopIntegration', c),
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
   login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
   logout: () => transport.invoke<void>('Logout'),

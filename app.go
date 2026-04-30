@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -24,6 +25,12 @@ type App struct {
 	svc *api.Service
 	hub *remote.Hub // optional fan-out for browser clients; nil-safe
 	ctx context.Context
+
+	// quitFully is set by QuitFully so the OnBeforeClose hook in main.go
+	// can distinguish "tray asked us to fully quit" from "user clicked X
+	// while close-to-tray is enabled". Without this the hook would hide
+	// the window every time, including when the tray's Quit was used.
+	quitFully atomic.Bool
 }
 
 func NewApp(svc *api.Service, hub *remote.Hub) *App {
@@ -311,6 +318,57 @@ func (a *App) RotateAPIKey() (string, error) {
 // AppVersion returns the build-time version string (e.g. "v0.7.0" or "dev").
 func (a *App) AppVersion() string {
 	return version
+}
+
+// GetDesktopIntegration / SetDesktopIntegration / QuitFully are the bindings
+// the system-tray + close-to-tray + Settings UI depend on. The DTO field names
+// are part of the wire contract with the frontend (see api.DesktopIntegrationDTO).
+func (a *App) GetDesktopIntegration() api.DesktopIntegrationDTO {
+	return a.svc.GetDesktopIntegration(a.ctx)
+}
+
+func (a *App) SetDesktopIntegration(c api.DesktopIntegrationDTO) error {
+	return a.svc.SetDesktopIntegration(a.ctx, c)
+}
+
+// QuitFully bypasses the close-to-tray OnBeforeClose hook and tears the
+// process down. Used by the tray's "Quit Mosaic" item — without this the
+// hook would just hide the window again, leaving the app un-quit-able from
+// the tray.
+func (a *App) QuitFully() {
+	if a.ctx == nil {
+		return
+	}
+	a.quitFully.Store(true)
+	wailsruntime.Quit(a.ctx)
+}
+
+// QuittingFully reports whether the most recent quit request was from
+// QuitFully (true) versus a normal X-button close (false). main.go's
+// OnBeforeClose hook reads this to decide whether to honor close-to-tray.
+func (a *App) QuittingFully() bool {
+	return a.quitFully.Load()
+}
+
+// ShowWindow is the tray "Show Mosaic" callback target — un-minimize and
+// raise the window. Safe to call before startup() (no-ops if ctx is nil).
+func (a *App) ShowWindow() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowUnminimise(a.ctx)
+	wailsruntime.WindowShow(a.ctx)
+}
+
+// ShowSettings raises the window AND emits navigate:settings so the SPA can
+// route to the Settings pane. Used by the tray's "Settings…" item.
+func (a *App) ShowSettings() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowUnminimise(a.ctx)
+	wailsruntime.WindowShow(a.ctx)
+	wailsruntime.EventsEmit(a.ctx, "navigate:settings")
 }
 
 func (a *App) GetUpdaterConfig() api.UpdaterConfigDTO {

@@ -1,13 +1,14 @@
 import {For} from 'solid-js';
-import {Sliders, Wifi, Globe, Download, Calendar, Shield, Rss, Folder, Tag, Info} from 'lucide-solid';
+import {Sliders, Wifi, Globe, Download, MonitorSmartphone, Calendar, Shield, Rss, Folder, Tag, Info} from 'lucide-solid';
 
-export type SettingsPane = 'general' | 'connection' | 'web' | 'updates' | 'schedule' | 'blocklist' | 'rss' | 'categories' | 'tags' | 'about';
+export type SettingsPane = 'general' | 'connection' | 'web' | 'updates' | 'desktop' | 'schedule' | 'blocklist' | 'rss' | 'categories' | 'tags' | 'about';
 
 const items: {value: SettingsPane; label: string; icon: typeof Sliders}[] = [
   {value: 'general',    label: 'General',        icon: Sliders},
   {value: 'connection', label: 'Connection',     icon: Wifi},
   {value: 'web',        label: 'Web Interface',  icon: Globe},
   {value: 'updates',    label: 'Updates',        icon: Download},
+  {value: 'desktop',    label: 'Desktop',        icon: MonitorSmartphone},
   {value: 'schedule',   label: 'Schedule',       icon: Calendar},
   {value: 'blocklist',  label: 'Blocklist',      icon: Shield},
   {value: 'rss',        label: 'RSS',            icon: Rss},

@@ -1,19 +1,5 @@
 import {ExternalLink} from 'lucide-solid';
 
-const PROGRESS = [
-  {label: 'Plan 1 — Foundation & first download', done: true},
-  {label: 'Plan 2 — Polished window shell', done: true},
-  {label: 'Plan 3 — Inspector + Watch IPC', done: true},
-  {label: 'Plan 4a — Organization', done: true},
-  {label: 'Plan 4b — Settings panel', done: true},
-  {label: 'Plan 4c — Bandwidth controls', done: true},
-  {label: 'Plan 4d — Scheduling & blocklist', done: true},
-  {label: 'Plan 5 — RSS auto-add', done: true},
-  {label: 'Plan 6 — Remote interface', done: true},
-  {label: 'Plan 7 — Auto-update', done: true},
-  {label: 'Plan 8 — Packaging & signing', done: false},
-];
-
 type Props = {
   appVersion: string;
 };
@@ -29,7 +15,7 @@ export function AboutPane(props: Props) {
         </p>
       </div>
 
-      <div class="rounded-md border border-white/[.06] bg-white/[.02] p-4 mb-6">
+      <div class="rounded-md border border-white/[.06] bg-white/[.02] p-4 mb-4">
         <a
           href="https://github.com/exec/mosaic"
           target="_blank"
@@ -42,21 +28,37 @@ export function AboutPane(props: Props) {
       </div>
 
       <div class="rounded-md border border-white/[.06] bg-white/[.02] p-4">
-        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-3">Roadmap</div>
-        <ul class="flex flex-col gap-1.5 text-sm">
-          {PROGRESS.map((p) => (
-            <li class="flex items-center gap-2">
-              <span
-                class="h-2 w-2 shrink-0 rounded-full"
-                classList={{
-                  'bg-seed': p.done,
-                  'bg-zinc-700': !p.done,
-                }}
-              />
-              <span classList={{'text-zinc-200': p.done, 'text-zinc-500': !p.done}}>{p.label}</span>
-            </li>
-          ))}
-        </ul>
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">License & acknowledgements</div>
+        <p class="text-sm text-zinc-300">
+          Mosaic is open source software. The project is built on top of{' '}
+          <a
+            href="https://github.com/anacrolix/torrent"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-accent-400 hover:text-accent-200"
+          >
+            anacrolix/torrent
+          </a>{' '}
+          (BitTorrent engine),{' '}
+          <a
+            href="https://wails.io"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-accent-400 hover:text-accent-200"
+          >
+            Wails
+          </a>{' '}
+          (desktop shell), and{' '}
+          <a
+            href="https://www.solidjs.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-accent-400 hover:text-accent-200"
+          >
+            SolidJS
+          </a>{' '}
+          (UI). See the repository for the full list of dependencies and their licenses.
+        </p>
       </div>
     </div>
   );

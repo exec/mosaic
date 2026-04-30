@@ -21,9 +21,11 @@ import (
 	"mosaic/backend/config"
 	"mosaic/backend/engine"
 	"mosaic/backend/logging"
+	"mosaic/backend/notifications"
 	"mosaic/backend/persistence"
 	"mosaic/backend/platform"
 	"mosaic/backend/remote"
+	"mosaic/backend/tray"
 	"mosaic/backend/updater"
 )
 
@@ -143,6 +145,59 @@ func main() {
 
 	app := NewApp(svc, hub)
 
+	// Desktop integration: notifications subscriber + system tray.
+	//
+	// The subscriber consumes engine events and fires beeep notifications on
+	// torrent completion / error transitions; the tray exposes show / pause-all
+	// / alt-speed / settings / quit affordances on Linux+Windows (no-op stub on
+	// macOS, see backend/tray/tray_darwin.go).
+	desktopCfg := svc.GetDesktopIntegration(ctx)
+	notifSub := notifications.NewSubscriber(notifications.NewBeeepNotifier(), notifications.Settings{
+		NotifyOnComplete: desktopCfg.NotifyOnComplete,
+		NotifyOnError:    desktopCfg.NotifyOnError,
+		NotifyOnUpdate:   desktopCfg.NotifyOnUpdate,
+	})
+	notifSub.Start(ctx, eng)
+	defer notifSub.Stop()
+	svc.AttachUpdateInstalledNotifier(notifSub)
+
+	// Tray callbacks dispatch into svc + app. We never block the systray
+	// event-loop goroutine: the engine calls below are cheap, but the
+	// "Pause all" path iterates every torrent so we run it in a goroutine
+	// to be safe.
+	trayHandle := tray.New(tray.Callbacks{
+		OnShow:           app.ShowWindow,
+		OnPauseAll:       func() { go svc.PauseAll(ctx) },
+		OnResumeAll:      func() { go svc.ResumeAll(ctx) },
+		OnToggleAltSpeed: func() { go func() { _, _ = svc.ToggleAltSpeed(ctx) }() },
+		OnOpenSettings:   app.ShowSettings,
+		OnQuit:           app.QuitFully,
+	})
+
+	// Reflect initial alt-speed state in the tray label.
+	if l, err := svc.GetLimits(ctx); err == nil {
+		trayHandle.SetAltSpeedActive(l.AltActive)
+	}
+
+	if desktopCfg.TrayEnabled {
+		trayHandle.Start()
+	}
+	defer trayHandle.Stop()
+
+	// When the user toggles desktop preferences in Settings, push the new
+	// notification toggles into the live subscriber. Tray on/off changes
+	// require an app restart (energye/systray's nativeLoop binds to a
+	// process-lifetime OS thread; teardown + re-create at runtime is not
+	// supported reliably). We log a hint so the frontend can show "restart
+	// to apply" copy.
+	svc.OnDesktopIntegrationChange(func(c api.DesktopIntegrationDTO) {
+		notifSub.SetSettings(notifications.Settings{
+			NotifyOnComplete: c.NotifyOnComplete,
+			NotifyOnError:    c.NotifyOnError,
+			NotifyOnUpdate:   c.NotifyOnUpdate,
+		})
+	})
+
 	// Auto-update: GitHub-backed updater, fan out new releases to both the
 	// Wails desktop session and any connected browser sessions. Schedule only
 	// runs the goroutine when the user hasn't disabled checks in Settings.
@@ -166,10 +221,38 @@ func main() {
 		go upd.Schedule(ctx)
 	}
 
+	// Close-to-tray: on Linux/Windows, when the user has both
+	// desktop.tray_enabled AND desktop.close_to_tray on, the X-button hides
+	// the window instead of quitting. macOS keeps its native
+	// hide-window-on-close convention (the Wails Mac options handle it).
+	// The tray's "Quit Mosaic" item bypasses this hook by setting
+	// app.quitFully via QuitFully() before calling runtime.Quit.
+	onBeforeClose := func(_ context.Context) (prevent bool) {
+		if app.QuittingFully() {
+			return false
+		}
+		if goruntime.GOOS == "darwin" {
+			return false
+		}
+		cfg := svc.GetDesktopIntegration(ctx)
+		if !cfg.TrayEnabled || !cfg.CloseToTray {
+			return false
+		}
+		if app.ctx != nil {
+			wailsruntime.WindowHide(app.ctx)
+		}
+		return true
+	}
+
 	opts := &options.App{
 		Title:  "Mosaic",
 		Width:  1200,
 		Height: 800,
+		// StartHidden honors the desktop.start_minimized preference. The
+		// frontend still mounts and connects to the WS / fetches state on
+		// load — only the OS window is hidden until the user opens it from
+		// the tray.
+		StartHidden: desktopCfg.StartMinimized && desktopCfg.TrayEnabled && goruntime.GOOS != "darwin",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -177,6 +260,7 @@ func main() {
 			TitleBar:   mac.TitleBarHiddenInset(),
 			Appearance: mac.NSAppearanceNameDarkAqua,
 		},
+		OnBeforeClose: onBeforeClose,
 		// SingleInstanceLock: when the user double-clicks a .torrent or follows
 		// a magnet: URL while Mosaic is already open, the OS launches a second
 		// process; this callback forwards its args to the running instance and

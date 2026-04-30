@@ -49,13 +49,32 @@ type Props = {
 export function WindowShell(props: Props) {
   return (
     <div class="flex h-full flex-col">
-      {/* Always-on top drag row. Real DOM element with -webkit-app-region:drag
-          (no pointer-events:none — that disables OS drag-region detection in
-          Chromium). On macOS this region covers the traffic-lights inset; on
-          Windows it sits left of the custom WindowControls. Both views (and
-          the settings panel) get a guaranteed grab handle. */}
+      {/* Always-on top drag row. Wails's native drag uses the
+          `--wails-draggable: drag` custom property; we also keep
+          -webkit-app-region:drag for WKWebView's title-bar inset, plus an
+          explicit onMouseDown that calls window.WailsInvoke('drag') —
+          without the imperative path, focused-window drags get dropped on
+          macOS because Wails's default `deferDragToMouseMove` flag waits
+          for a follow-up mousemove that doesn't always arrive when the
+          window is already key. Parley hit this on Tauri and solved it the
+          same way. h-7 covers the traffic-lights inset on macOS and sits
+          left of WindowControls on Windows. */}
       <div class="flex h-7 shrink-0">
-        <div class="flex-1" style={{'-webkit-app-region': 'drag'}} />
+        <div
+          class="flex-1"
+          style={{
+            '--wails-draggable': 'drag',
+            '-webkit-app-region': 'drag',
+          }}
+          onMouseDown={(e) => {
+            if (e.button !== 0) return;
+            try {
+              (window as any).WailsInvoke?.('drag');
+            } catch {
+              // browser mode or non-Wails host — no-op
+            }
+          }}
+        />
         <Show when={props.isWindows}>
           <WindowControls />
         </Show>
