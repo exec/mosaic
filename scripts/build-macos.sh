@@ -78,6 +78,17 @@ else
     echo "==> codesign skipped (APPLE_DEVELOPER_ID unset) — UNSIGNED dev build"
 fi
 
+echo "==> free disk before hdiutil (macos-14 runners are tight ~14GB free)"
+# hdiutil's UDZO format needs scratch ~= 2x the .app while compressing. The
+# go module + build caches accumulate ~5–8GB by this point on a cold runner;
+# clear what we don't need anymore so we don't trip 'No space left'. Three
+# v0.1.* runs in a row failed here.
+df -h / 2>/dev/null | tail -1 || true
+go clean -cache 2>/dev/null || true
+go clean -modcache 2>/dev/null || true
+rm -rf /tmp/go-link-* /tmp/go-build* 2>/dev/null || true
+df -h / 2>/dev/null | tail -1 || true
+
 echo "==> create DMG"
 hdiutil create \
     -volname "Mosaic" \
