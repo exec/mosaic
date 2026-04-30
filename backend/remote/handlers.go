@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/time/rate"
 
 	"mosaic/backend/api"
 	"mosaic/backend/engine"
@@ -19,10 +23,86 @@ type Handlers struct {
 	svc      *api.Service
 	sessions *SessionStore
 	secure   bool // controls Secure cookie attribute
+
+	loginLimiter *loginRateLimiter
 }
 
 func NewHandlers(svc *api.Service, sessions *SessionStore, secure bool) *Handlers {
-	return &Handlers{svc: svc, sessions: sessions, secure: secure}
+	return &Handlers{
+		svc:          svc,
+		sessions:     sessions,
+		secure:       secure,
+		loginLimiter: newLoginRateLimiter(),
+	}
+}
+
+// ---- login rate limiter ----
+
+// loginRateLimiter is a per-IP token bucket guarding /api/login. Allows ~5
+// attempts per minute (rate.Every(12s), burst 5). Idle limiters are evicted
+// by a background janitor so the map can't grow without bound.
+type loginRateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*loginBucket
+}
+
+type loginBucket struct {
+	lim  *rate.Limiter
+	seen time.Time
+}
+
+const (
+	loginRateInterval   = 12 * time.Second
+	loginRateBurst      = 5
+	loginBucketIdleTTL  = 10 * time.Minute
+	loginJanitorPeriod  = 5 * time.Minute
+	loginRetryAfterSecs = 12
+)
+
+func newLoginRateLimiter() *loginRateLimiter {
+	l := &loginRateLimiter{buckets: make(map[string]*loginBucket)}
+	go l.janitor()
+	return l
+}
+
+// allow consults the per-IP bucket. Returns true if the attempt is permitted.
+func (l *loginRateLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	b, ok := l.buckets[ip]
+	if !ok {
+		b = &loginBucket{lim: rate.NewLimiter(rate.Every(loginRateInterval), loginRateBurst)}
+		l.buckets[ip] = b
+	}
+	b.seen = time.Now()
+	l.mu.Unlock()
+	return b.lim.Allow()
+}
+
+// janitor drops buckets idle longer than loginBucketIdleTTL. Runs forever; the
+// process exits with the program so we don't bother with shutdown plumbing.
+func (l *loginRateLimiter) janitor() {
+	t := time.NewTicker(loginJanitorPeriod)
+	defer t.Stop()
+	for range t.C {
+		cutoff := time.Now().Add(-loginBucketIdleTTL)
+		l.mu.Lock()
+		for ip, b := range l.buckets {
+			if b.seen.Before(cutoff) {
+				delete(l.buckets, ip)
+			}
+		}
+		l.mu.Unlock()
+	}
+}
+
+// clientIP extracts the host portion of r.RemoteAddr, handling IPv6 brackets
+// gracefully. Falls back to the raw RemoteAddr if parsing fails.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -50,6 +130,12 @@ type loginRequest struct {
 }
 
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if !h.loginLimiter.allow(ip) {
+		w.Header().Set("Retry-After", strconv.Itoa(loginRetryAfterSecs))
+		writeErr(w, http.StatusTooManyRequests, errors.New("too many login attempts"))
+		return
+	}
 	var req loginRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -59,7 +145,11 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, errors.New("invalid credentials"))
 		return
 	}
-	tok := h.sessions.Create()
+	tok, err := h.sessions.Create()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("session create failed"))
+		return
+	}
 	SetSessionCookie(w, tok, h.secure)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

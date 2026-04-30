@@ -23,6 +23,11 @@ var (
 const (
 	sessionCookieName = "mosaic_session"
 	sessionTTL        = 12 * time.Hour
+	// maxSessions caps the SessionStore so a flood of logins (or stale tokens
+	// piling up) can't grow memory without bound. When full, the oldest
+	// (earliest-expiring) entry is evicted. 100 is plenty for an interactive
+	// single-user web UI.
+	maxSessions = 100
 )
 
 // SessionStore holds active session tokens in memory. Tokens reset on process
@@ -36,12 +41,39 @@ func NewSessionStore() *SessionStore {
 	return &SessionStore{sessions: make(map[string]time.Time)}
 }
 
-func (s *SessionStore) Create() string {
-	tok := RandomToken()
+// Create issues a new session token. If the store is full, the oldest entry
+// (earliest expiry) is evicted before insertion. Returns ("", err) if the
+// underlying rand source fails — callers should surface a 500.
+func (s *SessionStore) Create() (string, error) {
+	tok, err := RandomToken()
+	if err != nil {
+		return "", err
+	}
 	s.mu.Lock()
+	if len(s.sessions) >= maxSessions {
+		s.evictOldestLocked()
+	}
 	s.sessions[tok] = time.Now().Add(sessionTTL)
 	s.mu.Unlock()
-	return tok
+	return tok, nil
+}
+
+// evictOldestLocked drops the entry with the earliest expiry. Caller must
+// hold s.mu (write).
+func (s *SessionStore) evictOldestLocked() {
+	var oldestTok string
+	var oldestExp time.Time
+	first := true
+	for tok, exp := range s.sessions {
+		if first || exp.Before(oldestExp) {
+			oldestTok = tok
+			oldestExp = exp
+			first = false
+		}
+	}
+	if oldestTok != "" {
+		delete(s.sessions, oldestTok)
+	}
 }
 
 func (s *SessionStore) Valid(token string) bool {
@@ -69,6 +101,22 @@ func (s *SessionStore) Delete(token string) {
 	s.mu.Unlock()
 }
 
+// RevokeAll drops every session. Called from api.Service when the web
+// password or username changes so any browser still holding a pre-change
+// cookie is forced to log in again.
+func (s *SessionStore) RevokeAll() {
+	s.mu.Lock()
+	s.sessions = make(map[string]time.Time)
+	s.mu.Unlock()
+}
+
+// Count returns the number of active sessions. Exposed for tests + status.
+func (s *SessionStore) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.sessions)
+}
+
 // CredentialChecker is the subset of api.Service that the auth layer needs.
 // Defining it here lets tests inject fakes without importing api.
 type CredentialChecker interface {
@@ -83,7 +131,10 @@ func SetSessionCookie(w http.ResponseWriter, token string, secure bool) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		// Strict — the SPA is same-origin so we never need the cookie sent on
+		// cross-site navigations, and Strict is the strongest CSRF defense for
+		// this cookie.
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
 }
@@ -95,7 +146,7 @@ func ClearSessionCookie(w http.ResponseWriter, secure bool) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
 }

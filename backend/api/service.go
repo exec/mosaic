@@ -49,6 +49,26 @@ type Service struct {
 
 	updater    *updater.Updater // may be nil if not yet attached
 	appVersion string
+
+	// sessions, if attached, is the remote-server SessionStore. It's wired in
+	// post-construction (via AttachSessionRevoker) to avoid an import cycle
+	// with backend/remote. SetWebPassword and a username-changing SetWebConfig
+	// call RevokeAll() to force every existing browser session to re-auth.
+	sessions SessionRevoker
+}
+
+// SessionRevoker is the subset of *remote.SessionStore that api.Service needs
+// to call after credentials change. Defining it as a small interface here
+// keeps the api package free of a remote-package import.
+type SessionRevoker interface {
+	RevokeAll()
+}
+
+// AttachSessionRevoker wires the remote SessionStore into the Service so that
+// SetWebPassword / SetWebConfig (when the username changes) can invalidate
+// every active session. Pass nil (or never call) if there's no remote layer.
+func (s *Service) AttachSessionRevoker(r SessionRevoker) {
+	s.sessions = r
 }
 
 // blocklistState is the in-memory snapshot of the most recent successful (or
@@ -147,6 +167,7 @@ func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
 }
 
 func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
+	prevUser, _ := s.settings.Get(ctx, settingWebUsername)
 	if err := s.setBoolSetting(ctx, settingWebEnabled, c.Enabled); err != nil {
 		return err
 	}
@@ -158,6 +179,11 @@ func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
 	}
 	if err := s.settings.Set(ctx, settingWebUsername, c.Username); err != nil {
 		return err
+	}
+	// Force re-login if the username actually changed — otherwise an
+	// already-authenticated tab would keep working under the old identity.
+	if prevUser != c.Username && s.sessions != nil {
+		s.sessions.RevokeAll()
 	}
 	s.fireWebConfigChanged(s.GetWebConfig(ctx))
 	return nil
@@ -187,11 +213,22 @@ func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
 	if err != nil {
 		return err
 	}
-	return s.settings.Set(ctx, settingWebPassHash, hash)
+	if err := s.settings.Set(ctx, settingWebPassHash, hash); err != nil {
+		return err
+	}
+	// Invalidate every active session — the old password is no longer valid,
+	// any browser still holding a pre-change cookie must re-authenticate.
+	if s.sessions != nil {
+		s.sessions.RevokeAll()
+	}
+	return nil
 }
 
 func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
-	key := cred.RandomToken()
+	key, err := cred.RandomToken()
+	if err != nil {
+		return "", err
+	}
 	if err := s.settings.Set(ctx, settingWebAPIKey, key); err != nil {
 		return "", err
 	}
@@ -1084,6 +1121,13 @@ func (s *Service) GetBlocklist(ctx context.Context) BlocklistDTO {
 }
 
 func (s *Service) SetBlocklistURL(ctx context.Context, url string, enabled bool) error {
+	// Reject obviously dangerous URLs at write time. The dialer in
+	// safeHTTPClient is the second layer that catches DNS-rebind tricks.
+	if enabled && url != "" {
+		if _, err := validateFetchURL(url); err != nil {
+			return fmt.Errorf("blocklist URL must be http or https and not point at a private/loopback address: %w", err)
+		}
+	}
 	if err := s.settings.Set(ctx, settingBlocklistURL, url); err != nil {
 		return err
 	}
@@ -1105,6 +1149,9 @@ func (s *Service) RefreshBlocklist(ctx context.Context) error {
 	if url == "" {
 		return errors.New("no blocklist URL configured")
 	}
+	if _, err := validateFetchURL(url); err != nil {
+		return fmt.Errorf("refusing to fetch blocklist: %w", err)
+	}
 
 	httpCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -1112,7 +1159,8 @@ func (s *Service) RefreshBlocklist(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := safeHTTPClient(30 * time.Second)
+	resp, err := client.Do(req)
 	if err != nil {
 		s.blocklistMu.Lock()
 		s.blocklist.lastErr = err.Error()
@@ -1284,6 +1332,9 @@ func (s *Service) ListFeeds(ctx context.Context) ([]FeedDTO, error) {
 }
 
 func (s *Service) CreateFeed(ctx context.Context, dto FeedDTO) (int, error) {
+	if _, err := validateFetchURL(dto.URL); err != nil {
+		return 0, fmt.Errorf("feed URL must be http or https and not point at a private/loopback address: %w", err)
+	}
 	return s.feeds.Create(ctx, persistence.Feed{
 		URL: dto.URL, Name: dto.Name, IntervalMin: dto.IntervalMin,
 		ETag: dto.ETag, Enabled: dto.Enabled,
@@ -1291,6 +1342,9 @@ func (s *Service) CreateFeed(ctx context.Context, dto FeedDTO) (int, error) {
 }
 
 func (s *Service) UpdateFeed(ctx context.Context, dto FeedDTO) error {
+	if _, err := validateFetchURL(dto.URL); err != nil {
+		return fmt.Errorf("feed URL must be http or https and not point at a private/loopback address: %w", err)
+	}
 	return s.feeds.Update(ctx, persistence.Feed{
 		ID: dto.ID, URL: dto.URL, Name: dto.Name, IntervalMin: dto.IntervalMin,
 		Enabled: dto.Enabled,

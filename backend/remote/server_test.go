@@ -218,7 +218,11 @@ type multipartW struct {
 }
 
 func newMultipart(w *bytes.Buffer) *multipartW {
-	m := &multipartW{w: w, b: "BOUND" + RandomToken()[:12]}
+	tok, err := RandomToken()
+	if err != nil {
+		panic(err)
+	}
+	m := &multipartW{w: w, b: "BOUND" + tok[:12]}
 	m.c = w
 	return m
 }

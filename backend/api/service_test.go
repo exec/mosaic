@@ -312,7 +312,7 @@ func TestService_FilterCRUD(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	feedID, err := svc.CreateFeed(ctx, FeedDTO{URL: "u", Name: "f", IntervalMin: 30, Enabled: true})
+	feedID, err := svc.CreateFeed(ctx, FeedDTO{URL: "https://example.com/rss", Name: "f", IntervalMin: 30, Enabled: true})
 	require.NoError(t, err)
 	catID, err := svc.CreateCategory(ctx, "ISOs", "/iso", "#3b82f6")
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ func TestService_DeleteFeed_CascadesFilters(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	feedID, _ := svc.CreateFeed(ctx, FeedDTO{URL: "u", Name: "f", IntervalMin: 30, Enabled: true})
+	feedID, _ := svc.CreateFeed(ctx, FeedDTO{URL: "https://example.com/rss", Name: "f", IntervalMin: 30, Enabled: true})
 	_, _ = svc.CreateFilter(ctx, FilterDTO{FeedID: feedID, Regex: ".*", Enabled: true})
 	_, _ = svc.CreateFilter(ctx, FilterDTO{FeedID: feedID, Regex: "x", Enabled: true})
 

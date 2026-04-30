@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -370,7 +370,19 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	t.Drop()
 	if deleteFiles && saveTo != "" {
 		if info := t.Info(); info != nil {
-			_ = os.RemoveAll(filepath.Join(saveTo, info.Name))
+			// Path-traversal defense: a malicious .torrent's info.Name can be
+			// "../../something" — joining it raw would let RemoveAll walk above
+			// saveTo and delete arbitrary files. safeRemovePath validates
+			// containment (resolving symlinks on both ends when present) and
+			// returns an error we log+skip on. The in-memory unsubscribe
+			// (t.Drop, the map deletes above) has already happened — only the
+			// disk delete is conditional on validation.
+			path, err := safeRemovePath(saveTo, info.Name)
+			if err != nil {
+				log.Printf("refusing to delete files for torrent: name=%q error=%v", info.Name, err)
+			} else {
+				_ = os.RemoveAll(path)
+			}
 		}
 	}
 	return nil

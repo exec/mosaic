@@ -134,7 +134,9 @@ func main() {
 	}
 	hub := remote.NewHub()
 	defer hub.Close()
-	remoteSrv := remote.NewServer(svc, hub, remote.NewSessionStore(), staticFS, paths.DataDir)
+	sessions := remote.NewSessionStore()
+	svc.AttachSessionRevoker(sessions)
+	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir)
 	defer remoteSrv.Stop()
 	svc.OnWebConfigChange(remoteSrv.Apply)
 	remoteSrv.Apply(svc.GetWebConfig(ctx))

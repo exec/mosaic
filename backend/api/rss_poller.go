@@ -39,7 +39,7 @@ func NewRSSPoller(svc *Service, feeds *persistence.Feeds, filters *persistence.F
 	p := &RSSPoller{
 		svc: svc, feeds: feeds, filters: filters,
 		parser:   gofeed.NewParser(),
-		httpC:    &http.Client{Timeout: 30 * time.Second},
+		httpC:    safeHTTPClient(30 * time.Second),
 		seenByID: make(map[int]map[string]struct{}),
 		stop:     make(chan struct{}),
 	}
@@ -85,6 +85,9 @@ func (p *RSSPoller) tick(ctx context.Context) {
 }
 
 func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
+	if _, err := validateFetchURL(f.URL); err != nil {
+		return fmt.Errorf("rss: refusing to fetch %q: %w", f.Name, err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", f.URL, nil)
 	if err != nil {
 		return err
