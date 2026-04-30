@@ -90,10 +90,17 @@ rm -rf /tmp/go-link-* /tmp/go-build* 2>/dev/null || true
 df -h / 2>/dev/null | tail -1 || true
 
 echo "==> create DMG"
+# hdiutil's auto-sizing from -srcfolder undershoots on universal builds and
+# fails copying into the mounted image with the very-misleading 'No space
+# left on device'. Compute 3x source size (in MB) + 100MB padding so the
+# UDZO container has plenty of room. Took five v0.1.* runs to nail down.
+APP_SIZE_MB=$(du -sm "${APP}" | awk '{print $1}')
+DMG_SIZE_MB=$((APP_SIZE_MB * 3 + 100))
 hdiutil create \
     -volname "Mosaic" \
     -srcfolder "${APP}" \
     -ov -format UDZO \
+    -size "${DMG_SIZE_MB}m" \
     "${DMG_OUT}"
 
 if [[ -n "${APPLE_DEVELOPER_ID:-}" ]]; then
