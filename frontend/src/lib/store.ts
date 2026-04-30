@@ -4,7 +4,7 @@ import {
   api, onInspectorTick, onStatsTick, onTorrentsTick, onUpdateAvailable,
   type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
   type GlobalStatsT, type InspectorTab,
-  type LimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
+  type LimitsDTO, type PeerLimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
   type UpdaterConfigDTO, type UpdateInfoDTO,
   type WebConfigDTO,
 } from './bindings';
@@ -45,6 +45,7 @@ export type AppState = {
   // Bandwidth + queue
   limits: LimitsDTO;
   queueLimits: QueueLimitsDTO;
+  peerLimits: PeerLimitsDTO;
 
   // Scheduling + blocklist
   scheduleRules: ScheduleRuleDTO[];
@@ -97,6 +98,13 @@ const emptyQueueLimits: QueueLimitsDTO = {
   max_active_seeds: 0,
 };
 
+const emptyPeerLimits: PeerLimitsDTO = {
+  listen_port: 0,
+  max_peers_per_torrent: 0,
+  dht_enabled: true,
+  encryption_enabled: true,
+};
+
 const emptyBlocklist: BlocklistDTO = {
   url: '',
   enabled: false,
@@ -145,6 +153,7 @@ export function createTorrentsStore() {
 
     limits: emptyLimits,
     queueLimits: emptyQueueLimits,
+    peerLimits: emptyPeerLimits,
 
     scheduleRules: [],
     blocklist: emptyBlocklist,
@@ -181,6 +190,7 @@ export function createTorrentsStore() {
   api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(bootFailed('default save path'));
   api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(bootFailed('limits'));
   api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(bootFailed('queue limits'));
+  api.getPeerLimits().then((p) => setState(produce((s) => { s.peerLimits = p; }))).catch(bootFailed('peer limits'));
   api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(bootFailed('schedule rules'));
   api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(bootFailed('blocklist'));
   api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(bootFailed('feeds'));
@@ -328,6 +338,10 @@ export function createTorrentsStore() {
     setQueueLimits: async (q: QueueLimitsDTO) => {
       await api.setQueueLimits(q);
       setState(produce((s) => { s.queueLimits = q; }));
+    },
+    setPeerLimits: async (p: PeerLimitsDTO) => {
+      await api.setPeerLimits(p);
+      setState(produce((s) => { s.peerLimits = p; }));
     },
     setQueuePosition: (infohash: string, pos: number) => api.setQueuePosition(infohash, pos),
     setForceStart: (infohash: string, force: boolean) => api.setForceStart(infohash, force),

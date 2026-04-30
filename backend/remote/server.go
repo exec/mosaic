@@ -63,6 +63,8 @@ func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, s
 			g.Post("/settings/alt_speed/toggle", h.ToggleAltSpeed)
 			g.Get("/settings/queue_limits", h.GetQueueLimits)
 			g.Put("/settings/queue_limits", h.SetQueueLimits)
+			g.Get("/settings/peer_limits", h.GetPeerLimits)
+			g.Put("/settings/peer_limits", h.SetPeerLimits)
 			g.Get("/settings/blocklist", h.GetBlocklist)
 			g.Put("/settings/blocklist", h.SetBlocklist)
 			g.Post("/settings/blocklist/refresh", h.RefreshBlocklist)

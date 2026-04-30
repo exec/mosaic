@@ -50,6 +50,13 @@ export type QueueLimitsDTO = {
   max_active_seeds: number;
 };
 
+export type PeerLimitsDTO = {
+  listen_port: number;
+  max_peers_per_torrent: number;
+  dht_enabled: boolean;
+  encryption_enabled: boolean;
+};
+
 export type GlobalStatsT = {
   total_torrents: number;
   active_torrents: number;
@@ -208,6 +215,8 @@ export const api = {
   toggleAltSpeed: () => transport.invoke<boolean>('ToggleAltSpeed'),
   getQueueLimits: () => transport.invoke<QueueLimitsDTO>('GetQueueLimits'),
   setQueueLimits: (q: QueueLimitsDTO) => transport.invoke<void>('SetQueueLimits', q),
+  getPeerLimits: () => transport.invoke<PeerLimitsDTO>('GetPeerLimits'),
+  setPeerLimits: (p: PeerLimitsDTO) => transport.invoke<void>('SetPeerLimits', p),
   setQueuePosition: (infohash: string, pos: number) => transport.invoke<void>('SetQueuePosition', infohash, pos),
   setForceStart: (infohash: string, force: boolean) => transport.invoke<void>('SetForceStart', infohash, force),
   listScheduleRules: () => transport.invoke<ScheduleRuleDTO[]>('ListScheduleRules'),

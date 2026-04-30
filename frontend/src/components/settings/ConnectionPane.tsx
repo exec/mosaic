@@ -1,13 +1,15 @@
 import {createSignal, createEffect} from 'solid-js';
 import {toast} from 'solid-sonner';
-import type {LimitsDTO, QueueLimitsDTO} from '../../lib/bindings';
+import type {LimitsDTO, PeerLimitsDTO, QueueLimitsDTO} from '../../lib/bindings';
 import {Button} from '../ui/Button';
 
 type Props = {
   limits: LimitsDTO;
   queueLimits: QueueLimitsDTO;
+  peerLimits: PeerLimitsDTO;
   onSetLimits: (l: LimitsDTO) => Promise<void>;
   onSetQueueLimits: (q: QueueLimitsDTO) => Promise<void>;
+  onSetPeerLimits: (p: PeerLimitsDTO) => Promise<void>;
 };
 
 function PaneHeader(props: {title: string; subtitle?: string}) {
@@ -54,6 +56,10 @@ export function ConnectionPane(props: Props) {
   const [altUp, setAltUp] = createSignal(props.limits.alt_up_kbps);
   const [maxDL, setMaxDL] = createSignal(props.queueLimits.max_active_downloads);
   const [maxSeeds, setMaxSeeds] = createSignal(props.queueLimits.max_active_seeds);
+  const [listenPort, setListenPort] = createSignal(props.peerLimits.listen_port);
+  const [maxPeers, setMaxPeers] = createSignal(props.peerLimits.max_peers_per_torrent);
+  const [dht, setDht] = createSignal(props.peerLimits.dht_enabled);
+  const [encryption, setEncryption] = createSignal(props.peerLimits.encryption_enabled);
 
   // Re-sync when prop changes (initial fetch races)
   createEffect(() => { setDown(props.limits.down_kbps); });
@@ -62,6 +68,10 @@ export function ConnectionPane(props: Props) {
   createEffect(() => { setAltUp(props.limits.alt_up_kbps); });
   createEffect(() => { setMaxDL(props.queueLimits.max_active_downloads); });
   createEffect(() => { setMaxSeeds(props.queueLimits.max_active_seeds); });
+  createEffect(() => { setListenPort(props.peerLimits.listen_port); });
+  createEffect(() => { setMaxPeers(props.peerLimits.max_peers_per_torrent); });
+  createEffect(() => { setDht(props.peerLimits.dht_enabled); });
+  createEffect(() => { setEncryption(props.peerLimits.encryption_enabled); });
 
   const saveLimits = async () => {
     try {
@@ -80,6 +90,18 @@ export function ConnectionPane(props: Props) {
     try {
       await props.onSetQueueLimits({max_active_downloads: maxDL(), max_active_seeds: maxSeeds()});
       toast.success('Queue limits saved');
+    } catch (e) { toast.error(String(e)); }
+  };
+
+  const savePeers = async () => {
+    try {
+      await props.onSetPeerLimits({
+        listen_port: listenPort(),
+        max_peers_per_torrent: maxPeers(),
+        dht_enabled: dht(),
+        encryption_enabled: encryption(),
+      });
+      toast.success('Peer settings saved');
     } catch (e) { toast.error(String(e)); }
   };
 
@@ -113,6 +135,29 @@ export function ConnectionPane(props: Props) {
       </Field>
       <div class="flex justify-end mt-3">
         <Button variant="primary" onClick={saveQueue}>Save queue</Button>
+      </div>
+
+      <div class="text-xs uppercase tracking-wider text-zinc-500 mt-6 mb-1 px-1">Peers</div>
+      <Field label="Listening port" help="0 = OS picks at startup. Restart Mosaic to apply.">
+        <NumberInput value={listenPort()} onInput={setListenPort} placeholder="0" />
+      </Field>
+      <Field label="Max peers per torrent" help="0 = anacrolix default (80). Applied to all running torrents on save.">
+        <NumberInput value={maxPeers()} onInput={setMaxPeers} suffix="peers" />
+      </Field>
+      <Field label="DHT" help="Distributed Hash Table — finds peers without trackers. Restart to apply.">
+        <label class="inline-flex items-center gap-2 text-sm text-zinc-200">
+          <input type="checkbox" checked={dht()} onChange={(e) => setDht(e.currentTarget.checked)} class="accent-accent-500" />
+          Enabled
+        </label>
+      </Field>
+      <Field label="Protocol encryption" help="MSE/PE header obfuscation. Restart to apply.">
+        <label class="inline-flex items-center gap-2 text-sm text-zinc-200">
+          <input type="checkbox" checked={encryption()} onChange={(e) => setEncryption(e.currentTarget.checked)} class="accent-accent-500" />
+          Enabled
+        </label>
+      </Field>
+      <div class="flex justify-end mt-3">
+        <Button variant="primary" onClick={savePeers}>Save peers</Button>
       </div>
     </div>
   );

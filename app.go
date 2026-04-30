@@ -221,6 +221,9 @@ func (a *App) ToggleAltSpeed() (bool, error)     { return a.svc.ToggleAltSpeed(a
 func (a *App) GetQueueLimits() api.QueueLimitsDTO        { return a.svc.GetQueueLimits(a.ctx) }
 func (a *App) SetQueueLimits(q api.QueueLimitsDTO) error { return a.svc.SetQueueLimits(a.ctx, q) }
 
+func (a *App) GetPeerLimits() api.PeerLimitsDTO        { return a.svc.GetPeerLimits(a.ctx) }
+func (a *App) SetPeerLimits(p api.PeerLimitsDTO) error { return a.svc.SetPeerLimits(a.ctx, p) }
+
 func (a *App) SetQueuePosition(infohash string, pos int) error {
 	return a.svc.SetQueuePosition(a.ctx, infohash, pos)
 }

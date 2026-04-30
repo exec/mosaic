@@ -79,6 +79,10 @@ func (e *Engine) Pause(id TorrentID) error   { return e.backend.Pause(id) }
 func (e *Engine) Resume(id TorrentID) error  { return e.backend.Resume(id) }
 func (e *Engine) Recheck(id TorrentID) error { return e.backend.Recheck(id) }
 
+func (e *Engine) ApplyPerTorrentMaxPeers(n int) error {
+	return e.backend.ApplyPerTorrentMaxPeers(n)
+}
+
 func (e *Engine) Remove(id TorrentID, deleteFiles bool) error {
 	if err := e.backend.Remove(id, deleteFiles); err != nil {
 		return err

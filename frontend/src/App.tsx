@@ -253,6 +253,7 @@ function AuthenticatedApp() {
             tags={store.state.tags}
             limits={store.state.limits}
             queueLimits={store.state.queueLimits}
+            peerLimits={store.state.peerLimits}
             scheduleRules={store.state.scheduleRules}
             blocklist={store.state.blocklist}
             feeds={store.state.feeds}
@@ -270,6 +271,7 @@ function AuthenticatedApp() {
             onInstallUpdate={() => store.installUpdate()}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
+            onSetPeerLimits={(p) => store.setPeerLimits(p)}
             onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}
             onUpdateCategory={(id, name, sp, color) => store.updateCategory(id, name, sp, color)}
             onDeleteCategory={(id) => store.deleteCategory(id)}

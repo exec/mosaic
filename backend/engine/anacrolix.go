@@ -53,6 +53,13 @@ type AnacrolixConfig struct {
 	ListenPort       int
 	EnableDHT        bool
 	EnableEncryption bool
+	// MaxPeersPerTorrent is the initial per-torrent established-conn cap
+	// applied to every new torrent on add and (via ApplyPerTorrentMaxPeers)
+	// to all running torrents when the user changes the setting at runtime.
+	// 0 = use anacrolix's per-torrent default (80). anacrolix v1.61 doesn't
+	// expose a separate global cap; effective global ceiling is this value
+	// multiplied by the number of active torrents.
+	MaxPeersPerTorrent int
 }
 
 // AnacrolixBackend implements Backend on top of anacrolix/torrent.
@@ -108,6 +115,9 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	tcfg.DataDir = cfg.DataDir
 	tcfg.ListenPort = cfg.ListenPort
 	tcfg.NoDHT = !cfg.EnableDHT
+	if cfg.MaxPeersPerTorrent > 0 {
+		tcfg.EstablishedConnsPerTorrent = cfg.MaxPeersPerTorrent
+	}
 	if cfg.EnableEncryption {
 		tcfg.HeaderObfuscationPolicy.Preferred = true
 		tcfg.HeaderObfuscationPolicy.RequirePreferred = false
@@ -299,6 +309,30 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 	a.verifyMu.Lock()
 	delete(a.filesMissing, id)
 	a.verifyMu.Unlock()
+	return nil
+}
+
+// ApplyPerTorrentMaxPeers updates SetMaxEstablishedConns on every running
+// torrent. Used when the user changes the "max peers per torrent" setting.
+// Already-paused torrents keep their cap of 0 (we set it to 0 to pause);
+// resuming will pick up the new cap.
+func (a *AnacrolixBackend) ApplyPerTorrentMaxPeers(n int) error {
+	if n <= 0 {
+		n = 80 // anacrolix default
+	}
+	a.pausedMu.RLock()
+	paused := make(map[TorrentID]bool, len(a.paused))
+	for id, v := range a.paused {
+		paused[id] = v
+	}
+	a.pausedMu.RUnlock()
+	for _, t := range a.client.Torrents() {
+		id := TorrentID(t.InfoHash().HexString())
+		if paused[id] {
+			continue
+		}
+		t.SetMaxEstablishedConns(n)
+	}
 	return nil
 }
 

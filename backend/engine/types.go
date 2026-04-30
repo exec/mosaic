@@ -75,6 +75,13 @@ type Backend interface {
 	SetFilePriorities(id TorrentID, prios map[int]Priority) error
 	SetGlobalRateLimits(downBytesPerSec, upBytesPerSec int) error // 0 = unlimited
 	SetIPBlocklist(reader io.Reader) error                        // nil clears
+	// ApplyPerTorrentMaxPeers updates the established-connection cap for every
+	// running torrent. Pass 0 to fall back to the engine's default (anacrolix
+	// uses 80). New torrents added afterwards inherit this value via the
+	// Client config — but the Client config can't be mutated at runtime, so
+	// the actual default-on-add comes from MaxPeersPerTorrent passed to
+	// NewAnacrolixBackend at startup.
+	ApplyPerTorrentMaxPeers(n int) error
 	SetQueuePosition(id TorrentID, pos int)
 	SetForceStart(id TorrentID, force bool)
 	ScheduledPause(id TorrentID, paused bool) // distinct from manual Pause

@@ -157,6 +157,13 @@ const ROUTES: Record<string, RouteSpec> = {
     body: ([q]) => q,
     unwrap: okEnvelope,
   },
+  GetPeerLimits: {method: 'GET', path: () => '/api/settings/peer_limits'},
+  SetPeerLimits: {
+    method: 'PUT',
+    path: () => '/api/settings/peer_limits',
+    body: ([p]) => p,
+    unwrap: okEnvelope,
+  },
   GetBlocklist: {method: 'GET', path: () => '/api/settings/blocklist'},
   SetBlocklistURL: {
     method: 'PUT',

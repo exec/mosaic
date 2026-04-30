@@ -83,6 +83,8 @@ func (f *FakeBackend) Recheck(id TorrentID) error {
 	return nil
 }
 
+func (f *FakeBackend) ApplyPerTorrentMaxPeers(_ int) error { return nil }
+
 func (f *FakeBackend) Remove(id TorrentID, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

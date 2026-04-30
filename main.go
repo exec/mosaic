@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -61,11 +62,37 @@ func main() {
 	}
 	defer db.Close()
 
+	// Persisted connection settings (Settings → Connection → Peers) override
+	// the YAML/CLI defaults for the current run. Read directly from settings
+	// table since the Service hasn't been constructed yet at this point.
+	settingsDAO := persistence.NewSettings(db)
+	listenPort := cfg.ListenPort
+	enableDHT := cfg.EnableDHT
+	enableEnc := cfg.EnableEncryption
+	maxPeersPerTorrent := 0
+	if v, _ := settingsDAO.Get(ctx, "peer_listen_port"); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			listenPort = n
+		}
+	}
+	if v, _ := settingsDAO.Get(ctx, "peers_max_per_torrent"); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			maxPeersPerTorrent = n
+		}
+	}
+	if v, _ := settingsDAO.Get(ctx, "dht_enabled"); v == "false" {
+		enableDHT = false
+	}
+	if v, _ := settingsDAO.Get(ctx, "encryption_enabled"); v == "false" {
+		enableEnc = false
+	}
+
 	backend, err := engine.NewAnacrolixBackend(engine.AnacrolixConfig{
-		DataDir:          filepath.Join(paths.DataDir, "engine"),
-		ListenPort:       cfg.ListenPort,
-		EnableDHT:        cfg.EnableDHT,
-		EnableEncryption: cfg.EnableEncryption,
+		DataDir:            filepath.Join(paths.DataDir, "engine"),
+		ListenPort:         listenPort,
+		EnableDHT:          enableDHT,
+		EnableEncryption:   enableEnc,
+		MaxPeersPerTorrent: maxPeersPerTorrent,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("open engine backend")
@@ -85,7 +112,7 @@ func main() {
 		persistence.NewTorrents(db),
 		persistence.NewCategories(db),
 		persistence.NewTags(db),
-		persistence.NewSettings(db),
+		settingsDAO,
 		scheduleRules,
 		feeds,
 		filters,

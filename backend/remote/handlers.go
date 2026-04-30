@@ -426,6 +426,23 @@ func (h *Handlers) SetQueueLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func (h *Handlers) GetPeerLimits(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.svc.GetPeerLimits(r.Context()))
+}
+
+func (h *Handlers) SetPeerLimits(w http.ResponseWriter, r *http.Request) {
+	var p api.PeerLimitsDTO
+	if err := decodeJSON(r, &p); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.SetPeerLimits(r.Context(), p); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 type queuePosRequest struct {
 	InfoHash string `json:"infohash"`
 	Pos      int    `json:"pos"`

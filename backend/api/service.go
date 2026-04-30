@@ -98,6 +98,11 @@ const (
 	settingBlocklistURL     = "blocklist_url"
 	settingBlocklistEnabled = "blocklist_enabled"
 
+	settingPeerListenPort      = "peer_listen_port"
+	settingMaxPeersPerTorrent  = "peers_max_per_torrent"
+	settingDHTEnabled          = "dht_enabled"
+	settingEncryptionEnabled   = "encryption_enabled"
+
 	settingWebEnabled  = "web_enabled"
 	settingWebPort     = "web_port"
 	settingWebBindAll  = "web_bind_all"
@@ -913,6 +918,60 @@ func (s *Service) applyLimits(ctx context.Context) error {
 		down, up = l.AltDownKbps*1024, l.AltUpKbps*1024
 	}
 	return s.engine.SetGlobalRateLimits(down, up)
+}
+
+// PeerLimitsDTO carries the connection-level settings users can adjust from
+// Settings → Connection. Most fields require a restart to take effect because
+// anacrolix exposes them only at Client construction; MaxPeersPerTorrent is
+// runtime-mutable and gets pushed to every running torrent on Set.
+type PeerLimitsDTO struct {
+	ListenPort         int  `json:"listen_port"`         // 0 = let OS pick at startup
+	MaxPeersPerTorrent int  `json:"max_peers_per_torrent"` // 0 = anacrolix default (80)
+	DHTEnabled         bool `json:"dht_enabled"`
+	EncryptionEnabled  bool `json:"encryption_enabled"`
+}
+
+func (s *Service) GetPeerLimits(ctx context.Context) PeerLimitsDTO {
+	// DHT + encryption default to true (matches anacrolix's defaults + good
+	// privacy hygiene). The bool helpers in this Service treat unset as
+	// false, so use a presence-aware reader.
+	dhtRaw, _ := s.settings.Get(ctx, settingDHTEnabled)
+	dhtEnabled := dhtRaw == "" || dhtRaw == "true" // default-on
+	encRaw, _ := s.settings.Get(ctx, settingEncryptionEnabled)
+	encEnabled := encRaw == "" || encRaw == "true" // default-on
+	return PeerLimitsDTO{
+		ListenPort:         s.intSetting(ctx, settingPeerListenPort),
+		MaxPeersPerTorrent: s.intSetting(ctx, settingMaxPeersPerTorrent),
+		DHTEnabled:         dhtEnabled,
+		EncryptionEnabled:  encEnabled,
+	}
+}
+
+func (s *Service) SetPeerLimits(ctx context.Context, p PeerLimitsDTO) error {
+	if p.ListenPort < 0 || p.ListenPort > 65535 {
+		return fmt.Errorf("listen port must be 0..65535")
+	}
+	if p.MaxPeersPerTorrent < 0 {
+		return fmt.Errorf("max peers per torrent must be >= 0")
+	}
+	if err := s.setIntSetting(ctx, settingPeerListenPort, p.ListenPort); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingMaxPeersPerTorrent, p.MaxPeersPerTorrent); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDHTEnabled, p.DHTEnabled); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingEncryptionEnabled, p.EncryptionEnabled); err != nil {
+		return err
+	}
+	// Per-torrent cap is the only one anacrolix lets us mutate at runtime.
+	// ListenPort / DHT / Encryption changes take effect at next launch.
+	if err := s.engine.ApplyPerTorrentMaxPeers(p.MaxPeersPerTorrent); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) GetQueueLimits(ctx context.Context) QueueLimitsDTO {
