@@ -30,6 +30,10 @@ Unicode true
 ####
 ## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
 ####
+# Per-user install so the running app can self-update without admin (writes
+# to Program Files would otherwise ACL-deny go-selfupdate's binary swap).
+!define REQUEST_EXECUTION_LEVEL "user"
+####
 ## Include the wails tools
 ####
 !include "wails_tools.nsh"
@@ -72,7 +76,7 @@ ManifestDPIAware true
 
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" # Name of the installer's file.
-InstallDir "$PROGRAMFILES64\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}" # Default installing folder ($PROGRAMFILES is Program Files folder).
+InstallDir "$LOCALAPPDATA\Programs\${INFO_PRODUCTNAME}" # Per-user install — writeable without elevation so auto-update works.
 ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
@@ -112,12 +116,12 @@ Section
     # Register Mosaic in Windows's "Default apps" infrastructure so the user
     # can pick it as default for .torrent + magnet from Settings (Win10/11
     # gates the actual default selection — apps can register but only the
-    # user can confirm).
-    WriteRegStr HKLM "SOFTWARE\RegisteredApplications" "${INFO_PRODUCTNAME}" "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities"
-    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities" "ApplicationName" "${INFO_PRODUCTNAME}"
-    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities" "ApplicationDescription" "BitTorrent client"
-    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities\FileAssociations" ".torrent" "MosaicTorrent"
-    WriteRegStr HKLM "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities\URLAssociations" "magnet" "MosaicTorrent"
+    # user can confirm). HKCU because we install per-user.
+    WriteRegStr HKCU "SOFTWARE\RegisteredApplications" "${INFO_PRODUCTNAME}" "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities"
+    WriteRegStr HKCU "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities" "ApplicationName" "${INFO_PRODUCTNAME}"
+    WriteRegStr HKCU "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities" "ApplicationDescription" "BitTorrent client"
+    WriteRegStr HKCU "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities\FileAssociations" ".torrent" "MosaicTorrent"
+    WriteRegStr HKCU "SOFTWARE\${INFO_PRODUCTNAME}\Capabilities\URLAssociations" "magnet" "MosaicTorrent"
 
     !insertmacro wails.writeUninstaller
 SectionEnd
@@ -139,8 +143,8 @@ Section "uninstall"
     DeleteRegKey HKCR "magnet"
     DeleteRegKey HKCR ".torrent"
     DeleteRegKey HKCR "MosaicTorrent"
-    DeleteRegKey HKLM "SOFTWARE\${INFO_PRODUCTNAME}"
-    DeleteRegValue HKLM "SOFTWARE\RegisteredApplications" "${INFO_PRODUCTNAME}"
+    DeleteRegKey HKCU "SOFTWARE\${INFO_PRODUCTNAME}"
+    DeleteRegValue HKCU "SOFTWARE\RegisteredApplications" "${INFO_PRODUCTNAME}"
 
     !insertmacro wails.deleteUninstaller
 SectionEnd
