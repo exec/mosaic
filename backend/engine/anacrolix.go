@@ -172,6 +172,11 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	go func() {
 		select {
 		case <-t.GotInfo():
+			// VerifyData hashes any existing files at savePath and marks
+			// complete pieces accordingly — needed so resume after restart
+			// doesn't redownload bytes already on disk. anacrolix doesn't
+			// auto-verify on AddTorrentSpec; you have to ask explicitly.
+			t.VerifyData()
 			t.DownloadAll()
 		case <-ctx.Done():
 		}
@@ -197,7 +202,13 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	a.mu.Lock()
 	a.bySaveTo[id] = savePath
 	a.mu.Unlock()
-	t.DownloadAll()
+	// File-add already has the metainfo so info is available immediately —
+	// VerifyData + DownloadAll on a goroutine so we don't block the caller
+	// while hashing potentially many GB of existing partial data on resume.
+	go func() {
+		t.VerifyData()
+		t.DownloadAll()
+	}()
 	return id, nil
 }
 
