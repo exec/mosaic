@@ -63,8 +63,12 @@ jobs:
         if: matrix.platform == 'windows'
         # windows-latest doesn't ship with makensis. wails build -nsis silently
         # warns and skips the installer when it's missing; install via choco
-        # so the .exe installer gets built.
-        run: choco install nsis -y --no-progress
+        # so the .exe installer gets built. choco only updates PATH for FUTURE
+        # shells, so we also append the install dir to GITHUB_PATH so the
+        # build step in this same job sees it.
+        run: |
+          choco install nsis -y --no-progress
+          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         shell: pwsh
 
       - name: Build (macOS)
