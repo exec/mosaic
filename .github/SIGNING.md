@@ -26,7 +26,7 @@ then add a workflow step that decodes + imports before `build-macos.sh`:
 
 ```yaml
 - name: Import Apple cert
-  if: secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 != ''
+  if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 != '' }}
   env:
     P12_B64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
     P12_PASS: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
