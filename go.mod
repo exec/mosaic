@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/adrg/xdg v0.5.3
 	github.com/anacrolix/torrent v1.61.0
+	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/pressly/goose/v3 v3.27.1
@@ -16,6 +17,7 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.50.0
+	nhooyr.io/websocket v1.8.17
 )
 
 require (
@@ -50,7 +52,6 @@ require (
 	github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/creativeprojects/go-selfupdate v1.5.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -144,7 +145,6 @@ require (
 	modernc.org/libc v1.72.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	nhooyr.io/websocket v1.8.17 // indirect
 	zombiezen.com/go/sqlite v0.13.1 // indirect
 )
 
