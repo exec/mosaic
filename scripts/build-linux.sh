@@ -40,6 +40,9 @@ APPDIR="${ROOT}/build/linux/AppDir"
 cp "${ELF}" "${APPDIR}/usr/bin/mosaic"
 chmod +x "${APPDIR}/usr/bin/mosaic"
 cp "${ROOT}/build/linux/mosaic.desktop" "${APPDIR}/mosaic.desktop"
+# appimagetool requires the icon (matching the .desktop's `Icon=mosaic`) at the
+# AppDir root in addition to the hicolor location.
+cp "${ROOT}/build/appicon.png" "${APPDIR}/mosaic.png"
 cp "${ROOT}/build/appicon.png" "${APPDIR}/usr/share/icons/hicolor/512x512/apps/mosaic.png"
 
 if [[ ! -L "${APPDIR}/.DirIcon" ]]; then
