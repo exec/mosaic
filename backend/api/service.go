@@ -1109,6 +1109,8 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list persisted torrents: %w", err)
 	}
+	failed := 0
+	orphaned := 0
 	for _, r := range records {
 		var id engine.TorrentID
 		var addErr error
@@ -1119,10 +1121,12 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 			id, addErr = s.engine.AddMagnet(ctx, r.Magnet, r.SavePath)
 		default:
 			log.Warn().Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: skipping orphan record (no magnet, no metainfo)")
+			orphaned++
 			continue
 		}
 		if addErr != nil {
 			log.Warn().Err(addErr).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add failed")
+			failed++
 			continue
 		}
 		// If the persistence layer recorded this torrent as previously complete,
@@ -1133,6 +1137,9 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 		if r.CompletedAt != nil {
 			s.engine.MarkExpectedComplete(id)
 		}
+	}
+	if failed > 0 || orphaned > 0 {
+		log.Warn().Int("failed", failed).Int("orphaned", orphaned).Int("total", len(records)).Msg("restore: not all torrents could be re-added")
 	}
 	return nil
 }

@@ -58,11 +58,17 @@ function AuthenticatedApp() {
   onCleanup(() => offLaunch());
 
   const applyOrganization = async (id: string, categoryID: number | null, tagIDs: number[]) => {
+    const failures: string[] = [];
     if (categoryID !== null) {
-      try { await store.setTorrentCategory(id, categoryID); } catch (err) { console.error(err); }
+      try { await store.setTorrentCategory(id, categoryID); }
+      catch (err) { console.error(err); failures.push(`category: ${String(err)}`); }
     }
     for (const tagID of tagIDs) {
-      try { await store.assignTag(id, tagID); } catch (err) { console.error(err); }
+      try { await store.assignTag(id, tagID); }
+      catch (err) { console.error(err); failures.push(`tag #${tagID}: ${String(err)}`); }
+    }
+    if (failures.length > 0) {
+      toast.error(`Couldn't apply ${failures.length} ${failures.length === 1 ? 'rule' : 'rules'}: ${failures.join('; ')}`);
     }
   };
 
@@ -92,11 +98,19 @@ function AuthenticatedApp() {
     if (targetIdx === currentIdx) return;
     const moved = sorted.splice(currentIdx, 1)[0];
     sorted.splice(targetIdx, 0, moved);
-    await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
+    try {
+      await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
+    } catch (err) {
+      toast.error(`Couldn't reorder: ${String(err)}`);
+    }
   };
 
   const onToggleForceStart = async (id: string, current: boolean) => {
-    await store.setForceStart(id, !current);
+    try {
+      await store.setForceStart(id, !current);
+    } catch (err) {
+      toast.error(`Force-start toggle failed: ${String(err)}`);
+    }
   };
 
   const handleSelect = (id: string, e: MouseEvent) => {
@@ -135,15 +149,34 @@ function AuthenticatedApp() {
         else store.clearSelection();
       } else if (e.key === ' ') {
         e.preventDefault();
-        for (const id of store.state.selection) {
+        // Pause/resume the entire selection. Aggregate any failures into a
+        // single toast so partial-success isn't invisible.
+        const failures: string[] = [];
+        Promise.all([...store.state.selection].map(async (id) => {
           const t = store.state.torrents.find((x) => x.id === id);
-          if (!t) continue;
-          if (t.paused) store.resume(id); else store.pause(id);
-        }
+          if (!t) return;
+          try {
+            await (t.paused ? store.resume(id) : store.pause(id));
+          } catch (err) {
+            failures.push(`${t.name}: ${String(err)}`);
+          }
+        })).then(() => {
+          if (failures.length > 0) {
+            toast.error(`${failures.length} failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '…' : ''}`);
+          }
+        });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (store.state.selection.size === 0) return;
         e.preventDefault();
-        for (const id of store.state.selection) store.remove(id, false);
+        const failures: string[] = [];
+        Promise.all([...store.state.selection].map(async (id) => {
+          try { await store.remove(id, false); }
+          catch (err) { failures.push(`${id.slice(0, 8)}: ${String(err)}`); }
+        })).then(() => {
+          if (failures.length > 0) {
+            toast.error(`${failures.length} remove failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '…' : ''}`);
+          }
+        });
         store.clearSelection();
       }
     };

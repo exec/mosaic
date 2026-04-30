@@ -1,4 +1,5 @@
 import {createStore, produce, reconcile} from 'solid-js/store';
+import {toast} from 'solid-sonner';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick, onUpdateAvailable,
   type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
@@ -158,22 +159,34 @@ export function createTorrentsStore() {
     appVersion: 'dev',
   });
 
+  // Boot fetches. Each failure is logged AND surfaces a single aggregated
+  // toast so the user notices when the backend is unreachable instead of
+  // sitting in front of an empty UI forever. We don't toast per-failure
+  // because a network outage would explode the screen — one toast per boot.
+  let bootFailureToasted = false;
+  const bootFailed = (label: string) => (e: unknown) => {
+    console.error(`boot fetch '${label}' failed:`, e);
+    if (bootFailureToasted) return;
+    bootFailureToasted = true;
+    toast.error(`Couldn't reach Mosaic backend (${label}). Check the desktop app or web server.`);
+  };
+
   api.listTorrents()
     .then((rows) => setState({torrents: rows, loading: false}))
-    .catch((e) => { console.error(e); setState({loading: false}); });
+    .catch((e) => { bootFailed('torrents')(e); setState({loading: false}); });
 
-  api.globalStats().then((s) => setState({stats: s})).catch(console.error);
-  api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(console.error);
-  api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(console.error);
-  api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(console.error);
-  api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(console.error);
-  api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(console.error);
-  api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(console.error);
-  api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(console.error);
-  api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(console.error);
-  api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(console.error);
-  api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(console.error);
-  api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(console.error);
+  api.globalStats().then((s) => setState({stats: s})).catch(bootFailed('stats'));
+  api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(bootFailed('categories'));
+  api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(bootFailed('tags'));
+  api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(bootFailed('default save path'));
+  api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(bootFailed('limits'));
+  api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(bootFailed('queue limits'));
+  api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(bootFailed('schedule rules'));
+  api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(bootFailed('blocklist'));
+  api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(bootFailed('feeds'));
+  api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(bootFailed('web config'));
+  api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(bootFailed('updater config'));
+  api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(bootFailed('app version'));
 
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));

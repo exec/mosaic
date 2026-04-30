@@ -98,7 +98,9 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 
 	resp, err := p.httpC.Do(req)
 	if err != nil {
-		_ = p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag)
+		if uerr := p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag); uerr != nil {
+			log.Warn().Err(uerr).Int("feed", f.ID).Msg("rss: update poll result failed")
+		}
 		return err
 	}
 	defer resp.Body.Close()
@@ -107,13 +109,17 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 		return p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag)
 	}
 	if resp.StatusCode >= 400 {
-		_ = p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag)
+		if uerr := p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag); uerr != nil {
+			log.Warn().Err(uerr).Int("feed", f.ID).Msg("rss: update poll result failed")
+		}
 		return fmt.Errorf("rss: HTTP %d", resp.StatusCode)
 	}
 
 	feed, err := p.parser.Parse(resp.Body)
 	if err != nil {
-		_ = p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag)
+		if uerr := p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag); uerr != nil {
+			log.Warn().Err(uerr).Int("feed", f.ID).Msg("rss: update poll result failed")
+		}
 		return err
 	}
 
@@ -155,7 +161,9 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 				continue
 			}
 			if fil.CategoryID != nil {
-				_ = p.svc.SetTorrentCategory(ctx, string(id), fil.CategoryID)
+				if cerr := p.svc.SetTorrentCategory(ctx, string(id), fil.CategoryID); cerr != nil {
+					log.Warn().Err(cerr).Str("title", item.Title).Int("category", *fil.CategoryID).Msg("rss: assign category failed")
+				}
 			}
 			matched++
 			p.markSeen(f.ID, key)
