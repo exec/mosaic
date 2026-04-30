@@ -33,6 +33,8 @@ export type Torrent = {
   queue_position: number;
   force_start: boolean;
   queued: boolean;
+  verifying: boolean;
+  files_missing: boolean;
 };
 
 export type LimitsDTO = {

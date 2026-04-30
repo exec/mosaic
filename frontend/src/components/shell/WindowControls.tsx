@@ -5,7 +5,7 @@ import {api} from '../../lib/bindings';
 export function WindowControls() {
   return (
     <div
-      class="absolute right-0 top-0 z-50 flex h-8"
+      class="flex h-full shrink-0"
       style={{'-webkit-app-region': 'no-drag'}}
     >
       <button

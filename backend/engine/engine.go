@@ -111,6 +111,9 @@ func (e *Engine) SetForceStart(id TorrentID, force bool) {
 func (e *Engine) ScheduledPause(id TorrentID, paused bool) {
 	e.backend.ScheduledPause(id, paused)
 }
+func (e *Engine) MarkExpectedComplete(id TorrentID) {
+	e.backend.MarkExpectedComplete(id)
+}
 
 func (e *Engine) Close() error {
 	e.mu.Lock()

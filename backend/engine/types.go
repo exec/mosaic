@@ -37,6 +37,8 @@ type Snapshot struct {
 	QueuePosition int  // 0 = top of queue
 	ForceStart    bool
 	Queued        bool // true if scheduler is holding it back
+	Verifying     bool // hashing existing files against the metainfo
+	FilesMissing  bool // was-complete on prior session, now isn't (user deleted files)
 }
 
 // EventKind enumerates the kinds of EngineEvent.
@@ -75,6 +77,10 @@ type Backend interface {
 	SetQueuePosition(id TorrentID, pos int)
 	SetForceStart(id TorrentID, force bool)
 	ScheduledPause(id TorrentID, paused bool) // distinct from manual Pause
+	// MarkExpectedComplete tells the backend that this torrent was 100%
+	// complete on a prior session — so if VerifyData on add finds <100%,
+	// flag it as FilesMissing (user deleted files) and skip auto-download.
+	MarkExpectedComplete(id TorrentID)
 	Close() error
 }
 

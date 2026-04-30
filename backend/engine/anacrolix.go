@@ -75,6 +75,15 @@ type AnacrolixBackend struct {
 	forceStart     map[TorrentID]bool
 	scheduledPause map[TorrentID]bool
 
+	// Verify state — verifying[id] is true while VerifyData is hashing pieces;
+	// expectedComplete[id] is set by Service when restoring a previously-100%
+	// torrent so we can flag filesMissing[id] if VerifyData turns up <100%.
+	// All three guarded by verifyMu so snapshotFor reads them atomically.
+	verifyMu         sync.RWMutex
+	verifying        map[TorrentID]bool
+	expectedComplete map[TorrentID]bool
+	filesMissing     map[TorrentID]bool
+
 	// Rate limiters owned via ClientConfig. The same *rate.Limiter pointers are
 	// stashed here so SetGlobalRateLimits can mutate them in place via
 	// SetLimit/SetBurst (anacrolix v1.61 has no setter on the Client itself).
@@ -121,12 +130,15 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	}
 	return &AnacrolixBackend{
 		client:         c,
-		bySaveTo:       make(map[TorrentID]string),
-		prevRates:      make(map[TorrentID]rateSample),
-		paused:         make(map[TorrentID]bool),
-		queuePos:       make(map[TorrentID]int),
-		forceStart:     make(map[TorrentID]bool),
-		scheduledPause: make(map[TorrentID]bool),
+		bySaveTo:         make(map[TorrentID]string),
+		prevRates:        make(map[TorrentID]rateSample),
+		paused:           make(map[TorrentID]bool),
+		queuePos:         make(map[TorrentID]int),
+		forceStart:       make(map[TorrentID]bool),
+		scheduledPause:   make(map[TorrentID]bool),
+		verifying:        make(map[TorrentID]bool),
+		expectedComplete: make(map[TorrentID]bool),
+		filesMissing:     make(map[TorrentID]bool),
 		dlLim:          dlLim,
 		ulLim:          ulLim,
 		ipBlock:        ipBlock,
@@ -169,19 +181,70 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	a.mu.Lock()
 	a.bySaveTo[id] = savePath
 	a.mu.Unlock()
-	go func() {
-		select {
-		case <-t.GotInfo():
-			// VerifyData hashes any existing files at savePath and marks
-			// complete pieces accordingly — needed so resume after restart
-			// doesn't redownload bytes already on disk. anacrolix doesn't
-			// auto-verify on AddTorrentSpec; you have to ask explicitly.
-			t.VerifyData()
-			t.DownloadAll()
-		case <-ctx.Done():
-		}
-	}()
+	go a.verifyAndStart(ctx, id, t)
 	return id, nil
+}
+
+// verifyAndStart hashes existing files (so resume picks up partials), then
+// either kicks DownloadAll OR — if Service marked this torrent as previously
+// complete and verify finds <100% — flags FilesMissing and pauses so the
+// app doesn't silently redownload bytes the user just deleted.
+func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *torrent.Torrent) {
+	// Wait for metainfo. AddFile already has it (channel is pre-closed);
+	// AddMagnet has to fetch it via DHT/PEX before we can hash anything.
+	select {
+	case <-t.GotInfo():
+	case <-ctx.Done():
+		return
+	}
+
+	a.setVerifying(id, true)
+	defer a.setVerifying(id, false)
+
+	t.VerifyData()
+
+	a.verifyMu.RLock()
+	wasComplete := a.expectedComplete[id]
+	a.verifyMu.RUnlock()
+
+	// BytesMissing is the canonical "is anything still needed" check.
+	if wasComplete && t.BytesMissing() > 0 {
+		a.verifyMu.Lock()
+		a.filesMissing[id] = true
+		a.verifyMu.Unlock()
+		// Pause the torrent so it doesn't silently redownload. User can hit
+		// Resume to either replace missing files or remove the entry.
+		a.pausedMu.Lock()
+		a.paused[id] = true
+		a.pausedMu.Unlock()
+		t.SetMaxEstablishedConns(0)
+		return
+	}
+
+	if ctx.Err() != nil {
+		return
+	}
+	t.DownloadAll()
+}
+
+func (a *AnacrolixBackend) setVerifying(id TorrentID, v bool) {
+	a.verifyMu.Lock()
+	if v {
+		a.verifying[id] = true
+	} else {
+		delete(a.verifying, id)
+	}
+	a.verifyMu.Unlock()
+}
+
+// MarkExpectedComplete marks this torrent as having been 100% on a prior
+// session, so verifyAndStart can flag FilesMissing if VerifyData reveals
+// the user deleted files. Service.RestoreOnStartup calls this when the
+// persisted record's CompletedAt is non-nil.
+func (a *AnacrolixBackend) MarkExpectedComplete(id TorrentID) {
+	a.verifyMu.Lock()
+	a.expectedComplete[id] = true
+	a.verifyMu.Unlock()
 }
 
 func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath string) (TorrentID, error) {
@@ -202,13 +265,9 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	a.mu.Lock()
 	a.bySaveTo[id] = savePath
 	a.mu.Unlock()
-	// File-add already has the metainfo so info is available immediately —
-	// VerifyData + DownloadAll on a goroutine so we don't block the caller
-	// while hashing potentially many GB of existing partial data on resume.
-	go func() {
-		t.VerifyData()
-		t.DownloadAll()
-	}()
+	// Same verify-then-start flow as AddMagnet — the GotInfo wait inside
+	// verifyAndStart is a no-op here since metainfo is already attached.
+	go a.verifyAndStart(ctx, id, t)
 	return id, nil
 }
 
@@ -267,9 +326,11 @@ func (a *AnacrolixBackend) List() []Snapshot {
 	defer a.rateMu.Unlock()
 	a.pausedMu.RLock()
 	defer a.pausedMu.RUnlock()
+	a.verifyMu.RLock()
+	defer a.verifyMu.RUnlock()
 	for _, t := range ts {
 		id := TorrentID(t.InfoHash().HexString())
-		snap, next := snapshotFor(t, a.prevRates[id], a.paused[id], a.queuePos[id], a.forceStart[id], a.scheduledPause[id])
+		snap, next := snapshotFor(t, a.prevRates[id], a.paused[id], a.queuePos[id], a.forceStart[id], a.scheduledPause[id], a.verifying[id], a.filesMissing[id])
 		a.prevRates[id] = next
 		out = append(out, snap)
 	}
@@ -289,7 +350,11 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	forceStart := a.forceStart[id]
 	queued := a.scheduledPause[id]
 	a.pausedMu.RUnlock()
-	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued)
+	a.verifyMu.RLock()
+	verifying := a.verifying[id]
+	filesMissing := a.filesMissing[id]
+	a.verifyMu.RUnlock()
+	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued, verifying, filesMissing)
 	a.prevRates[id] = next
 	a.rateMu.Unlock()
 	return snap, nil
@@ -355,7 +420,11 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	forceStart := a.forceStart[id]
 	queued := a.scheduledPause[id]
 	a.pausedMu.RUnlock()
-	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued)
+	a.verifyMu.RLock()
+	verifying := a.verifying[id]
+	filesMissing := a.filesMissing[id]
+	a.verifyMu.RUnlock()
+	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued, verifying, filesMissing)
 	a.prevRates[id] = next
 	a.rateMu.Unlock()
 	d := Detail{Snapshot: snap}
@@ -470,7 +539,7 @@ func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
 	return float64(pp.GetCardinality()) / float64(n)
 }
 
-func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool, queuePos int, forceStart, queued bool) (Snapshot, rateSample) {
+func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool, queuePos int, forceStart, queued, verifying, filesMissing bool) (Snapshot, rateSample) {
 	stats := t.Stats()
 	name := t.Name()
 	if name == "" {
@@ -508,6 +577,8 @@ func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool, queuePos int,
 		QueuePosition: queuePos,
 		ForceStart:    forceStart,
 		Queued:        queued,
+		Verifying:     verifying,
+		FilesMissing:  filesMissing,
 	}
 	return snap, rateSample{at: now, down: bytesDown, up: bytesUp}
 }

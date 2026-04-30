@@ -375,6 +375,8 @@ type TorrentDTO struct {
 	QueuePosition int      `json:"queue_position"`
 	ForceStart    bool     `json:"force_start"`
 	Queued        bool     `json:"queued"`
+	Verifying     bool     `json:"verifying"`
+	FilesMissing  bool     `json:"files_missing"`
 }
 
 func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
@@ -400,6 +402,8 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		QueuePosition: s.QueuePosition,
 		ForceStart:    s.ForceStart,
 		Queued:        s.Queued,
+		Verifying:     s.Verifying,
+		FilesMissing:  s.FilesMissing,
 	}
 }
 
@@ -1105,17 +1109,28 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 		return fmt.Errorf("list persisted torrents: %w", err)
 	}
 	for _, r := range records {
+		var id engine.TorrentID
+		var addErr error
 		switch {
 		case len(r.Metainfo) > 0:
-			if _, err := s.engine.AddFile(ctx, r.Metainfo, r.SavePath); err != nil {
-				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add file torrent failed")
-			}
+			id, addErr = s.engine.AddFile(ctx, r.Metainfo, r.SavePath)
 		case r.Magnet != "":
-			if _, err := s.engine.AddMagnet(ctx, r.Magnet, r.SavePath); err != nil {
-				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add magnet failed")
-			}
+			id, addErr = s.engine.AddMagnet(ctx, r.Magnet, r.SavePath)
 		default:
 			log.Warn().Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: skipping orphan record (no magnet, no metainfo)")
+			continue
+		}
+		if addErr != nil {
+			log.Warn().Err(addErr).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add failed")
+			continue
+		}
+		// If the persistence layer recorded this torrent as previously complete,
+		// tell the engine — its post-VerifyData hook flags FilesMissing and
+		// pauses the torrent if the on-disk pieces no longer match (the user
+		// deleted files between sessions). Without this hint VerifyData silently
+		// turns a deleted file into a redownload.
+		if r.CompletedAt != nil {
+			s.engine.MarkExpectedComplete(id)
 		}
 	}
 	return nil

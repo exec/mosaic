@@ -48,35 +48,29 @@ type Props = {
 
 export function WindowShell(props: Props) {
   return (
-    <div class="relative flex h-full">
-      {/* Always-on drag strip across the top. pointer-events:none so clicks
-          pass through to whatever's below (toolbar buttons / settings sidebar
-          headers). On Windows we stop short of the WindowControls overlay. */}
-      <div
-        class="pointer-events-none absolute left-0 top-0 z-30 h-7"
-        style={{
-          'right': props.isWindows ? '138px' : '0',
-          '-webkit-app-region': 'drag',
-        }}
-      />
-      <IconRail
-        view={props.view}
-        settingsPane={props.settingsPane}
-        onNavigate={props.onNavigate}
-        onNavigateRSS={props.onNavigateRSS}
-        onNavigateSchedule={props.onNavigateSchedule}
-        onNavigateAbout={props.onNavigateAbout}
-      />
-      <Show when={props.isWindows}>
-        <WindowControls />
-      </Show>
-      <div class="flex flex-1 min-w-0 flex-col">
-        {/* Top row reserves 138px on the right when on Windows so the toolbar
-            buttons + inspector close don't sit under the WindowControls. */}
-        <div
-          class="flex flex-1 min-h-0"
-          style={props.isWindows ? {'padding-right': '138px'} : undefined}
-        >
+    <div class="flex h-full flex-col">
+      {/* Always-on top drag row. Real DOM element with -webkit-app-region:drag
+          (no pointer-events:none — that disables OS drag-region detection in
+          Chromium). On macOS this region covers the traffic-lights inset; on
+          Windows it sits left of the custom WindowControls. Both views (and
+          the settings panel) get a guaranteed grab handle. */}
+      <div class="flex h-7 shrink-0">
+        <div class="flex-1" style={{'-webkit-app-region': 'drag'}} />
+        <Show when={props.isWindows}>
+          <WindowControls />
+        </Show>
+      </div>
+      <div class="flex flex-1 min-h-0">
+        <IconRail
+          view={props.view}
+          settingsPane={props.settingsPane}
+          onNavigate={props.onNavigate}
+          onNavigateRSS={props.onNavigateRSS}
+          onNavigateSchedule={props.onNavigateSchedule}
+          onNavigateAbout={props.onNavigateAbout}
+        />
+        <div class="flex flex-1 min-w-0 flex-col">
+          <div class="flex flex-1 min-h-0">
           <Show when={props.view === 'torrents'}>
             <FilterRail
               torrents={props.torrents}
@@ -122,6 +116,7 @@ export function WindowShell(props: Props) {
           webConfig={props.webConfig}
           onClickWeb={props.onNavigateWebSettings}
         />
+        </div>
       </div>
     </div>
   );

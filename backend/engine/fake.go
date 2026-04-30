@@ -183,6 +183,10 @@ func (f *FakeBackend) ScheduledPause(id TorrentID, paused bool) {
 	}
 }
 
+// MarkExpectedComplete is a no-op for the fake backend — the
+// regression-detection logic lives in AnacrolixBackend's verify goroutine.
+func (f *FakeBackend) MarkExpectedComplete(id TorrentID) {}
+
 func (f *FakeBackend) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
