@@ -7,6 +7,9 @@ BIN_DIR="${ROOT}/build/bin"
 
 cd "${ROOT}"
 
+echo "==> build frontend first so main.go's go:embed has its target"
+(cd frontend && npm run build)
+
 echo "==> prime module cache"
 go mod download
 go build ./...

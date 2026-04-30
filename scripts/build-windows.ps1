@@ -18,6 +18,13 @@ $Root = Resolve-Path "$PSScriptRoot/.."
 Set-Location $Root
 $BinDir = "$Root/build/bin"
 
+Write-Host "==> build frontend first so main.go's go:embed has its target"
+Push-Location frontend
+npm run build
+$rc = $LASTEXITCODE
+Pop-Location
+if ($rc -ne 0) { throw "frontend build failed" }
+
 Write-Host "==> prime module cache"
 go mod download
 if ($LASTEXITCODE -ne 0) { throw "go mod download failed" }
