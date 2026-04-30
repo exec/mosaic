@@ -1,5 +1,5 @@
 import {For, type Component} from 'solid-js';
-import {Activity, Search, Calendar, Rss, Settings, Info} from 'lucide-solid';
+import {Activity, Calendar, Rss, Settings, Info} from 'lucide-solid';
 import {Tooltip} from '../ui/Tooltip';
 import type {AppView} from '../../lib/store';
 import type {SettingsPane} from '../settings/SettingsSidebar';
@@ -8,7 +8,6 @@ type Item = {id: string; label: string; icon: typeof Activity};
 
 const top: Item[] = [
   {id: 'torrents', label: 'Torrents', icon: Activity},
-  {id: 'search',   label: 'Search',   icon: Search},
   {id: 'schedule', label: 'Schedule', icon: Calendar},
   {id: 'rss',      label: 'RSS',      icon: Rss},
 ];
@@ -24,7 +23,6 @@ type Props = {
   onNavigateRSS: () => void;
   onNavigateSchedule: () => void;
   onNavigateAbout: () => void;
-  onFocusSearch: () => void;
 };
 
 export function IconRail(props: Props) {
@@ -47,7 +45,6 @@ export function IconRail(props: Props) {
             case 'rss':      props.onNavigateRSS(); return;
             case 'schedule': props.onNavigateSchedule(); return;
             case 'about':    props.onNavigateAbout(); return;
-            case 'search':   props.onFocusSearch(); return;
             case 'torrents':
             case 'settings':
               props.onNavigate(p.item.id as AppView);
