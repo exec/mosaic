@@ -131,8 +131,9 @@ func (a *App) PickAndAddTorrent(savePath string) (string, error) {
 }
 
 // Pause/Resume/Remove operate by id.
-func (a *App) Pause(id string) error  { return a.svc.Pause(engine.TorrentID(id)) }
-func (a *App) Resume(id string) error { return a.svc.Resume(engine.TorrentID(id)) }
+func (a *App) Pause(id string) error   { return a.svc.Pause(engine.TorrentID(id)) }
+func (a *App) Resume(id string) error  { return a.svc.Resume(engine.TorrentID(id)) }
+func (a *App) Recheck(id string) error { return a.svc.Recheck(engine.TorrentID(id)) }
 func (a *App) Remove(id string, deleteFiles bool) error {
 	return a.svc.Remove(a.ctx, engine.TorrentID(id), deleteFiles)
 }

@@ -74,6 +74,15 @@ func (f *FakeBackend) Resume(id TorrentID) error {
 	return nil
 }
 
+func (f *FakeBackend) Recheck(id TorrentID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.torrents[id]; !ok {
+		return errors.New("not found")
+	}
+	return nil
+}
+
 func (f *FakeBackend) Remove(id TorrentID, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

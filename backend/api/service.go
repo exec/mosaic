@@ -483,8 +483,9 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 	return id, nil
 }
 
-func (s *Service) Pause(id engine.TorrentID) error  { return s.engine.Pause(id) }
-func (s *Service) Resume(id engine.TorrentID) error { return s.engine.Resume(id) }
+func (s *Service) Pause(id engine.TorrentID) error   { return s.engine.Pause(id) }
+func (s *Service) Resume(id engine.TorrentID) error  { return s.engine.Resume(id) }
+func (s *Service) Recheck(id engine.TorrentID) error { return s.engine.Recheck(id) }
 
 func (s *Service) Remove(ctx context.Context, id engine.TorrentID, deleteFiles bool) error {
 	if err := s.engine.Remove(id, deleteFiles); err != nil {

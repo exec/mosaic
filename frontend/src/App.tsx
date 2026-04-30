@@ -274,6 +274,10 @@ function AuthenticatedApp() {
           onSelect={handleSelect}
           onPause={(id) => store.pause(id)}
           onResume={(id) => store.resume(id)}
+          onRecheck={async (id) => {
+            try { await api.recheck(id); toast.success('Rechecking…'); }
+            catch (err) { toast.error(String(err)); }
+          }}
           onRemove={(id) => { store.remove(id, false); toast('Removed'); }}
           onSetCategory={async (id, categoryID) => {
             try {

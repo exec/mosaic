@@ -33,6 +33,7 @@ func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, s
 			g.Post("/torrents/file", h.AddTorrentFile)
 			g.Post("/torrents/{id}/pause", h.Pause)
 			g.Post("/torrents/{id}/resume", h.Resume)
+			g.Post("/torrents/{id}/recheck", h.Recheck)
 			g.Delete("/torrents/{id}", h.Remove)
 			g.Post("/torrents/category", h.SetTorrentCategory)
 			g.Post("/torrents/file_priorities", h.SetFilePriorities)

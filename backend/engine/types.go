@@ -67,6 +67,7 @@ type Backend interface {
 	AddFile(ctx context.Context, blob []byte, savePath string) (TorrentID, error)
 	Pause(id TorrentID) error
 	Resume(id TorrentID) error
+	Recheck(id TorrentID) error
 	Remove(id TorrentID, deleteFiles bool) error
 	List() []Snapshot
 	Snapshot(id TorrentID) (Snapshot, error)

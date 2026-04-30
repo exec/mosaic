@@ -53,6 +53,7 @@ const ROUTES: Record<string, RouteSpec> = {
   },
   Pause: {method: 'POST', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/pause`, unwrap: okEnvelope},
   Resume: {method: 'POST', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/resume`, unwrap: okEnvelope},
+  Recheck: {method: 'POST', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/recheck`, unwrap: okEnvelope},
   Remove: {
     method: 'DELETE',
     path: ([id, deleteFiles]) => `/api/torrents/${encodeURIComponent(id)}${deleteFiles ? '?delete=1' : ''}`,

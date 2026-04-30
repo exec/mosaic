@@ -180,6 +180,7 @@ export const api = {
   globalStats: () => transport.invoke<GlobalStatsT>('GlobalStats'),
   pause: (id: string) => transport.invoke<void>('Pause', id),
   resume: (id: string) => transport.invoke<void>('Resume', id),
+  recheck: (id: string) => transport.invoke<void>('Recheck', id),
   remove: (id: string, deleteFiles: boolean) => transport.invoke<void>('Remove', id, deleteFiles),
   setInspectorFocus: (id: string, tabs: InspectorTab[]) => transport.invoke<void>('SetInspectorFocus', id, tabs),
   clearInspectorFocus: () => transport.invoke<void>('ClearInspectorFocus'),

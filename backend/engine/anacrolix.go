@@ -291,7 +291,30 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 	t.SetMaxEstablishedConns(80)
 	a.pausedMu.Lock()
 	a.paused[id] = false
+	delete(a.scheduledPause, id)
 	a.pausedMu.Unlock()
+	// If this resume comes after a FilesMissing flag (user wants to redownload
+	// after files were deleted), clear the flag — VerifyData will rerun if
+	// new pieces fail.
+	a.verifyMu.Lock()
+	delete(a.filesMissing, id)
+	a.verifyMu.Unlock()
+	return nil
+}
+
+// Recheck re-hashes every piece against the metainfo. Surfaced via the
+// Recheck context-menu item in the SPA. Runs on a goroutine — large torrents
+// take a while; while running the Verifying pill shows in the UI.
+func (a *AnacrolixBackend) Recheck(id TorrentID) error {
+	t, ok := a.find(id)
+	if !ok {
+		return errors.New("not found")
+	}
+	a.setVerifying(id, true)
+	go func() {
+		t.VerifyData()
+		a.setVerifying(id, false)
+	}()
 	return nil
 }
 

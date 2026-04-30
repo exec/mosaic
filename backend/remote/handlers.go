@@ -143,6 +143,14 @@ func (h *Handlers) Resume(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func (h *Handlers) Recheck(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.Recheck(engine.TorrentID(chi.URLParam(r, "id"))); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handlers) Remove(w http.ResponseWriter, r *http.Request) {
 	deleteFiles := r.URL.Query().Get("delete") == "1"
 	if err := h.svc.Remove(r.Context(), engine.TorrentID(chi.URLParam(r, "id")), deleteFiles); err != nil {
