@@ -7,8 +7,10 @@ import {FilterRail} from './FilterRail';
 import {TopToolbar} from './TopToolbar';
 import {StatusBar} from './StatusBar';
 import {DropZone} from './DropZone';
+import {WindowControls} from './WindowControls';
 
 type Props = {
+  isWindows: boolean;
   view: AppView;
   settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
@@ -46,7 +48,7 @@ type Props = {
 
 export function WindowShell(props: Props) {
   return (
-    <div class="flex h-full">
+    <div class="relative flex h-full">
       <IconRail
         view={props.view}
         settingsPane={props.settingsPane}
@@ -55,8 +57,16 @@ export function WindowShell(props: Props) {
         onNavigateSchedule={props.onNavigateSchedule}
         onNavigateAbout={props.onNavigateAbout}
       />
+      <Show when={props.isWindows}>
+        <WindowControls />
+      </Show>
       <div class="flex flex-1 min-w-0 flex-col">
-        <div class="flex flex-1 min-h-0">
+        {/* Top row reserves 138px on the right when on Windows so the toolbar
+            buttons + inspector close don't sit under the WindowControls. */}
+        <div
+          class="flex flex-1 min-h-0"
+          style={props.isWindows ? {'padding-right': '138px'} : undefined}
+        >
           <Show when={props.view === 'torrents'}>
             <FilterRail
               torrents={props.torrents}

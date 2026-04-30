@@ -275,6 +275,38 @@ func (a *App) NotifyUpdateAvailable(info api.UpdateInfoDTO) {
 	wailsruntime.EventsEmit(a.ctx, "update:available", info)
 }
 
+// Platform returns the OS the desktop shell is running on ("darwin", "windows",
+// "linux"). The SPA queries this once at startup to decide whether to render
+// custom Win11-style window controls (Windows runs frameless).
+func (a *App) Platform() string {
+	return runtime.GOOS
+}
+
+// WindowMinimise minimizes the desktop window.
+func (a *App) WindowMinimise() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowMinimise(a.ctx)
+}
+
+// WindowMaximise toggles between maximized and restored states.
+func (a *App) WindowMaximise() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowToggleMaximise(a.ctx)
+}
+
+// WindowClose quits the app. Single-window desktop convention: closing the
+// only window terminates the process.
+func (a *App) WindowClose() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.Quit(a.ctx)
+}
+
 // OpenFolder reveals the given path in the OS file manager. Desktop-only —
 // browser shells have no equivalent affordance.
 func (a *App) OpenFolder(path string) error {

@@ -31,7 +31,16 @@ function AuthenticatedApp() {
   const store = createTorrentsStore();
   const [addModalOpen, setAddModalOpen] = createSignal(false);
   const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
+  const [platform, setPlatform] = createSignal('');
   onCleanup(() => store.dispose());
+
+  // Decide whether to render Win11-style custom controls. Browser mode and
+  // macOS keep their native (or hidden-inset) titlebar — only Wails+Windows
+  // is frameless and needs us to draw min/max/close.
+  onMount(async () => {
+    if (!isWailsRuntime()) return;
+    try { setPlatform(await api.platform()); } catch (err) { console.error(err); }
+  });
 
   const applyOrganization = async (id: string, categoryID: number | null, tagIDs: number[]) => {
     if (categoryID !== null) {
@@ -130,6 +139,7 @@ function AuthenticatedApp() {
   return (
     <>
       <WindowShell
+        isWindows={platform() === 'windows'}
         view={store.state.view}
         settingsPane={store.state.settingsPane}
         onNavigate={store.setView}

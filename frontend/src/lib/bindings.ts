@@ -234,6 +234,10 @@ export const api = {
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
   login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
   logout: () => transport.invoke<void>('Logout'),
+  platform: () => transport.invoke<string>('Platform'),
+  windowMinimise: () => transport.invoke<void>('WindowMinimise'),
+  windowMaximise: () => transport.invoke<void>('WindowMaximise'),
+  windowClose: () => transport.invoke<void>('WindowClose'),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {

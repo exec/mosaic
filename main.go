@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -135,7 +136,7 @@ func main() {
 		go upd.Schedule(ctx)
 	}
 
-	err = wails.Run(&options.App{
+	opts := &options.App{
 		Title:  "Mosaic",
 		Width:  1200,
 		Height: 800,
@@ -150,7 +151,14 @@ func main() {
 		Bind: []any{
 			app,
 		},
-	})
+	}
+	// On Windows we hide the OS titlebar entirely and render our own
+	// minimize/maximize/close controls in the top-right of the SPA. macOS
+	// keeps its hidden-inset titlebar (traffic lights stay).
+	if goruntime.GOOS == "windows" {
+		opts.Frameless = true
+	}
+	err = wails.Run(opts)
 	if err != nil {
 		log.Fatal().Err(err).Msg("wails run")
 	}
