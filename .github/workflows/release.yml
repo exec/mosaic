@@ -15,7 +15,9 @@ jobs:
         include:
           - os: macos-14
             platform: macos
-            artifact-glob: build/bin/Mosaic-*-darwin-universal.dmg
+            artifact-glob: |
+              build/bin/Mosaic-*-darwin-universal.dmg
+              build/bin/Mosaic-*-darwin-universal.tar.gz
           - os: ubuntu-22.04
             platform: linux
             artifact-glob: |

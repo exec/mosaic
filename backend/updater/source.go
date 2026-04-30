@@ -74,13 +74,15 @@ func (s *GitHubSource) lazyInit() (*selfupdate.Updater, error) {
 	// to find any asset on macOS, and ambiguously picks one on linux+windows.
 	switch runtime.GOOS {
 	case "darwin":
-		// macOS ships a universal .dmg; runtime.GOARCH is arm64 or amd64 but
-		// the asset is "darwin-universal". UniversalArch alone proved
-		// insufficient in v0.1.9 testing (lib's default darwin matcher didn't
-		// pick up our .dmg) — pin the asset with an explicit filter, same
-		// pattern as linux/windows below.
+		// macOS auto-update needs the .tar.gz (containing just the universal
+		// Mach-O binary), NOT the .dmg. The .dmg is an HFS+ disk image —
+		// go-selfupdate can't unwrap it; if you point it at a .dmg, the lib
+		// blindly writes those bytes over the running Mach-O and bricks the
+		// app on next launch ("not supported on this Mac"). The .tar.gz
+		// inner filename matches what the lib expects after stripping
+		// .tar.gz, so its decompressor extracts the binary correctly.
 		cfg.UniversalArch = "universal"
-		cfg.Filters = []string{`darwin-universal\.dmg$`}
+		cfg.Filters = []string{`darwin-universal\.tar\.gz$`}
 	case "linux":
 		// We publish .deb + .rpm + .AppImage; only the AppImage is a single
 		// self-contained ELF the lib can swap with the running binary.
