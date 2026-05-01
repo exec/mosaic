@@ -186,12 +186,13 @@ func main() {
 		web = svc.GetWebConfig(ctx)
 	}
 
-	// First-run password. If no password has ever been set, mint a strong
-	// random one, persist its argon2id hash, and write the cleartext to a
-	// 0600 credentials file under the data dir AND log it to stdout so the
-	// operator can recover it from journalctl. Subsequent boots are no-ops.
-	if err := ensureInitialPassword(ctx, svc, paths.DataDir, web); err != nil {
-		log.Fatal().Err(err).Msg("ensure initial password")
+	// Ephemeral password (qBittorrent-nox pattern). If the operator has
+	// never set a password via the web UI, mint a fresh one on every boot
+	// and dump it to stdout so journald captures it. Once the operator
+	// logs in and changes the password from Settings → Web Interface, the
+	// service flips a "user set" flag and we stop rotating.
+	if err := mintEphemeralPasswordIfNeeded(ctx, svc, web); err != nil {
+		log.Fatal().Err(err).Msg("mint ephemeral password")
 	}
 
 	// Optional HTTPS+WS remote interface. Reads its enabled/port/bind state
@@ -260,77 +261,56 @@ func openAssetsDir(dir string) (fs.FS, error) {
 	return os.DirFS(abs), nil
 }
 
-// ensureInitialPassword mints a random first-run password if none has been set.
-// Idempotent: if VerifyWebCredentials already accepts a stored hash, this is a
-// no-op. The cleartext is written to <dataDir>/mosaicd-credentials with mode
-// 0600 and printed once to stdout (so journalctl captures it).
-func ensureInitialPassword(ctx context.Context, svc *api.Service, dataDir string, web api.WebConfigDTO) error {
-	// VerifyWebCredentials reads the hash; if we can never satisfy it with any
-	// password (because the hash is empty), we know a password has never been
-	// set. We don't check directly — the Service intentionally hides hash
-	// reads — so we use the public surface: a cheap probe with a sentinel.
-	if svc.VerifyWebCredentials(ctx, web.Username, "\x00probe-not-a-real-password") {
-		// Should never match, but if somehow it does, we definitely have a
-		// password set — bail out without rotating it.
+// mintEphemeralPasswordIfNeeded generates a fresh random password on every
+// boot until the operator logs in and changes it from the web UI. Mirrors
+// qBittorrent-nox's behavior: a temporary password is regenerated each
+// launch and printed to stdout (so journalctl captures it). Once the
+// operator calls SetWebPassword from the UI / REST, the service flips
+// IsWebPasswordUserSet to true and this function becomes a no-op.
+//
+// Rationale: avoids stale credential files on disk and the trust-on-first-
+// use ambiguity of "is this hash the auto-generated one or the operator's?"
+// — we ALWAYS regenerate until proven otherwise by an explicit user action.
+func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web api.WebConfigDTO) error {
+	if svc.IsWebPasswordUserSet(ctx) {
 		return nil
-	}
-	// Probe a second way: try a different sentinel. If both fail, we either
-	// have no password set OR the password just happens not to match either
-	// sentinel. To distinguish, check whether SetWebPassword was ever invoked
-	// by reading the raw setting through a public side channel: we can't.
-	// So fall back to a marker file written next to the credentials file. If
-	// the marker exists, we've already initialized. If not, we initialize
-	// (and create the marker). This is robust across restarts and avoids
-	// rotating a real password the operator has set.
-	markerPath := filepath.Join(dataDir, ".mosaicd-credentials-initialized")
-	if _, err := os.Stat(markerPath); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 
 	pwd, err := randomPassword()
 	if err != nil {
 		return fmt.Errorf("generate password: %w", err)
 	}
-	if err := svc.SetWebPassword(ctx, pwd); err != nil {
+	if err := svc.SetWebPasswordEphemeral(ctx, pwd); err != nil {
 		return fmt.Errorf("persist password: %w", err)
 	}
 
-	credsPath := filepath.Join(dataDir, "mosaicd-credentials")
-	body := fmt.Sprintf(`Mosaic daemon initial credentials
-Generated: %s
-Username:  %s
-Password:  %s
-
-Visit https://<host>:%d to log in. Change the password from Settings -> Web Interface.
-This file is written once on first launch. It is safe to delete after you've recorded the credentials.
-`, time.Now().UTC().Format(time.RFC3339), web.Username, pwd, web.Port)
-	if err := os.WriteFile(credsPath, []byte(body), 0o600); err != nil {
-		return fmt.Errorf("write credentials file %s: %w", credsPath, err)
+	scheme := "http"
+	if web.BindAll {
+		scheme = "https"
 	}
-	if err := os.WriteFile(markerPath, []byte("ok\n"), 0o600); err != nil {
-		// Non-fatal: if the marker fails to write, the next boot may rotate
-		// the password again. Log and continue.
-		log.Warn().Err(err).Str("path", markerPath).Msg("write init marker")
+	host := "<host>"
+	if !web.BindAll {
+		host = "127.0.0.1"
 	}
 
+	// Structured log entry (journald-friendly with --output=json) AND a
+	// prominent stdout banner so operators reading `journalctl -u mosaicd`
+	// or running mosaicd in the foreground spot it immediately.
 	log.Warn().
 		Str("username", web.Username).
 		Str("password", pwd).
-		Str("credentials_file", credsPath).
-		Msg("mosaicd: generated initial web-interface password — record it now and rotate from Settings")
+		Int("port", web.Port).
+		Msg("mosaicd: temporary web-interface password (regenerated every restart until you change it from Settings → Web Interface)")
 
-	// Also write to plain stdout so an operator running mosaicd in the
-	// foreground (or tailing journalctl with --output=cat) sees it without
-	// digging through structured log fields.
 	fmt.Fprintln(os.Stdout, "")
-	fmt.Fprintln(os.Stdout, "================ mosaicd: initial credentials ================")
+	fmt.Fprintln(os.Stdout, "================ mosaicd: temporary web-interface password ================")
+	fmt.Fprintf(os.Stdout, "  URL:      %s://%s:%d/\n", scheme, host, web.Port)
 	fmt.Fprintf(os.Stdout, "  Username: %s\n", web.Username)
 	fmt.Fprintf(os.Stdout, "  Password: %s\n", pwd)
-	fmt.Fprintf(os.Stdout, "  Saved to: %s (0600)\n", credsPath)
-	fmt.Fprintln(os.Stdout, "  Change the password from Settings -> Web Interface after first login.")
-	fmt.Fprintln(os.Stdout, "==============================================================")
+	fmt.Fprintln(os.Stdout, "")
+	fmt.Fprintln(os.Stdout, "  This password is REGENERATED on every restart.")
+	fmt.Fprintln(os.Stdout, "  Log in and change it via Settings → Web Interface to make it persist.")
+	fmt.Fprintln(os.Stdout, "===========================================================================")
 	fmt.Fprintln(os.Stdout, "")
 	return nil
 }
