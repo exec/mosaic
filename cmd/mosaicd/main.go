@@ -46,7 +46,7 @@ func main() {
 	// a persisted setting, configurable from the web UI's Settings panel.
 	var (
 		flagConfig    = flag.String("config", "", "path to mosaic.yaml (default: <ConfigDir>/mosaic.yaml)")
-		flagDataDir   = flag.String("data-dir", "", "override data directory (default: XDG_DATA_HOME/Mosaic)")
+		flagDataDir   = flag.String("data-dir", "", "override data + config + log root (default: $STATE_DIRECTORY if set by systemd, else XDG_DATA_HOME/Mosaic)")
 		flagAssetsDir = flag.String("assets-dir", "/usr/share/mosaicd/dist", "directory containing the SPA bundle (index.html + assets/)")
 		flagPort      = flag.Int("port", 0, "override the persisted web interface port for this run only (0 = use stored config)")
 		flagBindAll   = flag.Bool("bind-all", false, "override bind-all for this run only (forces HTTPS on 0.0.0.0)")
@@ -59,12 +59,42 @@ func main() {
 		return
 	}
 
+	// Validate --port early so a typo (negative, zero-pretending-to-mean-disable,
+	// >65535) fails loudly instead of getting silently re-clamped later.
+	// 0 is the documented "use stored value, don't override" sentinel.
+	if *flagPort < 0 || *flagPort > 65535 {
+		fmt.Fprintf(os.Stderr, "mosaicd: --port must be between 0 and 65535 (got %d)\n", *flagPort)
+		os.Exit(2)
+	}
+
 	paths, err := platform.Paths("Mosaic")
 	if err != nil {
 		panic(err)
 	}
-	if *flagDataDir != "" {
-		paths.DataDir = *flagDataDir
+
+	// systemd's StateDirectory= directive sets STATE_DIRECTORY to an
+	// absolute path inside ReadWritePaths and is the documented place for
+	// persistent service state. Honor it as the *default* root for data,
+	// config, and logs — but only if --data-dir wasn't passed explicitly.
+	// This makes a unit file with `StateDirectory=mosaic` Just Work without
+	// us having to know about XDG variables.
+	dataRoot := *flagDataDir
+	if dataRoot == "" {
+		if sd := os.Getenv("STATE_DIRECTORY"); sd != "" {
+			dataRoot = sd
+		}
+	}
+	if dataRoot != "" {
+		// Redirect *everything* under the operator-chosen root. Crucially this
+		// includes LogDir, because under systemd's ProtectSystem=strict +
+		// ReadWritePaths=<state-dir> the default xdg.StateHome path
+		// (`/var/lib/mosaic/.local/state/Mosaic/logs`) is technically inside
+		// ReadWritePaths but is non-obvious; collapsing logs into <data>/logs
+		// keeps everything we write under one root and matches the systemd
+		// unit's ReadWritePaths declaration without surprises.
+		paths.DataDir = dataRoot
+		paths.ConfigDir = dataRoot
+		paths.LogDir = filepath.Join(dataRoot, "logs")
 	}
 	for _, d := range []string{paths.ConfigDir, paths.DataDir, paths.LogDir} {
 		_ = os.MkdirAll(d, 0o755)
@@ -160,30 +190,25 @@ func main() {
 	defer rssPoller.Close()
 
 	// First-run bootstrap. mosaicd is useless without a running web interface,
-	// so if the user (or a fresh DB) has it disabled we flip it on. We also
-	// honor --port and --bind-all overrides on every boot — they win over the
-	// stored config for this run, but are NOT persisted, so they remain
-	// per-launch knobs the way other server daemons treat their CLI flags.
+	// so if the user (or a fresh DB) has it disabled we flip it on for THIS
+	// process only — without persisting. The operator's stored preference is
+	// preserved verbatim; on next launch (or with persistence flipped off via
+	// the UI) we'll force-enable again at runtime, so the daemon never sits
+	// with no API surface, and the operator's "off" choice in the DB is never
+	// silently overwritten.
+	//
+	// --port and --bind-all also bypass persistence — same rationale, plus
+	// it matches how other server daemons treat their CLI flags (per-launch).
 	web := svc.GetWebConfig(ctx)
-	mutated := false
 	if !web.Enabled {
 		web.Enabled = true
-		mutated = true
-		log.Warn().Msg("mosaicd: web interface was disabled — forcing on (without it the daemon has no API)")
+		log.Warn().Msg("mosaicd: web interface was disabled in stored config — forcing on for this run only (not persisted)")
 	}
-	if *flagPort > 0 && web.Port != *flagPort {
+	if *flagPort > 0 {
 		web.Port = *flagPort
-		mutated = true
 	}
-	if *flagBindAll && !web.BindAll {
+	if *flagBindAll {
 		web.BindAll = true
-		mutated = true
-	}
-	if mutated {
-		if err := svc.SetWebConfig(ctx, web); err != nil {
-			log.Fatal().Err(err).Msg("persist forced web config")
-		}
-		web = svc.GetWebConfig(ctx)
 	}
 
 	// Ephemeral password (qBittorrent-nox pattern). If the operator has
@@ -214,7 +239,11 @@ func main() {
 	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir)
 	defer remoteSrv.Stop()
 	svc.OnWebConfigChange(remoteSrv.Apply)
-	remoteSrv.Apply(svc.GetWebConfig(ctx))
+	// Apply our locally-mutated web config (which may have force-enabled or
+	// applied --port / --bind-all overrides on top of the persisted state)
+	// rather than re-reading from the DB — otherwise our in-memory overrides
+	// would be lost the moment the server starts.
+	remoteSrv.Apply(web)
 
 	scheme := "http"
 	if web.BindAll {
@@ -293,14 +322,16 @@ func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web ap
 		host = "127.0.0.1"
 	}
 
-	// Structured log entry (journald-friendly with --output=json) AND a
-	// prominent stdout banner so operators reading `journalctl -u mosaicd`
-	// or running mosaicd in the foreground spot it immediately.
+	// The cleartext password lives ONLY on the stdout banner below — that
+	// path goes to journald (when launched by systemd) or to the operator's
+	// terminal (when run in the foreground). The structured log entry is
+	// written to a rotating file on disk (lumberjack), so we deliberately
+	// omit the password here to avoid retaining old credentials across log
+	// rotations after the operator changes the password from the UI.
 	log.Warn().
 		Str("username", web.Username).
-		Str("password", pwd).
 		Int("port", web.Port).
-		Msg("mosaicd: temporary web-interface password (regenerated every restart until you change it from Settings → Web Interface)")
+		Msg("mosaicd: minted temporary web-interface password — see stdout banner / journalctl for the cleartext (regenerated every restart until you change it from Settings → Web Interface)")
 
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "================ mosaicd: temporary web-interface password ================")

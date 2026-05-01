@@ -397,6 +397,31 @@ func TestService_SetWebPassword_VerifyCredentials(t *testing.T) {
 	require.False(t, svc.VerifyWebCredentials(ctx, "bob", "s3cret"))
 }
 
+// TestService_SetWebPassword_FlipsUserSetFlag pins the contract that a
+// successful SetWebPassword call leaves IsWebPasswordUserSet true so the
+// mosaicd daemon's per-boot ephemeral-password loop stops rotating it.
+// The implementation writes the flag BEFORE the hash to avoid a partial-
+// failure window that could silently downgrade the operator back to
+// ephemeral mode (audit fix #3); this test documents the post-condition.
+func TestService_SetWebPassword_FlipsUserSetFlag(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.False(t, svc.IsWebPasswordUserSet(ctx), "fresh DB starts as not-user-set")
+	require.NoError(t, svc.SetWebPassword(ctx, "operator-chosen-pw"))
+	require.True(t, svc.IsWebPasswordUserSet(ctx), "after SetWebPassword the flag must be true")
+}
+
+// TestService_SetWebPasswordEphemeral_DoesNotFlipFlag pins the daemon-side
+// contract: minting an ephemeral password must NOT mark it as user-set,
+// otherwise mosaicd would treat its own auto-generated password as the
+// operator's intent and never rotate it again.
+func TestService_SetWebPasswordEphemeral_DoesNotFlipFlag(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SetWebPasswordEphemeral(ctx, "auto-generated-pw"))
+	require.False(t, svc.IsWebPasswordUserSet(ctx), "ephemeral set must leave the flag false")
+}
+
 func TestService_VerifyWebCredentials_NoPasswordSet(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
