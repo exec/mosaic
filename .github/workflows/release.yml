@@ -24,6 +24,9 @@ jobs:
               build/bin/Mosaic-*-linux-amd64.deb
               build/bin/Mosaic-*-linux-amd64.rpm
               build/bin/Mosaic-*-linux-amd64.AppImage
+              build/bin/Mosaic-*-linux-amd64-mosaicd.deb
+              build/bin/Mosaic-*-linux-amd64-mosaicd.rpm
+              build/bin/mosaicd-*-linux-amd64.tar.gz
           - os: windows-latest
             platform: windows
             artifact-glob: |
@@ -89,6 +92,14 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: bash scripts/build-linux.sh
 
+      - name: Build mosaicd (Linux daemon)
+        if: matrix.platform == 'linux'
+        env:
+          VERSION: ${{ github.ref_name }}
+        # Reuses the frontend/dist tree the GUI build just produced; only
+        # cross-compiles the daemon binary + nfpm packages + tarball.
+        run: bash scripts/build-linux-mosaicd.sh
+
       - name: Build (Windows)
         if: matrix.platform == 'windows'
         env:
@@ -139,7 +150,8 @@ jobs:
             ### Downloads
 
             - **macOS:** `Mosaic-${{ github.ref_name }}-darwin-universal.dmg`
-            - **Linux:** `.deb`, `.rpm`, `.AppImage`
+            - **Linux (GUI):** `.deb`, `.rpm`, `.AppImage`
+            - **Linux (headless daemon):** `Mosaic-${{ github.ref_name }}-linux-amd64-mosaicd.{deb,rpm}` + `mosaicd-${{ github.ref_name }}-linux-amd64.tar.gz`
             - **Windows:** installer + portable `.exe`
 
             See `SHA256SUMS` for checksum verification.

@@ -12,6 +12,7 @@ Grab the asset for your platform from [the latest release](https://github.com/ex
 |----------|-------|
 | macOS (universal) | `Mosaic-vX.Y.Z-darwin-universal.dmg` — drag `mosaic.app` to `/Applications/` |
 | Linux             | `Mosaic-vX.Y.Z-linux-amd64.{deb,rpm,AppImage}` — pick what your distro takes |
+| Linux (headless)  | `Mosaic-vX.Y.Z-linux-amd64-mosaicd.{deb,rpm}` or `mosaicd-vX.Y.Z-linux-amd64.tar.gz` — daemon-only build for servers / NAS, controlled over the HTTPS+WS interface (same concept as `qbittorrent-nox`) |
 | Windows           | `Mosaic-vX.Y.Z-windows-amd64-installer.exe` (NSIS, per-user) or `…-portable.exe` |
 
 Each release also publishes a `SHA256SUMS` manifest; verifying against it before running is recommended. Full per-platform install notes (incl. file association registration, dock + magnet handler quirks, signing status): [docs/installation/](https://mosaic.byexec.com/docs/installation/).
@@ -36,6 +37,7 @@ Each release also publishes a `SHA256SUMS` manifest; verifying against it before
 ### Web Interface &amp; API
 
 - [Web Interface](https://mosaic.byexec.com/docs/web-interface/) — enabling, binding, password, API key
+- [Daemon (mosaicd)](https://mosaic.byexec.com/docs/daemon/) — headless Linux variant, systemd unit, reverse-proxy deployment
 - [API Overview](https://mosaic.byexec.com/docs/api/) — base URL, auth model, error envelope
 - [Authentication](https://mosaic.byexec.com/docs/api/authentication/) — login, sessions, bearer keys, CSRF
 - [REST Endpoints](https://mosaic.byexec.com/docs/api/rest/) — every route, request/response schema

@@ -1,0 +1,27 @@
+name: mosaicd
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: Dylan Hart <execxd@icloud.com>
+description: |
+  Headless BitTorrent daemon — same engine as Mosaic, controlled over the
+  HTTPS+WebSocket interface. No GUI, no tray, no notifications. Ships with a
+  systemd unit and runs as a dedicated 'mosaic' system user. Equivalent in
+  spirit to qbittorrent-nox.
+vendor: Dylan Hart
+homepage: https://mosaic.byexec.com/docs/daemon/
+license: MIT
+contents:
+  - src: build/bin/mosaicd
+    dst: /usr/bin/mosaicd
+  - src: frontend/dist
+    dst: /usr/share/mosaicd/dist
+  - src: build/linux/mosaicd.service
+    dst: /lib/systemd/system/mosaicd.service
+scripts:
+  preinstall: scripts/mosaicd-preinstall.sh
+  postinstall: scripts/mosaicd-postinstall.sh
+  preremove: scripts/mosaicd-preremove.sh
+  postremove: scripts/mosaicd-postremove.sh

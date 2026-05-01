@@ -1,0 +1,32 @@
+[Unit]
+Description=Mosaic BitTorrent Daemon
+Documentation=https://mosaic.byexec.com/docs/daemon/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mosaicd --data-dir /var/lib/mosaic --assets-dir /usr/share/mosaicd/dist
+Restart=on-failure
+RestartSec=5
+
+# Run as a dedicated user. The .deb / .rpm preinstall script creates this
+# user; on raw-tarball installs you must create it yourself.
+User=mosaic
+Group=mosaic
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/mosaic /var/log/mosaic
+StateDirectory=mosaic
+LogsDirectory=mosaic
+
+[Install]
+WantedBy=multi-user.target
