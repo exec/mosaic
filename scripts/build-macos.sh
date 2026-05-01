@@ -96,12 +96,33 @@ echo "==> create DMG"
 # UDZO container has plenty of room. Took five v0.1.* runs to nail down.
 APP_SIZE_MB=$(du -sm "${APP}" | awk '{print $1}')
 DMG_SIZE_MB=$((APP_SIZE_MB * 3 + 100))
-hdiutil create \
-    -volname "Mosaic" \
-    -srcfolder "${APP}" \
-    -ov -format UDZO \
-    -size "${DMG_SIZE_MB}m" \
-    "${DMG_OUT}"
+
+# Defensive: detach any leftover /Volumes/Mosaic from a previous run on the
+# same runner. macos-14 runners reuse host state across jobs and a
+# half-cleaned-up disk image surfaces as `hdiutil: create failed - Resource
+# busy`. -force ignores "not attached" errors.
+hdiutil detach "/Volumes/Mosaic" -force 2>/dev/null || true
+
+# Retry up to 3 times on transient hdiutil failures (Resource busy or
+# stray diskimages-help processes from prior runs). Each retry pauses to
+# let the kernel release the device.
+for attempt in 1 2 3; do
+    if hdiutil create \
+        -volname "Mosaic" \
+        -srcfolder "${APP}" \
+        -ov -format UDZO \
+        -size "${DMG_SIZE_MB}m" \
+        "${DMG_OUT}"; then
+        break
+    fi
+    if [[ $attempt -eq 3 ]]; then
+        echo "==> hdiutil create failed after 3 attempts" >&2
+        exit 1
+    fi
+    echo "==> hdiutil attempt ${attempt} failed, detaching + retrying after 5s" >&2
+    hdiutil detach "/Volumes/Mosaic" -force 2>/dev/null || true
+    sleep 5
+done
 
 if [[ -n "${APPLE_DEVELOPER_ID:-}" ]]; then
     echo "==> codesign DMG"
