@@ -182,7 +182,7 @@ func AuthGate(sessions *SessionStore, creds CredentialChecker) func(http.Handler
 				next.ServeHTTP(w, r)
 				return
 			}
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		})
 	}
 }

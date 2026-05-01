@@ -140,7 +140,7 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, creds CredentialChecker) htt
 		if !sessions.Valid(SessionTokenFromRequest(r)) {
 			key := BearerTokenFromRequest(r)
 			if key == "" || !creds.VerifyAPIKey(r.Context(), key) {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
 		}
