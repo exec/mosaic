@@ -57,9 +57,16 @@ type copyDataStruct struct {
 
 var (
 	user32             = windows.NewLazySystemDLL("user32.dll")
-	procFindWindowW    = user32.NewProc("FindWindowW")
+	procFindWindowExW  = user32.NewProc("FindWindowExW")
 	procSendMessageW   = user32.NewProc("SendMessageW")
 	wmCopyData    uint = 0x004A
+	// HWND_MESSAGE = -3 as a pseudo-handle. Required as the parent argument
+	// to FindWindowExW to locate a message-only window (one created with
+	// CreateWindowEx using HWND_MESSAGE as parent — exactly what Wails uses
+	// for its second-instance receiver). Plain FindWindowW only scans
+	// top-level windows and CANNOT find message-only windows; that's why
+	// every prior attempt to forward args via FindWindowW returned 0.
+	hwndMessage = ^uintptr(2)
 )
 
 func EarlyForwardLaunchArgs(uniqueId string) bool {
@@ -89,9 +96,12 @@ func EarlyForwardLaunchArgs(uniqueId string) bool {
 
 	// Brief retry: the running instance may still be initializing Wails when
 	// File Explorer launches us. Wait up to ~1s for the window to appear.
+	// FindWindowExW(HWND_MESSAGE, NULL, class, window) is the correct API
+	// for locating message-only windows; plain FindWindowW only scans
+	// top-level windows and silently returns 0 here.
 	var hwnd uintptr
 	for i := 0; i < 50; i++ {
-		r, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(classW)), uintptr(unsafe.Pointer(windowW)))
+		r, _, _ := procFindWindowExW.Call(hwndMessage, 0, uintptr(unsafe.Pointer(classW)), uintptr(unsafe.Pointer(windowW)))
 		if r != 0 {
 			hwnd = r
 			break
