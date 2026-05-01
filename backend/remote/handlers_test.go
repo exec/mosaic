@@ -258,6 +258,122 @@ func TestHandlers_Version_OK(t *testing.T) {
 	require.True(t, ok, "missing 'version' field")
 }
 
+func TestLogin_CookieHasSameSiteStrict(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var sessionCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "mosaic_session" {
+			sessionCookie = c
+			break
+		}
+	}
+	require.NotNil(t, sessionCookie, "expected session cookie")
+	require.Equal(t, http.SameSiteStrictMode, sessionCookie.SameSite)
+	require.True(t, sessionCookie.HttpOnly)
+}
+
+func TestLogin_RateLimitReturns429AfterFiveFailures(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "wrong"})
+
+	// Burst is 5: first 5 failed attempts return 401 (invalid creds), then the
+	// 6th from the same IP must trip the limiter and return 429.
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+		req.RemoteAddr = "10.0.0.7:54321"
+		f.router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.7:54321"
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+
+	// Different IP gets its own bucket.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.8:54321"
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestOriginGuard_RejectsMismatchedOriginOnPOST(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+	cookie := f.loginCookie(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{"magnet": "magnet:?xt=urn:btih:bad", "save_path": "/tmp"})
+	req := httptest.NewRequest(http.MethodPost, "/api/torrents/magnet", bytes.NewReader(body))
+	req.Host = "mosaic.local:8080"
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+}
+
+func TestOriginGuard_AllowsMatchingOriginOnPOST(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+	cookie := f.loginCookie(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{"magnet": "magnet:?xt=urn:btih:good", "save_path": "/tmp"})
+	req := httptest.NewRequest(http.MethodPost, "/api/torrents/magnet", bytes.NewReader(body))
+	req.Host = "mosaic.local:8080"
+	req.Header.Set("Origin", "https://mosaic.local:8080")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+func TestOriginGuard_BypassedForBearerAuth(t *testing.T) {
+	f := newFixture(t)
+	key, err := f.svc.RotateAPIKey(context.Background())
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(map[string]string{"magnet": "magnet:?xt=urn:btih:bypass", "save_path": "/tmp"})
+	req := httptest.NewRequest(http.MethodPost, "/api/torrents/magnet", bytes.NewReader(body))
+	req.Host = "mosaic.local:8080"
+	// Bearer-keyed callers are CSRF-immune; the mismatched Origin must NOT
+	// cause a rejection.
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+func TestOriginGuard_AllowsGETWithMismatchedOrigin(t *testing.T) {
+	// GET is not state-changing; the guard must let it through.
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(context.Background())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/torrents", nil)
+	req.Host = "mosaic.local:8080"
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Authorization", "Bearer "+key)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

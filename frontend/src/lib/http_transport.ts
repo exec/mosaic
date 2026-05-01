@@ -53,6 +53,7 @@ const ROUTES: Record<string, RouteSpec> = {
   },
   Pause: {method: 'POST', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/pause`, unwrap: okEnvelope},
   Resume: {method: 'POST', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/resume`, unwrap: okEnvelope},
+  Recheck: {method: 'POST', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/recheck`, unwrap: okEnvelope},
   Remove: {
     method: 'DELETE',
     path: ([id, deleteFiles]) => `/api/torrents/${encodeURIComponent(id)}${deleteFiles ? '?delete=1' : ''}`,
@@ -154,6 +155,13 @@ const ROUTES: Record<string, RouteSpec> = {
     method: 'PUT',
     path: () => '/api/settings/queue_limits',
     body: ([q]) => q,
+    unwrap: okEnvelope,
+  },
+  GetPeerLimits: {method: 'GET', path: () => '/api/settings/peer_limits'},
+  SetPeerLimits: {
+    method: 'PUT',
+    path: () => '/api/settings/peer_limits',
+    body: ([p]) => p,
     unwrap: okEnvelope,
   },
   GetBlocklist: {method: 'GET', path: () => '/api/settings/blocklist'},

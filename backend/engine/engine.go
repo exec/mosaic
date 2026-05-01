@@ -75,8 +75,13 @@ func (e *Engine) AddFile(ctx context.Context, blob []byte, savePath string) (Tor
 	return id, nil
 }
 
-func (e *Engine) Pause(id TorrentID) error  { return e.backend.Pause(id) }
-func (e *Engine) Resume(id TorrentID) error { return e.backend.Resume(id) }
+func (e *Engine) Pause(id TorrentID) error   { return e.backend.Pause(id) }
+func (e *Engine) Resume(id TorrentID) error  { return e.backend.Resume(id) }
+func (e *Engine) Recheck(id TorrentID) error { return e.backend.Recheck(id) }
+
+func (e *Engine) ApplyPerTorrentMaxPeers(n int) error {
+	return e.backend.ApplyPerTorrentMaxPeers(n)
+}
 
 func (e *Engine) Remove(id TorrentID, deleteFiles bool) error {
 	if err := e.backend.Remove(id, deleteFiles); err != nil {
@@ -110,6 +115,9 @@ func (e *Engine) SetForceStart(id TorrentID, force bool) {
 }
 func (e *Engine) ScheduledPause(id TorrentID, paused bool) {
 	e.backend.ScheduledPause(id, paused)
+}
+func (e *Engine) MarkExpectedComplete(id TorrentID) {
+	e.backend.MarkExpectedComplete(id)
 }
 
 func (e *Engine) Close() error {

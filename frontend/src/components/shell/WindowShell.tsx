@@ -7,8 +7,10 @@ import {FilterRail} from './FilterRail';
 import {TopToolbar} from './TopToolbar';
 import {StatusBar} from './StatusBar';
 import {DropZone} from './DropZone';
+import {WindowControls} from './WindowControls';
 
 type Props = {
+  isWindows: boolean;
   view: AppView;
   settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
@@ -46,17 +48,48 @@ type Props = {
 
 export function WindowShell(props: Props) {
   return (
-    <div class="flex h-full">
-      <IconRail
-        view={props.view}
-        settingsPane={props.settingsPane}
-        onNavigate={props.onNavigate}
-        onNavigateRSS={props.onNavigateRSS}
-        onNavigateSchedule={props.onNavigateSchedule}
-        onNavigateAbout={props.onNavigateAbout}
-      />
-      <div class="flex flex-1 min-w-0 flex-col">
-        <div class="flex flex-1 min-h-0">
+    <div class="flex h-full flex-col">
+      {/* Always-on top drag row. Wails's native drag uses the
+          `--wails-draggable: drag` custom property; we also keep
+          -webkit-app-region:drag for WKWebView's title-bar inset, plus an
+          explicit onMouseDown that calls window.WailsInvoke('drag') —
+          without the imperative path, focused-window drags get dropped on
+          macOS because Wails's default `deferDragToMouseMove` flag waits
+          for a follow-up mousemove that doesn't always arrive when the
+          window is already key. Parley hit this on Tauri and solved it the
+          same way. h-7 covers the traffic-lights inset on macOS and sits
+          left of WindowControls on Windows. */}
+      <div class="flex h-7 shrink-0">
+        <div
+          class="flex-1"
+          style={{
+            '--wails-draggable': 'drag',
+            '-webkit-app-region': 'drag',
+          }}
+          onMouseDown={(e) => {
+            if (e.button !== 0) return;
+            try {
+              (window as any).WailsInvoke?.('drag');
+            } catch {
+              // browser mode or non-Wails host — no-op
+            }
+          }}
+        />
+        <Show when={props.isWindows}>
+          <WindowControls />
+        </Show>
+      </div>
+      <div class="flex flex-1 min-h-0">
+        <IconRail
+          view={props.view}
+          settingsPane={props.settingsPane}
+          onNavigate={props.onNavigate}
+          onNavigateRSS={props.onNavigateRSS}
+          onNavigateSchedule={props.onNavigateSchedule}
+          onNavigateAbout={props.onNavigateAbout}
+        />
+        <div class="flex flex-1 min-w-0 flex-col">
+          <div class="flex flex-1 min-h-0">
           <Show when={props.view === 'torrents'}>
             <FilterRail
               torrents={props.torrents}
@@ -102,6 +135,7 @@ export function WindowShell(props: Props) {
           webConfig={props.webConfig}
           onClickWeb={props.onNavigateWebSettings}
         />
+        </div>
       </div>
     </div>
   );

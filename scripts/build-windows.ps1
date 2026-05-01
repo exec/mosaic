@@ -18,13 +18,29 @@ $Root = Resolve-Path "$PSScriptRoot/.."
 Set-Location $Root
 $BinDir = "$Root/build/bin"
 
+Write-Host "==> build frontend first so main.go's go:embed has its target"
+Push-Location frontend
+npm run build
+$rc = $LASTEXITCODE
+Pop-Location
+if ($rc -ne 0) { throw "frontend build failed" }
+
+Write-Host "==> prime module cache"
+go mod download
+if ($LASTEXITCODE -ne 0) { throw "go mod download failed" }
+
 Write-Host "==> wails build windows/amd64"
+# CGO_ENABLED=0 produces a self-contained .exe — without it the build links
+# against libgcc_s_seh-1.dll from mingw which isn't present on user machines.
+# Our backend (anacrolix/torrent + modernc.org/sqlite) is pure Go.
+$env:CGO_ENABLED = "0"
 wails build `
     -platform windows/amd64 `
     -ldflags "-X main.version=$Version" `
     -nsis `
     -clean `
-    -skipbindings
+    -skipbindings `
+    -skipembedcreate
 if ($LASTEXITCODE -ne 0) { throw "wails build failed" }
 
 $Exe = "$BinDir/mosaic.exe"

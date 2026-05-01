@@ -131,7 +131,7 @@ export function AddTorrentModal(props: Props) {
                 </Show>
                 <Show when={source() === 'file' && isWails}>
                   <p class="mt-3 text-xs text-zinc-500">
-                    Click <span class="text-zinc-300">Choose file…</span> below to open the file picker. The torrent will be added with the save target and options below.
+                    Click <span class="text-zinc-300">Choose file…</span> below to open the file picker. The torrent will be added with the save path and options below.
                   </p>
                 </Show>
                 <Show when={source() === 'file' && !isWails}>
@@ -153,7 +153,7 @@ export function AddTorrentModal(props: Props) {
               </section>
 
               <section class={sectionClass}>
-                <label class={`${labelClass} mb-1.5 block`}>Save target</label>
+                <label class={`${labelClass} mb-1.5 block`}>Save path</label>
                 <div class="flex items-center gap-2">
                   <FolderOpen class="h-3.5 w-3.5 text-zinc-500" />
                   <input

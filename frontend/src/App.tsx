@@ -1,7 +1,8 @@
 import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents} from './lib/store';
-import {api} from './lib/bindings';
+import {api, onLaunchNotice} from './lib/bindings';
+import {transport} from './lib/transport';
 import {isWailsRuntime} from './lib/runtime';
 import {ThemeProvider} from './components/theme/ThemeProvider';
 import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
@@ -27,18 +28,66 @@ export default function App() {
   );
 }
 
+// userErr trims an unknown thrown value to a one-line user-friendly message.
+// Strips the noisy 'Error: ' prefix the platform adds and clamps long stacks
+// so an unbounded backend error doesn't blow up the toast.
+function userErr(e: unknown): string {
+  const s = e instanceof Error ? e.message : String(e);
+  const trimmed = s.replace(/^Error:\s*/, '').trim();
+  return trimmed.length > 200 ? trimmed.slice(0, 197) + '…' : trimmed;
+}
+
 function AuthenticatedApp() {
   const store = createTorrentsStore();
   const [addModalOpen, setAddModalOpen] = createSignal(false);
   const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
+  const [platform, setPlatform] = createSignal('');
   onCleanup(() => store.dispose());
 
+  // Decide whether to render Win11-style custom controls. Browser mode and
+  // macOS keep their native (or hidden-inset) titlebar — only Wails+Windows
+  // is frameless and needs us to draw min/max/close.
+  onMount(async () => {
+    if (!isWailsRuntime()) return;
+    try { setPlatform(await api.platform()); } catch (err) { console.error(err); }
+  });
+
+  // Surface launch-arg outcomes (magnet click in browser → OS launches Mosaic
+  // with the URL; double-click .torrent in Explorer/Finder → OS launches
+  // Mosaic with the path) as toasts so the user sees feedback even if the
+  // torrents:tick hasn't refreshed yet.
+  const offLaunch = onLaunchNotice((n) => {
+    switch (n.event) {
+      case 'magnet_added':  toast.success('Magnet added'); break;
+      case 'torrent_added': toast.success('Torrent added'); break;
+      case 'magnet_error':  toast.error(`Couldn't add magnet — ${n.error}`); break;
+      case 'torrent_error': toast.error(`Couldn't add torrent — ${n.error}`); break;
+      // 'received' is debug-only; don't toast it.
+    }
+  });
+  onCleanup(() => offLaunch());
+
+  // The backend tray menu's "Settings…" item emits this event. Switch to the
+  // settings view; we land on the Desktop pane since the tray is the most
+  // likely entry point. Backend may also re-show the window — that's its job.
+  const offNavSettings = transport.on('navigate:settings', () => {
+    store.setView('settings');
+    store.setSettingsPane('desktop');
+  });
+  onCleanup(() => offNavSettings());
+
   const applyOrganization = async (id: string, categoryID: number | null, tagIDs: number[]) => {
+    const failures: string[] = [];
     if (categoryID !== null) {
-      try { await store.setTorrentCategory(id, categoryID); } catch (err) { console.error(err); }
+      try { await store.setTorrentCategory(id, categoryID); }
+      catch (err) { console.error(err); failures.push(`category: ${String(err)}`); }
     }
     for (const tagID of tagIDs) {
-      try { await store.assignTag(id, tagID); } catch (err) { console.error(err); }
+      try { await store.assignTag(id, tagID); }
+      catch (err) { console.error(err); failures.push(`tag #${tagID}: ${String(err)}`); }
+    }
+    if (failures.length > 0) {
+      toast.error(`Couldn't apply ${failures.length} ${failures.length === 1 ? 'rule' : 'rules'}: ${failures.join('; ')}`);
     }
   };
 
@@ -68,11 +117,19 @@ function AuthenticatedApp() {
     if (targetIdx === currentIdx) return;
     const moved = sorted.splice(currentIdx, 1)[0];
     sorted.splice(targetIdx, 0, moved);
-    await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
+    try {
+      await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
+    } catch (err) {
+      toast.error(`Couldn't reorder — ${userErr(err)}`);
+    }
   };
 
   const onToggleForceStart = async (id: string, current: boolean) => {
-    await store.setForceStart(id, !current);
+    try {
+      await store.setForceStart(id, !current);
+    } catch (err) {
+      toast.error(`Force-start failed — ${userErr(err)}`);
+    }
   };
 
   const handleSelect = (id: string, e: MouseEvent) => {
@@ -111,15 +168,34 @@ function AuthenticatedApp() {
         else store.clearSelection();
       } else if (e.key === ' ') {
         e.preventDefault();
-        for (const id of store.state.selection) {
+        // Pause/resume the entire selection. Aggregate any failures into a
+        // single toast so partial-success isn't invisible.
+        const failures: string[] = [];
+        Promise.all([...store.state.selection].map(async (id) => {
           const t = store.state.torrents.find((x) => x.id === id);
-          if (!t) continue;
-          if (t.paused) store.resume(id); else store.pause(id);
-        }
+          if (!t) return;
+          try {
+            await (t.paused ? store.resume(id) : store.pause(id));
+          } catch (err) {
+            failures.push(`${t.name}: ${String(err)}`);
+          }
+        })).then(() => {
+          if (failures.length > 0) {
+            toast.error(`${failures.length} failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '…' : ''}`);
+          }
+        });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (store.state.selection.size === 0) return;
         e.preventDefault();
-        for (const id of store.state.selection) store.remove(id, false);
+        const failures: string[] = [];
+        Promise.all([...store.state.selection].map(async (id) => {
+          try { await store.remove(id, false); }
+          catch (err) { failures.push(`${id.slice(0, 8)}: ${String(err)}`); }
+        })).then(() => {
+          if (failures.length > 0) {
+            toast.error(`${failures.length} remove failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '…' : ''}`);
+          }
+        });
         store.clearSelection();
       }
     };
@@ -130,6 +206,7 @@ function AuthenticatedApp() {
   return (
     <>
       <WindowShell
+        isWindows={platform() === 'windows'}
         view={store.state.view}
         settingsPane={store.state.settingsPane}
         onNavigate={store.setView}
@@ -167,7 +244,7 @@ function AuthenticatedApp() {
           try {
             await store.addTorrentBytes(bytes, '');
             toast.success('Torrent added');
-          } catch (err) { toast.error(String(err)); }
+          } catch (err) { toast.error(`Couldn't add torrent — ${userErr(err)}`); }
         }}
         altSpeedActive={store.state.limits.alt_active}
         onToggleAltSpeed={() => store.toggleAltSpeed()}
@@ -186,6 +263,7 @@ function AuthenticatedApp() {
             tags={store.state.tags}
             limits={store.state.limits}
             queueLimits={store.state.queueLimits}
+            peerLimits={store.state.peerLimits}
             scheduleRules={store.state.scheduleRules}
             blocklist={store.state.blocklist}
             feeds={store.state.feeds}
@@ -194,6 +272,7 @@ function AuthenticatedApp() {
             updaterConfig={store.state.updaterConfig}
             updateInfo={store.state.updateInfo}
             appVersion={store.state.appVersion}
+            desktopIntegration={store.state.desktopIntegration}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
             onSetWebConfig={(c) => store.setWebConfig(c)}
             onSetWebPassword={(p) => store.setWebPassword(p)}
@@ -201,8 +280,10 @@ function AuthenticatedApp() {
             onSetUpdaterConfig={(c) => store.setUpdaterConfig(c)}
             onCheckForUpdate={() => store.checkForUpdate()}
             onInstallUpdate={() => store.installUpdate()}
+            onSetDesktopIntegration={(d) => store.setDesktopIntegration(d)}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
+            onSetPeerLimits={(p) => store.setPeerLimits(p)}
             onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}
             onUpdateCategory={(id, name, sp, color) => store.updateCategory(id, name, sp, color)}
             onDeleteCategory={(id) => store.deleteCategory(id)}
@@ -235,7 +316,7 @@ function AuthenticatedApp() {
               if (!id) return;
               try {
                 await store.setFilePriorities(id, {[index]: priority});
-              } catch (err) { toast.error(String(err)); }
+              } catch (err) { toast.error(`Couldn't set file priority — ${userErr(err)}`); }
             }}
           />
         }
@@ -249,11 +330,15 @@ function AuthenticatedApp() {
           onSelect={handleSelect}
           onPause={(id) => store.pause(id)}
           onResume={(id) => store.resume(id)}
-          onRemove={(id) => { store.remove(id, false); toast('Removed'); }}
+          onRecheck={async (id) => {
+            try { await api.recheck(id); toast.success('Recheck started'); }
+            catch (err) { toast.error(`Recheck failed — ${userErr(err)}`); }
+          }}
+          onRemove={(id) => { store.remove(id, false); toast.success('Torrent removed'); }}
           onSetCategory={async (id, categoryID) => {
             try {
               await store.setTorrentCategory(id, categoryID);
-            } catch (err) { toast.error(String(err)); }
+            } catch (err) { toast.error(`Couldn't set category — ${userErr(err)}`); }
           }}
           onToggleTag={async (id, tagID) => {
             const t = store.state.torrents.find((x) => x.id === id);
@@ -264,13 +349,13 @@ function AuthenticatedApp() {
               } else {
                 await store.assignTag(id, tagID);
               }
-            } catch (err) { toast.error(String(err)); }
+            } catch (err) { toast.error(`Couldn't update tag — ${userErr(err)}`); }
           }}
           onMoveQueue={onMoveQueue}
           onToggleForceStart={onToggleForceStart}
           onOpenFolder={async (savePath) => {
             try { await api.openFolder(savePath); }
-            catch (err) { toast.error(String(err)); }
+            catch (err) { toast.error(`Couldn't open folder — ${userErr(err)}`); }
           }}
         />
       </WindowShell>

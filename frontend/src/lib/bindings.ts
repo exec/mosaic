@@ -33,6 +33,8 @@ export type Torrent = {
   queue_position: number;
   force_start: boolean;
   queued: boolean;
+  verifying: boolean;
+  files_missing: boolean;
 };
 
 export type LimitsDTO = {
@@ -46,6 +48,13 @@ export type LimitsDTO = {
 export type QueueLimitsDTO = {
   max_active_downloads: number;
   max_active_seeds: number;
+};
+
+export type PeerLimitsDTO = {
+  listen_port: number;
+  max_peers_per_torrent: number;
+  dht_enabled: boolean;
+  encryption_enabled: boolean;
 };
 
 export type GlobalStatsT = {
@@ -171,6 +180,15 @@ export type UpdateInfoDTO = {
   current_version: string;
 };
 
+export type DesktopIntegrationDTO = {
+  tray_enabled: boolean;          // default true
+  close_to_tray: boolean;         // default false on Linux/Windows; ignored on macOS
+  start_minimized: boolean;       // default false
+  notify_on_complete: boolean;    // default true
+  notify_on_error: boolean;       // default true
+  notify_on_update: boolean;      // default true
+};
+
 export const api = {
   addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
   pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
@@ -178,6 +196,7 @@ export const api = {
   globalStats: () => transport.invoke<GlobalStatsT>('GlobalStats'),
   pause: (id: string) => transport.invoke<void>('Pause', id),
   resume: (id: string) => transport.invoke<void>('Resume', id),
+  recheck: (id: string) => transport.invoke<void>('Recheck', id),
   remove: (id: string, deleteFiles: boolean) => transport.invoke<void>('Remove', id, deleteFiles),
   setInspectorFocus: (id: string, tabs: InspectorTab[]) => transport.invoke<void>('SetInspectorFocus', id, tabs),
   clearInspectorFocus: () => transport.invoke<void>('ClearInspectorFocus'),
@@ -205,6 +224,8 @@ export const api = {
   toggleAltSpeed: () => transport.invoke<boolean>('ToggleAltSpeed'),
   getQueueLimits: () => transport.invoke<QueueLimitsDTO>('GetQueueLimits'),
   setQueueLimits: (q: QueueLimitsDTO) => transport.invoke<void>('SetQueueLimits', q),
+  getPeerLimits: () => transport.invoke<PeerLimitsDTO>('GetPeerLimits'),
+  setPeerLimits: (p: PeerLimitsDTO) => transport.invoke<void>('SetPeerLimits', p),
   setQueuePosition: (infohash: string, pos: number) => transport.invoke<void>('SetQueuePosition', infohash, pos),
   setForceStart: (infohash: string, force: boolean) => transport.invoke<void>('SetForceStart', infohash, force),
   listScheduleRules: () => transport.invoke<ScheduleRuleDTO[]>('ListScheduleRules'),
@@ -231,9 +252,15 @@ export const api = {
   setUpdaterConfig: (c: UpdaterConfigDTO) => transport.invoke<void>('SetUpdaterConfig', c),
   checkForUpdate: () => transport.invoke<UpdateInfoDTO>('CheckForUpdate'),
   installUpdate: () => transport.invoke<void>('InstallUpdate'),
+  getDesktopIntegration: () => transport.invoke<DesktopIntegrationDTO>('GetDesktopIntegration'),
+  setDesktopIntegration: (c: DesktopIntegrationDTO) => transport.invoke<void>('SetDesktopIntegration', c),
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
   login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
   logout: () => transport.invoke<void>('Logout'),
+  platform: () => transport.invoke<string>('Platform'),
+  windowMinimise: () => transport.invoke<void>('WindowMinimise'),
+  windowMaximise: () => transport.invoke<void>('WindowMaximise'),
+  windowClose: () => transport.invoke<void>('WindowClose'),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {
@@ -250,4 +277,17 @@ export function onInspectorTick(handler: (detail: DetailDTO) => void): () => voi
 
 export function onUpdateAvailable(handler: (info: UpdateInfoDTO) => void): () => void {
   return transport.on('update:available', handler);
+}
+
+export type LaunchNotice = {
+  event: 'received' | 'magnet_added' | 'magnet_error' | 'torrent_added' | 'torrent_error';
+  count?: number;
+  args?: string[];
+  id?: string;
+  path?: string;
+  error?: string;
+};
+
+export function onLaunchNotice(handler: (n: LaunchNotice) => void): () => void {
+  return transport.on('launch:notice', handler);
 }

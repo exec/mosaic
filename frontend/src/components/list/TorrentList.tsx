@@ -16,6 +16,7 @@ type Props = {
   onSelect: (id: string, e: MouseEvent) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
+  onRecheck: (id: string) => void;
   onRemove: (id: string) => void;
   onOpenFolder: (savePath: string) => void;
   onSetCategory: (id: string, categoryID: number | null) => void;
@@ -38,6 +39,7 @@ export function TorrentList(props: Props) {
                   tags={props.tags}
                   onPause={() => props.onPause(t.id)}
                   onResume={() => props.onResume(t.id)}
+                  onRecheck={() => props.onRecheck(t.id)}
                   onRemove={() => props.onRemove(t.id)}
                   onCopyMagnet={() => {
                     if (t.magnet) {

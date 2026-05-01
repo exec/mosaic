@@ -101,7 +101,8 @@ func TestWS_AcceptsCookieAuth(t *testing.T) {
 	svc, sessions, hub, srv := newWSFixture(t)
 	require.NoError(t, svc.SetWebConfig(context.Background(), api.WebConfigDTO{Username: "alice"}))
 	require.NoError(t, svc.SetWebPassword(context.Background(), "p4ss"))
-	tok := sessions.Create()
+	tok, err := sessions.Create()
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -143,6 +144,29 @@ func TestWS_FanOutsToMultipleClients(t *testing.T) {
 		var env Envelope
 		require.NoError(t, json.Unmarshal(raw, &env))
 		require.Equal(t, "stats:tick", env.Type)
+	}
+}
+
+func TestWS_RejectsMismatchedOrigin(t *testing.T) {
+	svc, _, _, srv := newWSFixture(t)
+	key, err := svc.RotateAPIKey(context.Background())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Browser-style upgrade: legitimate auth (bearer key in query) but a
+	// mismatched Origin header — exactly what a CSWH attempt looks like. The
+	// upgrade must fail because OriginPatterns is pinned to r.Host.
+	hdr := map[string][]string{"Origin": {"https://evil.example.com"}}
+	_, resp, err := websocket.Dial(ctx,
+		wsURL(srv.URL, "/api/ws?key="+key),
+		&websocket.DialOptions{HTTPHeader: hdr},
+	)
+	require.Error(t, err, "expected upgrade to fail on mismatched Origin")
+	if resp != nil {
+		_ = resp.Body.Close()
+		require.Equal(t, 403, resp.StatusCode, "expected 403 from upgrade")
 	}
 }
 

@@ -1,16 +1,19 @@
 import {createStore, produce, reconcile} from 'solid-js/store';
+import {toast} from 'solid-sonner';
 import {
   api, onInspectorTick, onStatsTick, onTorrentsTick, onUpdateAvailable,
-  type BlocklistDTO, type CategoryDTO, type DetailDTO, type FeedDTO, type FilterDTO,
+  type BlocklistDTO, type CategoryDTO, type DesktopIntegrationDTO, type DetailDTO,
+  type FeedDTO, type FilterDTO,
   type GlobalStatsT, type InspectorTab,
-  type LimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
+  type LimitsDTO, type PeerLimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
   type UpdaterConfigDTO, type UpdateInfoDTO,
   type WebConfigDTO,
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
+import {isWailsRuntime} from './runtime';
 
 export type Density = 'cards' | 'table';
-export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused' | 'errored';
+export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused';
 export type AppView = 'torrents' | 'settings';
 
 export type BandwidthSample = {t: number; down: number; up: number};
@@ -44,6 +47,7 @@ export type AppState = {
   // Bandwidth + queue
   limits: LimitsDTO;
   queueLimits: QueueLimitsDTO;
+  peerLimits: PeerLimitsDTO;
 
   // Scheduling + blocklist
   scheduleRules: ScheduleRuleDTO[];
@@ -60,6 +64,9 @@ export type AppState = {
   updaterConfig: UpdaterConfigDTO;
   updateInfo: UpdateInfoDTO | null;
   appVersion: string;
+
+  // Desktop integration (tray + notifications)
+  desktopIntegration: DesktopIntegrationDTO;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -96,6 +103,13 @@ const emptyQueueLimits: QueueLimitsDTO = {
   max_active_seeds: 0,
 };
 
+const emptyPeerLimits: PeerLimitsDTO = {
+  listen_port: 0,
+  max_peers_per_torrent: 0,
+  dht_enabled: true,
+  encryption_enabled: true,
+};
+
 const emptyBlocklist: BlocklistDTO = {
   url: '',
   enabled: false,
@@ -116,6 +130,15 @@ const emptyUpdaterConfig: UpdaterConfigDTO = {
   channel: 'stable',
   last_checked_at: 0,
   last_seen_version: '',
+};
+
+const defaultDesktopIntegration: DesktopIntegrationDTO = {
+  tray_enabled: true,
+  close_to_tray: false,
+  start_minimized: false,
+  notify_on_complete: true,
+  notify_on_error: true,
+  notify_on_update: true,
 };
 
 export function createTorrentsStore() {
@@ -144,6 +167,7 @@ export function createTorrentsStore() {
 
     limits: emptyLimits,
     queueLimits: emptyQueueLimits,
+    peerLimits: emptyPeerLimits,
 
     scheduleRules: [],
     blocklist: emptyBlocklist,
@@ -156,24 +180,48 @@ export function createTorrentsStore() {
     updaterConfig: emptyUpdaterConfig,
     updateInfo: null,
     appVersion: 'dev',
+
+    desktopIntegration: defaultDesktopIntegration,
   });
+
+  // Boot fetches. Each failure is logged AND surfaces a single aggregated
+  // toast so the user notices when the backend is unreachable instead of
+  // sitting in front of an empty UI forever. We don't toast per-failure
+  // because a network outage would explode the screen — one toast per boot.
+  let bootFailureToasted = false;
+  const bootFailed = (label: string) => (e: unknown) => {
+    console.error(`boot fetch '${label}' failed:`, e);
+    if (bootFailureToasted) return;
+    bootFailureToasted = true;
+    toast.error(`Couldn't reach Mosaic backend (${label}). Check the desktop app or web server.`);
+  };
 
   api.listTorrents()
     .then((rows) => setState({torrents: rows, loading: false}))
-    .catch((e) => { console.error(e); setState({loading: false}); });
+    .catch((e) => { bootFailed('torrents')(e); setState({loading: false}); });
 
-  api.globalStats().then((s) => setState({stats: s})).catch(console.error);
-  api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(console.error);
-  api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(console.error);
-  api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(console.error);
-  api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(console.error);
-  api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(console.error);
-  api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(console.error);
-  api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(console.error);
-  api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(console.error);
-  api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(console.error);
-  api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(console.error);
-  api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(console.error);
+  api.globalStats().then((s) => setState({stats: s})).catch(bootFailed('stats'));
+  api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(bootFailed('categories'));
+  api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(bootFailed('tags'));
+  api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(bootFailed('default save path'));
+  api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(bootFailed('limits'));
+  api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(bootFailed('queue limits'));
+  api.getPeerLimits().then((p) => setState(produce((s) => { s.peerLimits = p; }))).catch(bootFailed('peer limits'));
+  api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(bootFailed('schedule rules'));
+  api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(bootFailed('blocklist'));
+  api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(bootFailed('feeds'));
+  api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(bootFailed('web config'));
+  api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(bootFailed('updater config'));
+  api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(bootFailed('app version'));
+  // Desktop integration (tray, notifications, close-to-tray) is inherently
+  // tied to the local OS session running the binary. The HTTP transport
+  // doesn't mirror these endpoints — fetching from a browser SPA would only
+  // surface a "no route" error and the toggles would have no effect on the
+  // remote machine. Skip the boot fetch in browser mode; the SettingsSidebar
+  // also hides the Desktop pane there.
+  if (isWailsRuntime()) {
+    api.getDesktopIntegration().then((d) => setState(produce((s) => { s.desktopIntegration = d; }))).catch(bootFailed('desktop integration'));
+  }
 
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -316,6 +364,10 @@ export function createTorrentsStore() {
       await api.setQueueLimits(q);
       setState(produce((s) => { s.queueLimits = q; }));
     },
+    setPeerLimits: async (p: PeerLimitsDTO) => {
+      await api.setPeerLimits(p);
+      setState(produce((s) => { s.peerLimits = p; }));
+    },
     setQueuePosition: (infohash: string, pos: number) => api.setQueuePosition(infohash, pos),
     setForceStart: (infohash: string, force: boolean) => api.setForceStart(infohash, force),
 
@@ -436,6 +488,16 @@ export function createTorrentsStore() {
     },
     installUpdate: () => api.installUpdate(),
 
+    // Desktop integration
+    refreshDesktopIntegration: async () => {
+      const d = await api.getDesktopIntegration();
+      setState(produce((s) => { s.desktopIntegration = d; }));
+    },
+    setDesktopIntegration: async (d: DesktopIntegrationDTO) => {
+      await api.setDesktopIntegration(d);
+      setState(produce((s) => { s.desktopIntegration = d; }));
+    },
+
     dispose: () => { offT(); offS(); offI(); offU(); },
   };
 }
@@ -455,7 +517,6 @@ export function filterTorrents(
         case 'seeding':     return t.completed && !t.paused;
         case 'completed':   return t.completed;
         case 'paused':      return t.paused;
-        case 'errored':     return false; // wired in Plan 5 when errors are surfaced
       }
     });
   }

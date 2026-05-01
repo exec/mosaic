@@ -11,7 +11,6 @@ const statusItems: StatusItem[] = [
   {id: 'seeding',     label: 'Seeding',     count: (t) => t.filter((x) => x.completed && !x.paused).length},
   {id: 'completed',   label: 'Completed',   count: (t) => t.filter((x) => x.completed).length},
   {id: 'paused',      label: 'Paused',      count: (t) => t.filter((x) => x.paused).length},
-  {id: 'errored',     label: 'Errored',     count: () => 0},
 ];
 
 type Props = {

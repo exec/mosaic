@@ -63,11 +63,11 @@ export function IconRail(props: Props) {
   );
 
   return (
-    <nav class="flex h-full w-12 flex-col items-center justify-between border-r border-white/[.04] bg-white/[.01] pt-10 pb-3" style={{'-webkit-app-region': 'drag'}}>
-      <div class="flex flex-col gap-1" style={{'-webkit-app-region': 'no-drag'}}>
+    <nav class="flex h-full w-12 flex-col items-center justify-between border-r border-white/[.04] bg-white/[.01] pt-10 pb-3" style={{'--wails-draggable': 'drag', '-webkit-app-region': 'drag'}}>
+      <div class="flex flex-col gap-1" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <For each={top}>{(it) => <Btn item={it} />}</For>
       </div>
-      <div class="flex flex-col gap-1" style={{'-webkit-app-region': 'no-drag'}}>
+      <div class="flex flex-col gap-1" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <For each={bottom}>{(it) => <Btn item={it} />}</For>
       </div>
     </nav>

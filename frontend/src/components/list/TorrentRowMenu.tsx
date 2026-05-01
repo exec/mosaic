@@ -12,6 +12,7 @@ type Props = {
   tags: TagDTO[];
   onPause: () => void;
   onResume: () => void;
+  onRecheck: () => void;
   onRemove: () => void;
   onCopyMagnet: () => void;
   onOpenFolder: () => void;
@@ -40,7 +41,7 @@ export function TorrentRowMenu(props: Props) {
           Pause
         </ContextMenu.Item>
       </Show>
-      <ContextMenu.Item disabled>
+      <ContextMenu.Item onSelect={props.onRecheck}>
         <RotateCw class="h-3.5 w-3.5" />
         Recheck
       </ContextMenu.Item>

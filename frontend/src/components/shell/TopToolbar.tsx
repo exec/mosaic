@@ -18,10 +18,10 @@ export function TopToolbar(props: Props) {
   return (
     <header
       class="flex h-12 shrink-0 items-center gap-3 border-b border-white/[.04] bg-zinc-950/80 px-3 backdrop-blur-md"
-      style={{'-webkit-app-region': 'drag'}}
+      style={{'--wails-draggable': 'drag', '-webkit-app-region': 'drag'}}
     >
       {/* Drag affordance — invisible but full-height area; the toolbar IS the drag region */}
-      <div class="relative flex-1 max-w-md" style={{'-webkit-app-region': 'no-drag'}}>
+      <div class="relative flex-1 max-w-md" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
         <input
           type="text"
@@ -32,7 +32,7 @@ export function TopToolbar(props: Props) {
         />
       </div>
 
-      <div class="flex items-center gap-1.5" style={{'-webkit-app-region': 'no-drag'}}>
+      <div class="flex items-center gap-1.5" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <Button variant="secondary" onClick={props.onAddTorrent}>
           <FileDown class="h-3.5 w-3.5" />
           .torrent
