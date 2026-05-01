@@ -20,10 +20,13 @@ scripts:
   postinstall: scripts/linux-postinstall.sh
 overrides:
   deb:
+    # Built with -tags webkit2_41 — runtime dep is the 4.1 ABI which is
+    # what Debian 12+ / Ubuntu 22.04+ ship. Older systems are unsupported;
+    # they can use the .AppImage which bundles its own webkit.
     depends:
       - libgtk-3-0
-      - libwebkit2gtk-4.0-37
+      - libwebkit2gtk-4.1-0
   rpm:
     depends:
       - gtk3
-      - webkit2gtk4.0
+      - webkit2gtk4.1

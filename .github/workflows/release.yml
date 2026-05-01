@@ -52,7 +52,9 @@ jobs:
         run: |
           sudo apt-get update
           # libfuse2 — required by appimagetool to mount itself
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev pkg-config libfuse2
+          # webkit2gtk-4.1-dev is what -tags webkit2_41 needs at link time
+          # (Debian 12+ / Ubuntu 22.04 jammy-updates ship -4.1-0 runtime).
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config libfuse2
           # nfpm — not in jammy apt, install via go (PATH set up by setup-go)
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           # appimagetool
