@@ -37,6 +37,16 @@ var assets embed.FS
 var version = "dev"
 
 func main() {
+	// On Windows, when File Explorer launches us with a .torrent path while
+	// another Mosaic is already running, we MUST forward args + exit before
+	// touching anacrolix's listen port (port-bind would fail and log.Fatal
+	// would kill us before reaching Wails's SingleInstanceLock dispatch).
+	// Wails-format mutex+WM_COPYDATA — see backend/platform/single_instance_*
+	// for the wire details. No-op on macOS / Linux.
+	if platform.EarlyForwardLaunchArgs("io.github.exec.mosaic") {
+		os.Exit(0)
+	}
+
 	paths, err := platform.Paths("Mosaic")
 	if err != nil {
 		panic(err)
