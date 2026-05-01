@@ -145,11 +145,11 @@ func OriginGuard() func(http.Handler) http.Handler {
 				return
 			}
 			if origin != "" && !originHostMatches(origin, r.Host) {
-				http.Error(w, `{"error":"origin mismatch"}`, http.StatusForbidden)
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin mismatch"})
 				return
 			}
 			if origin == "" && referer != "" && !originHostMatches(referer, r.Host) {
-				http.Error(w, `{"error":"origin mismatch"}`, http.StatusForbidden)
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin mismatch"})
 				return
 			}
 			next.ServeHTTP(w, r)

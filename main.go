@@ -161,8 +161,10 @@ func main() {
 	//
 	// The subscriber consumes engine events and fires beeep notifications on
 	// torrent completion / error transitions; the tray exposes show / pause-all
-	// / alt-speed / settings / quit affordances on Linux+Windows (no-op stub on
-	// macOS, see backend/tray/tray_darwin.go).
+	// / alt-speed / settings / quit affordances on all three platforms — Linux
+	// and Windows via energye/systray; macOS via a native NSStatusItem Cgo
+	// bridge in backend/tray/tray_darwin.{m,h,go} (energye fights Wails for
+	// the macOS main runloop, so we own the menubar item directly there).
 	desktopCfg := svc.GetDesktopIntegration(ctx)
 	notifSub := notifications.NewSubscriber(notifications.NewBeeepNotifier(), notifications.Settings{
 		NotifyOnComplete: desktopCfg.NotifyOnComplete,
