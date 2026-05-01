@@ -1,14 +1,18 @@
 import {For} from 'solid-js';
 import {Sliders, Wifi, Globe, Download, MonitorSmartphone, Calendar, Shield, Rss, Folder, Tag, Info} from 'lucide-solid';
+import {isWailsRuntime} from '../../lib/runtime';
 
 export type SettingsPane = 'general' | 'connection' | 'web' | 'updates' | 'desktop' | 'schedule' | 'blocklist' | 'rss' | 'categories' | 'tags' | 'about';
 
-const items: {value: SettingsPane; label: string; icon: typeof Sliders}[] = [
+const allItems: {value: SettingsPane; label: string; icon: typeof Sliders; wailsOnly?: boolean}[] = [
   {value: 'general',    label: 'General',        icon: Sliders},
   {value: 'connection', label: 'Connection',     icon: Wifi},
   {value: 'web',        label: 'Web Interface',  icon: Globe},
   {value: 'updates',    label: 'Updates',        icon: Download},
-  {value: 'desktop',    label: 'Desktop',        icon: MonitorSmartphone},
+  // Desktop integration (tray, notifications, close-to-tray) only applies to
+  // the local desktop session running the Mosaic binary, so we hide it when
+  // the SPA is running over the remote HTTPS+WS transport.
+  {value: 'desktop',    label: 'Desktop',        icon: MonitorSmartphone, wailsOnly: true},
   {value: 'schedule',   label: 'Schedule',       icon: Calendar},
   {value: 'blocklist',  label: 'Blocklist',      icon: Shield},
   {value: 'rss',        label: 'RSS',            icon: Rss},
@@ -16,6 +20,8 @@ const items: {value: SettingsPane; label: string; icon: typeof Sliders}[] = [
   {value: 'tags',       label: 'Tags',           icon: Tag},
   {value: 'about',      label: 'About',          icon: Info},
 ];
+
+const items = allItems.filter((i) => !i.wailsOnly || isWailsRuntime());
 
 type Props = {
   active: SettingsPane;

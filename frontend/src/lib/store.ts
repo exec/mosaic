@@ -10,9 +10,10 @@ import {
   type WebConfigDTO,
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
+import {isWailsRuntime} from './runtime';
 
 export type Density = 'cards' | 'table';
-export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused' | 'errored';
+export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused';
 export type AppView = 'torrents' | 'settings';
 
 export type BandwidthSample = {t: number; down: number; up: number};
@@ -212,7 +213,15 @@ export function createTorrentsStore() {
   api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(bootFailed('web config'));
   api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(bootFailed('updater config'));
   api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(bootFailed('app version'));
-  api.getDesktopIntegration().then((d) => setState(produce((s) => { s.desktopIntegration = d; }))).catch(bootFailed('desktop integration'));
+  // Desktop integration (tray, notifications, close-to-tray) is inherently
+  // tied to the local OS session running the binary. The HTTP transport
+  // doesn't mirror these endpoints — fetching from a browser SPA would only
+  // surface a "no route" error and the toggles would have no effect on the
+  // remote machine. Skip the boot fetch in browser mode; the SettingsSidebar
+  // also hides the Desktop pane there.
+  if (isWailsRuntime()) {
+    api.getDesktopIntegration().then((d) => setState(produce((s) => { s.desktopIntegration = d; }))).catch(bootFailed('desktop integration'));
+  }
 
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
@@ -508,7 +517,6 @@ export function filterTorrents(
         case 'seeding':     return t.completed && !t.paused;
         case 'completed':   return t.completed;
         case 'paused':      return t.paused;
-        case 'errored':     return false; // wired in Plan 5 when errors are surfaced
       }
     });
   }

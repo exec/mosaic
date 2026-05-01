@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js';
+import {createEffect, createSignal} from 'solid-js';
 import {toast} from 'solid-sonner';
 import {ThemeToggle} from '../theme/ThemeToggle';
 import {Button} from '../ui/Button';
@@ -31,6 +31,9 @@ function Field(props: {label: string; help?: string; children: any}) {
 
 export function GeneralPane(props: Props) {
   const [savePath, setSavePath] = createSignal(props.defaultSavePath);
+  // Re-sync when the prop arrives later — the boot fetch in store.ts is
+  // async, so a user landing here first sees an empty input until it lands.
+  createEffect(() => { setSavePath(props.defaultSavePath); });
   const dirty = () => savePath() !== props.defaultSavePath;
 
   const save = async () => {
