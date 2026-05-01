@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#4c1d95"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fafafa"/>
+      <stop offset="1" stop-color="#e4e4e7"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#bg)"/>
+
+  <g transform="translate(512 512)">
+    <g opacity="0.18" filter="url(#shadow)">
+      <rect x="-280" y="-280" width="160" height="160" rx="22" fill="#000"/>
+      <rect x="-80"  y="-280" width="160" height="160" rx="22" fill="#000"/>
+      <rect x="120"  y="-280" width="160" height="160" rx="22" fill="#000"/>
+      <rect x="-280" y="-80"  width="160" height="160" rx="22" fill="#000"/>
+      <rect x="-80"  y="-80"  width="160" height="160" rx="22" fill="#000"/>
+      <rect x="120"  y="-80"  width="160" height="160" rx="22" fill="#000"/>
+      <rect x="-280" y="120"  width="160" height="160" rx="22" fill="#000"/>
+      <rect x="-80"  y="120"  width="160" height="160" rx="22" fill="#000"/>
+      <rect x="120"  y="120"  width="160" height="160" rx="22" fill="#000"/>
+    </g>
+
+    <rect x="-280" y="-280" width="160" height="160" rx="22" fill="url(#tile)"/>
+    <rect x="-80"  y="-280" width="160" height="160" rx="22" fill="url(#tile)"/>
+    <rect x="120"  y="-280" width="160" height="160" rx="22" fill="url(#tile)"/>
+    <rect x="-280" y="-80"  width="160" height="160" rx="22" fill="url(#tile)"/>
+    <rect x="-80"  y="-80"  width="160" height="160" rx="22" fill="#a78bfa"/>
+    <rect x="120"  y="-80"  width="160" height="160" rx="22" fill="url(#tile)"/>
+    <rect x="-280" y="120"  width="160" height="160" rx="22" fill="url(#tile)"/>
+    <rect x="-80"  y="120"  width="160" height="160" rx="22" fill="url(#tile)"/>
+    <rect x="120"  y="120"  width="160" height="160" rx="22" fill="url(#tile)"/>
+  </g>
+</svg>

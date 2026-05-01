@@ -7,12 +7,19 @@ BIN_DIR="${ROOT}/build/bin"
 
 cd "${ROOT}"
 
+echo "==> build frontend first so main.go's go:embed has its target"
+(cd frontend && npm run build)
+
+echo "==> prime module cache"
+go mod download
+
 echo "==> wails build linux/amd64"
 wails build \
     -platform linux/amd64 \
     -ldflags "-X main.version=${VERSION}" \
     -clean \
-    -skipbindings
+    -skipbindings \
+    -skipembedcreate
 
 ELF="${BIN_DIR}/mosaic"
 file "${ELF}" | grep -q "ELF 64-bit"
@@ -32,6 +39,9 @@ APPDIR="${ROOT}/build/linux/AppDir"
 cp "${ELF}" "${APPDIR}/usr/bin/mosaic"
 chmod +x "${APPDIR}/usr/bin/mosaic"
 cp "${ROOT}/build/linux/mosaic.desktop" "${APPDIR}/mosaic.desktop"
+# appimagetool requires the icon (matching the .desktop's `Icon=mosaic`) at the
+# AppDir root in addition to the hicolor location.
+cp "${ROOT}/build/appicon.png" "${APPDIR}/mosaic.png"
 cp "${ROOT}/build/appicon.png" "${APPDIR}/usr/share/icons/hicolor/512x512/apps/mosaic.png"
 
 if [[ ! -L "${APPDIR}/.DirIcon" ]]; then

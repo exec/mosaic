@@ -47,8 +47,36 @@ type Service struct {
 	webHookMu       sync.RWMutex
 	onWebCfgChanged func(WebConfigDTO)
 
+	desktopHookMu    sync.RWMutex
+	onDesktopChanged func(DesktopIntegrationDTO)
+
 	updater    *updater.Updater // may be nil if not yet attached
 	appVersion string
+
+	// updateInstalledNotifier, if set, is invoked after a successful
+	// InstallUpdate so the OS-level desktop notification fires. Wired via
+	// AttachUpdateInstalledNotifier; nil-safe (InstallUpdate just skips).
+	updateInstalledNotifier UpdateInstalledNotifier
+
+	// sessions, if attached, is the remote-server SessionStore. It's wired in
+	// post-construction (via AttachSessionRevoker) to avoid an import cycle
+	// with backend/remote. SetWebPassword and a username-changing SetWebConfig
+	// call RevokeAll() to force every existing browser session to re-auth.
+	sessions SessionRevoker
+}
+
+// SessionRevoker is the subset of *remote.SessionStore that api.Service needs
+// to call after credentials change. Defining it as a small interface here
+// keeps the api package free of a remote-package import.
+type SessionRevoker interface {
+	RevokeAll()
+}
+
+// AttachSessionRevoker wires the remote SessionStore into the Service so that
+// SetWebPassword / SetWebConfig (when the username changes) can invalidate
+// every active session. Pass nil (or never call) if there's no remote layer.
+func (s *Service) AttachSessionRevoker(r SessionRevoker) {
+	s.sessions = r
 }
 
 // blocklistState is the in-memory snapshot of the most recent successful (or
@@ -98,6 +126,11 @@ const (
 	settingBlocklistURL     = "blocklist_url"
 	settingBlocklistEnabled = "blocklist_enabled"
 
+	settingPeerListenPort      = "peer_listen_port"
+	settingMaxPeersPerTorrent  = "peers_max_per_torrent"
+	settingDHTEnabled          = "dht_enabled"
+	settingEncryptionEnabled   = "encryption_enabled"
+
 	settingWebEnabled  = "web_enabled"
 	settingWebPort     = "web_port"
 	settingWebBindAll  = "web_bind_all"
@@ -109,6 +142,16 @@ const (
 	settingUpdaterChannel         = "updater_channel"
 	settingUpdaterLastChecked     = "updater_last_checked_at"
 	settingUpdaterLastSeenVersion = "updater_last_seen_version"
+
+	// Desktop integration (system tray + notifications + close-to-tray).
+	// Stored as bool strings via setBoolSetting; reads are presence-aware so
+	// "" (never set) maps to the spec defaults below — see GetDesktopIntegration.
+	settingDesktopTrayEnabled      = "desktop.tray_enabled"
+	settingDesktopCloseToTray      = "desktop.close_to_tray"
+	settingDesktopStartMinimized   = "desktop.start_minimized"
+	settingDesktopNotifyOnComplete = "desktop.notify_on_complete"
+	settingDesktopNotifyOnError    = "desktop.notify_on_error"
+	settingDesktopNotifyOnUpdate   = "desktop.notify_on_update"
 )
 
 // WebConfigDTO is the transport shape for the optional HTTP+WS interface.
@@ -142,6 +185,7 @@ func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
 }
 
 func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
+	prevUser, _ := s.settings.Get(ctx, settingWebUsername)
 	if err := s.setBoolSetting(ctx, settingWebEnabled, c.Enabled); err != nil {
 		return err
 	}
@@ -153,6 +197,11 @@ func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
 	}
 	if err := s.settings.Set(ctx, settingWebUsername, c.Username); err != nil {
 		return err
+	}
+	// Force re-login if the username actually changed — otherwise an
+	// already-authenticated tab would keep working under the old identity.
+	if prevUser != c.Username && s.sessions != nil {
+		s.sessions.RevokeAll()
 	}
 	s.fireWebConfigChanged(s.GetWebConfig(ctx))
 	return nil
@@ -182,11 +231,22 @@ func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
 	if err != nil {
 		return err
 	}
-	return s.settings.Set(ctx, settingWebPassHash, hash)
+	if err := s.settings.Set(ctx, settingWebPassHash, hash); err != nil {
+		return err
+	}
+	// Invalidate every active session — the old password is no longer valid,
+	// any browser still holding a pre-change cookie must re-authenticate.
+	if s.sessions != nil {
+		s.sessions.RevokeAll()
+	}
+	return nil
 }
 
 func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
-	key := cred.RandomToken()
+	key, err := cred.RandomToken()
+	if err != nil {
+		return "", err
+	}
 	if err := s.settings.Set(ctx, settingWebAPIKey, key); err != nil {
 		return "", err
 	}
@@ -316,7 +376,17 @@ func (s *Service) InstallUpdate(ctx context.Context) error {
 		return fmt.Errorf("updater disabled")
 	}
 	last := s.updater.Last()
-	return s.updater.Install(ctx, last)
+	if err := s.updater.Install(ctx, last); err != nil {
+		return err
+	}
+	// Fire the desktop notification (if a Notifier was attached and the user
+	// hasn't disabled the notify_on_update toggle — the Notifier itself does
+	// the toggle gating). Done here rather than from a hook in the updater
+	// package because updater.Updater doesn't expose an OnInstalled callback.
+	if s.updateInstalledNotifier != nil {
+		s.updateInstalledNotifier.NotifyUpdateInstalled(last.LatestVersion)
+	}
+	return nil
 }
 
 // MakeUpdateInfoDTO converts a raw updater.Info to the API DTO. Used by main.go
@@ -329,6 +399,87 @@ func (s *Service) MakeUpdateInfoDTO(info updater.Info) UpdateInfoDTO {
 		AssetFilename:  info.AssetFilename,
 		CheckedAt:      info.CheckedAt.Unix(),
 		CurrentVersion: s.appVersion,
+	}
+}
+
+// DesktopIntegrationDTO is the transport shape for system-tray + notifications
+// + close-to-tray preferences. The frontend keys off these JSON names; do not
+// rename without coordinating with the frontend agent owning the settings UI.
+type DesktopIntegrationDTO struct {
+	TrayEnabled      bool `json:"tray_enabled"`       // default true
+	CloseToTray      bool `json:"close_to_tray"`      // default false on Linux/Windows; ignored on macOS
+	StartMinimized   bool `json:"start_minimized"`    // default false — start hidden in tray, no window
+	NotifyOnComplete bool `json:"notify_on_complete"` // default true
+	NotifyOnError    bool `json:"notify_on_error"`    // default true
+	NotifyOnUpdate   bool `json:"notify_on_update"`   // default true
+}
+
+// boolSettingDefault reads a bool setting with a presence-aware default —
+// "" (never written) returns def, otherwise "true"/"false" parses normally.
+// This is the shape we want for DesktopIntegrationDTO defaults: a fresh DB
+// must yield TrayEnabled=true even though boolSetting alone would return false.
+func (s *Service) boolSettingDefault(ctx context.Context, key string, def bool) bool {
+	v, err := s.settings.Get(ctx, key)
+	if err != nil || v == "" {
+		return def
+	}
+	return v == "true"
+}
+
+func (s *Service) GetDesktopIntegration(ctx context.Context) DesktopIntegrationDTO {
+	return DesktopIntegrationDTO{
+		TrayEnabled:      s.boolSettingDefault(ctx, settingDesktopTrayEnabled, true),
+		CloseToTray:      s.boolSettingDefault(ctx, settingDesktopCloseToTray, false),
+		StartMinimized:   s.boolSettingDefault(ctx, settingDesktopStartMinimized, false),
+		NotifyOnComplete: s.boolSettingDefault(ctx, settingDesktopNotifyOnComplete, true),
+		NotifyOnError:    s.boolSettingDefault(ctx, settingDesktopNotifyOnError, true),
+		NotifyOnUpdate:   s.boolSettingDefault(ctx, settingDesktopNotifyOnUpdate, true),
+	}
+}
+
+// SetDesktopIntegration persists the user's desktop-integration preferences
+// and fires the change hook so the running tray/notifications goroutines can
+// reconfigure themselves. No validation: the user is allowed to disable
+// everything (a perfectly reasonable choice).
+func (s *Service) SetDesktopIntegration(ctx context.Context, c DesktopIntegrationDTO) error {
+	if err := s.setBoolSetting(ctx, settingDesktopTrayEnabled, c.TrayEnabled); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopCloseToTray, c.CloseToTray); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopStartMinimized, c.StartMinimized); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopNotifyOnComplete, c.NotifyOnComplete); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopNotifyOnError, c.NotifyOnError); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDesktopNotifyOnUpdate, c.NotifyOnUpdate); err != nil {
+		return err
+	}
+	s.fireDesktopIntegrationChanged(c)
+	return nil
+}
+
+// OnDesktopIntegrationChange registers a synchronous callback invoked after a
+// SetDesktopIntegration commit. main.go uses this to push the updated
+// notification toggles into the live notifications.Subscriber. Pass nil to
+// unregister. Only one callback is supported.
+func (s *Service) OnDesktopIntegrationChange(cb func(DesktopIntegrationDTO)) {
+	s.desktopHookMu.Lock()
+	s.onDesktopChanged = cb
+	s.desktopHookMu.Unlock()
+}
+
+func (s *Service) fireDesktopIntegrationChanged(c DesktopIntegrationDTO) {
+	s.desktopHookMu.RLock()
+	cb := s.onDesktopChanged
+	s.desktopHookMu.RUnlock()
+	if cb != nil {
+		cb(c)
 	}
 }
 
@@ -375,6 +526,8 @@ type TorrentDTO struct {
 	QueuePosition int      `json:"queue_position"`
 	ForceStart    bool     `json:"force_start"`
 	Queued        bool     `json:"queued"`
+	Verifying     bool     `json:"verifying"`
+	FilesMissing  bool     `json:"files_missing"`
 }
 
 func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
@@ -400,6 +553,8 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		QueuePosition: s.QueuePosition,
 		ForceStart:    s.ForceStart,
 		Queued:        s.Queued,
+		Verifying:     s.Verifying,
+		FilesMissing:  s.FilesMissing,
 	}
 }
 
@@ -479,8 +634,51 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 	return id, nil
 }
 
-func (s *Service) Pause(id engine.TorrentID) error  { return s.engine.Pause(id) }
-func (s *Service) Resume(id engine.TorrentID) error { return s.engine.Resume(id) }
+func (s *Service) Pause(id engine.TorrentID) error   { return s.engine.Pause(id) }
+func (s *Service) Resume(id engine.TorrentID) error  { return s.engine.Resume(id) }
+func (s *Service) Recheck(id engine.TorrentID) error { return s.engine.Recheck(id) }
+
+// PauseAll pauses every torrent currently known to the engine. Errors on
+// individual torrents are logged but don't abort the loop — best-effort
+// semantics so a single missing/dead torrent can't strand the rest.
+// Used by the system-tray "Pause all" item.
+func (s *Service) PauseAll(_ context.Context) {
+	for _, snap := range s.engine.List() {
+		if snap.Paused {
+			continue
+		}
+		if err := s.engine.Pause(snap.ID); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("PauseAll: pause failed")
+		}
+	}
+}
+
+// ResumeAll is the mirror of PauseAll. Used by the system-tray "Resume all"
+// item when the engine is in the globally-paused state.
+func (s *Service) ResumeAll(_ context.Context) {
+	for _, snap := range s.engine.List() {
+		if !snap.Paused {
+			continue
+		}
+		if err := s.engine.Resume(snap.ID); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("ResumeAll: resume failed")
+		}
+	}
+}
+
+// UpdateInstalledNotifier is the post-install hook the desktop-integration
+// notifications package implements. Defining the contract as an interface
+// here keeps the api package free of a notifications-package import.
+type UpdateInstalledNotifier interface {
+	NotifyUpdateInstalled(version string)
+}
+
+// AttachUpdateInstalledNotifier wires the notifications subscriber into the
+// Service so InstallUpdate can fire the OS-level notification on success.
+// Pass nil (or never call) to disable the post-install notification.
+func (s *Service) AttachUpdateInstalledNotifier(n UpdateInstalledNotifier) {
+	s.updateInstalledNotifier = n
+}
 
 func (s *Service) Remove(ctx context.Context, id engine.TorrentID, deleteFiles bool) error {
 	if err := s.engine.Remove(id, deleteFiles); err != nil {
@@ -910,6 +1108,60 @@ func (s *Service) applyLimits(ctx context.Context) error {
 	return s.engine.SetGlobalRateLimits(down, up)
 }
 
+// PeerLimitsDTO carries the connection-level settings users can adjust from
+// Settings → Connection. Most fields require a restart to take effect because
+// anacrolix exposes them only at Client construction; MaxPeersPerTorrent is
+// runtime-mutable and gets pushed to every running torrent on Set.
+type PeerLimitsDTO struct {
+	ListenPort         int  `json:"listen_port"`         // 0 = let OS pick at startup
+	MaxPeersPerTorrent int  `json:"max_peers_per_torrent"` // 0 = anacrolix default (80)
+	DHTEnabled         bool `json:"dht_enabled"`
+	EncryptionEnabled  bool `json:"encryption_enabled"`
+}
+
+func (s *Service) GetPeerLimits(ctx context.Context) PeerLimitsDTO {
+	// DHT + encryption default to true (matches anacrolix's defaults + good
+	// privacy hygiene). The bool helpers in this Service treat unset as
+	// false, so use a presence-aware reader.
+	dhtRaw, _ := s.settings.Get(ctx, settingDHTEnabled)
+	dhtEnabled := dhtRaw == "" || dhtRaw == "true" // default-on
+	encRaw, _ := s.settings.Get(ctx, settingEncryptionEnabled)
+	encEnabled := encRaw == "" || encRaw == "true" // default-on
+	return PeerLimitsDTO{
+		ListenPort:         s.intSetting(ctx, settingPeerListenPort),
+		MaxPeersPerTorrent: s.intSetting(ctx, settingMaxPeersPerTorrent),
+		DHTEnabled:         dhtEnabled,
+		EncryptionEnabled:  encEnabled,
+	}
+}
+
+func (s *Service) SetPeerLimits(ctx context.Context, p PeerLimitsDTO) error {
+	if p.ListenPort < 0 || p.ListenPort > 65535 {
+		return fmt.Errorf("listen port must be 0..65535")
+	}
+	if p.MaxPeersPerTorrent < 0 {
+		return fmt.Errorf("max peers per torrent must be >= 0")
+	}
+	if err := s.setIntSetting(ctx, settingPeerListenPort, p.ListenPort); err != nil {
+		return err
+	}
+	if err := s.setIntSetting(ctx, settingMaxPeersPerTorrent, p.MaxPeersPerTorrent); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingDHTEnabled, p.DHTEnabled); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingEncryptionEnabled, p.EncryptionEnabled); err != nil {
+		return err
+	}
+	// Per-torrent cap is the only one anacrolix lets us mutate at runtime.
+	// ListenPort / DHT / Encryption changes take effect at next launch.
+	if err := s.engine.ApplyPerTorrentMaxPeers(p.MaxPeersPerTorrent); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Service) GetQueueLimits(ctx context.Context) QueueLimitsDTO {
 	return QueueLimitsDTO{
 		MaxActiveDownloads: s.intSetting(ctx, settingMaxActiveDL),
@@ -1020,6 +1272,13 @@ func (s *Service) GetBlocklist(ctx context.Context) BlocklistDTO {
 }
 
 func (s *Service) SetBlocklistURL(ctx context.Context, url string, enabled bool) error {
+	// Reject obviously dangerous URLs at write time. The dialer in
+	// safeHTTPClient is the second layer that catches DNS-rebind tricks.
+	if enabled && url != "" {
+		if _, err := validateFetchURL(url); err != nil {
+			return fmt.Errorf("blocklist URL must be http or https and not point at a private/loopback address: %w", err)
+		}
+	}
 	if err := s.settings.Set(ctx, settingBlocklistURL, url); err != nil {
 		return err
 	}
@@ -1041,6 +1300,9 @@ func (s *Service) RefreshBlocklist(ctx context.Context) error {
 	if url == "" {
 		return errors.New("no blocklist URL configured")
 	}
+	if _, err := validateFetchURL(url); err != nil {
+		return fmt.Errorf("refusing to fetch blocklist: %w", err)
+	}
 
 	httpCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -1048,7 +1310,8 @@ func (s *Service) RefreshBlocklist(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := safeHTTPClient(30 * time.Second)
+	resp, err := client.Do(req)
 	if err != nil {
 		s.blocklistMu.Lock()
 		s.blocklist.lastErr = err.Error()
@@ -1104,19 +1367,37 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list persisted torrents: %w", err)
 	}
+	failed := 0
+	orphaned := 0
 	for _, r := range records {
+		var id engine.TorrentID
+		var addErr error
 		switch {
 		case len(r.Metainfo) > 0:
-			if _, err := s.engine.AddFile(ctx, r.Metainfo, r.SavePath); err != nil {
-				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add file torrent failed")
-			}
+			id, addErr = s.engine.AddFile(ctx, r.Metainfo, r.SavePath)
 		case r.Magnet != "":
-			if _, err := s.engine.AddMagnet(ctx, r.Magnet, r.SavePath); err != nil {
-				log.Warn().Err(err).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add magnet failed")
-			}
+			id, addErr = s.engine.AddMagnet(ctx, r.Magnet, r.SavePath)
 		default:
 			log.Warn().Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: skipping orphan record (no magnet, no metainfo)")
+			orphaned++
+			continue
 		}
+		if addErr != nil {
+			log.Warn().Err(addErr).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add failed")
+			failed++
+			continue
+		}
+		// If the persistence layer recorded this torrent as previously complete,
+		// tell the engine — its post-VerifyData hook flags FilesMissing and
+		// pauses the torrent if the on-disk pieces no longer match (the user
+		// deleted files between sessions). Without this hint VerifyData silently
+		// turns a deleted file into a redownload.
+		if r.CompletedAt != nil {
+			s.engine.MarkExpectedComplete(id)
+		}
+	}
+	if failed > 0 || orphaned > 0 {
+		log.Warn().Int("failed", failed).Int("orphaned", orphaned).Int("total", len(records)).Msg("restore: not all torrents could be re-added")
 	}
 	return nil
 }
@@ -1202,6 +1483,9 @@ func (s *Service) ListFeeds(ctx context.Context) ([]FeedDTO, error) {
 }
 
 func (s *Service) CreateFeed(ctx context.Context, dto FeedDTO) (int, error) {
+	if _, err := validateFetchURL(dto.URL); err != nil {
+		return 0, fmt.Errorf("feed URL must be http or https and not point at a private/loopback address: %w", err)
+	}
 	return s.feeds.Create(ctx, persistence.Feed{
 		URL: dto.URL, Name: dto.Name, IntervalMin: dto.IntervalMin,
 		ETag: dto.ETag, Enabled: dto.Enabled,
@@ -1209,6 +1493,9 @@ func (s *Service) CreateFeed(ctx context.Context, dto FeedDTO) (int, error) {
 }
 
 func (s *Service) UpdateFeed(ctx context.Context, dto FeedDTO) error {
+	if _, err := validateFetchURL(dto.URL); err != nil {
+		return fmt.Errorf("feed URL must be http or https and not point at a private/loopback address: %w", err)
+	}
 	return s.feeds.Update(ctx, persistence.Feed{
 		ID: dto.ID, URL: dto.URL, Name: dto.Name, IntervalMin: dto.IntervalMin,
 		Enabled: dto.Enabled,

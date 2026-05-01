@@ -30,6 +30,31 @@
                 </array>
             </dict>
         </array>
+        <key>CFBundleDocumentTypes</key>
+        <array>
+            <dict>
+                <key>CFBundleTypeName</key>
+                <string>BitTorrent file</string>
+                <key>CFBundleTypeRole</key>
+                <string>Editor</string>
+                <key>LSHandlerRank</key>
+                <string>Default</string>
+                <key>CFBundleTypeExtensions</key>
+                <array>
+                    <string>torrent</string>
+                </array>
+                <key>CFBundleTypeMIMETypes</key>
+                <array>
+                    <string>application/x-bittorrent</string>
+                </array>
+                <key>CFBundleTypeIconFile</key>
+                <string>iconfile</string>
+                <key>LSItemContentTypes</key>
+                <array>
+                    <string>org.bittorrent.torrent</string>
+                </array>
+            </dict>
+        </array>
         <key>NSAppTransportSecurity</key>
         <dict>
             <key>NSAllowsArbitraryLoads</key>

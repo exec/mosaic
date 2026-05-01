@@ -29,34 +29,27 @@ func TestService_SetBlocklistURL_Disabled_ClearsState(t *testing.T) {
 	require.Equal(t, 0, dto.Entries)
 }
 
-func TestService_SetBlocklistURL_Enabled_LoadsAndPopulates(t *testing.T) {
+func TestService_SetBlocklistURL_Enabled_RefusesLocalhostServer(t *testing.T) {
+	// httptest.NewServer binds to 127.0.0.1. With the SSRF defense in place,
+	// SetBlocklistURL must refuse such a URL outright at validation time
+	// (before any dial), which is exactly the desired security behavior.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("evil:10.0.0.0-10.0.0.255\n# comment\nspy:192.168.1.0-192.168.1.255\n"))
+		_, _ = w.Write([]byte("evil:10.0.0.0-10.0.0.255\n"))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc, _ := newTestService(t)
 	ctx := context.Background()
-	require.NoError(t, svc.SetBlocklistURL(ctx, srv.URL, true))
-
-	dto := svc.GetBlocklist(ctx)
-	require.True(t, dto.Enabled)
-	require.Equal(t, srv.URL, dto.URL)
-	require.Greater(t, dto.LastLoadedAt, int64(0))
-	require.Equal(t, 3, dto.Entries) // countLines counts '\n' bytes
-	require.Empty(t, dto.Error)
+	err := svc.SetBlocklistURL(ctx, srv.URL, true)
+	require.Error(t, err, "blocklist URL pointing at 127.0.0.1 must be rejected")
 }
 
 func TestService_RefreshBlocklist_HTTPFailure_RecordsError(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
-	// Use a clearly invalid URL to force a transport-level failure quickly.
+	// A loopback URL is now rejected by validateFetchURL at write time.
 	err := svc.SetBlocklistURL(ctx, "http://127.0.0.1:1/missing", true)
 	require.Error(t, err)
-
-	dto := svc.GetBlocklist(ctx)
-	require.True(t, dto.Enabled)
-	require.NotEmpty(t, dto.Error)
 }
 
 func TestService_RefreshBlocklist_NoURL_ReturnsError(t *testing.T) {

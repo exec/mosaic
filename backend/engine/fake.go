@@ -74,6 +74,17 @@ func (f *FakeBackend) Resume(id TorrentID) error {
 	return nil
 }
 
+func (f *FakeBackend) Recheck(id TorrentID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.torrents[id]; !ok {
+		return errors.New("not found")
+	}
+	return nil
+}
+
+func (f *FakeBackend) ApplyPerTorrentMaxPeers(_ int) error { return nil }
+
 func (f *FakeBackend) Remove(id TorrentID, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -182,6 +193,10 @@ func (f *FakeBackend) ScheduledPause(id TorrentID, paused bool) {
 		t.Queued = paused
 	}
 }
+
+// MarkExpectedComplete is a no-op for the fake backend — the
+// regression-detection logic lives in AnacrolixBackend's verify goroutine.
+func (f *FakeBackend) MarkExpectedComplete(id TorrentID) {}
 
 func (f *FakeBackend) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
 	f.mu.Lock()

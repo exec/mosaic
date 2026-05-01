@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -12,6 +15,7 @@ import (
 
 	"mosaic/backend/api"
 	"mosaic/backend/engine"
+	"mosaic/backend/platform"
 	"mosaic/backend/remote"
 )
 
@@ -21,6 +25,12 @@ type App struct {
 	svc *api.Service
 	hub *remote.Hub // optional fan-out for browser clients; nil-safe
 	ctx context.Context
+
+	// quitFully is set by QuitFully so the OnBeforeClose hook in main.go
+	// can distinguish "tray asked us to fully quit" from "user clicked X
+	// while close-to-tray is enabled". Without this the hook would hide
+	// the window every time, including when the tray's Quit was used.
+	quitFully atomic.Bool
 }
 
 func NewApp(svc *api.Service, hub *remote.Hub) *App {
@@ -30,6 +40,74 @@ func NewApp(svc *api.Service, hub *remote.Hub) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	go a.streamTicks(ctx)
+	// macOS routes Finder-clicked .torrent files and browser-clicked magnet:
+	// URLs through Apple Events, not argv. Register NSAppleEventManager
+	// handlers that funnel both into HandleLaunchArgs. No-op on other OSes.
+	platform.InstallAppleEventHandlers(
+		func(path string) { a.HandleLaunchArgs([]string{path}) },
+		func(url string) { a.HandleLaunchArgs([]string{url}) },
+	)
+	// Self-heal Windows file associations. Auto-update doesn't run installer
+	// code, so users on a stale install (or anyone who installed pre-v0.1.13
+	// before the NSIS file-association block existed) will never see Mosaic
+	// as an option in Settings → Default apps unless we write the registry
+	// entries ourselves on startup. No-op on macOS / Linux.
+	if exe, err := os.Executable(); err == nil {
+		if err := platform.EnsureFileAssociations(exe); err != nil {
+			log.Warn().Err(err).Msg("file-association registry write failed")
+		}
+	}
+	// Handle any magnet: URL or .torrent path passed on the command line at
+	// first launch (Windows + Linux always; macOS when launched via `open`).
+	// SecondInstanceLaunch (configured in main.go) routes args from a second
+	// process invocation to a.HandleLaunchArgs as well.
+	if len(os.Args) > 1 {
+		go a.HandleLaunchArgs(os.Args[1:])
+	}
+}
+
+// HandleLaunchArgs classifies each arg as a magnet URL or a .torrent file
+// path and routes it to the engine. Unknown args are silently ignored
+// (Wails or the OS may pass internal flags we don't care about).
+// Exported so main.go's SingleInstanceLock OnSecondInstanceLaunch can call it.
+//
+// Each invocation emits a `launch:notice` Wails event with the outcome so the
+// SPA can toast immediately — useful both as user feedback and as a
+// diagnostic when file-association routing seems silent.
+func (a *App) HandleLaunchArgs(args []string) {
+	log.Info().Strs("args", args).Msg("HandleLaunchArgs invoked")
+	a.emitLaunchNotice(map[string]any{"event": "received", "count": len(args), "args": args})
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "magnet:"):
+			id, err := a.svc.AddMagnet(a.ctx, arg, "")
+			if err != nil {
+				log.Warn().Err(err).Msg("launch arg: AddMagnet failed")
+				a.emitLaunchNotice(map[string]any{"event": "magnet_error", "error": err.Error(), "magnet": arg})
+				continue
+			}
+			log.Info().Str("magnet", arg).Str("id", string(id)).Msg("added magnet from launch arg")
+			a.emitLaunchNotice(map[string]any{"event": "magnet_added", "id": string(id)})
+		case strings.HasSuffix(strings.ToLower(arg), ".torrent"):
+			id, err := a.svc.AddTorrentFile(a.ctx, arg, "")
+			if err != nil {
+				log.Warn().Err(err).Str("path", arg).Msg("launch arg: AddTorrentFile failed")
+				a.emitLaunchNotice(map[string]any{"event": "torrent_error", "error": err.Error(), "path": arg})
+				continue
+			}
+			log.Info().Str("path", arg).Str("id", string(id)).Msg("added .torrent from launch arg")
+			a.emitLaunchNotice(map[string]any{"event": "torrent_added", "id": string(id), "path": arg})
+		default:
+			log.Debug().Str("arg", arg).Msg("launch arg: ignored (not a magnet: or .torrent)")
+		}
+	}
+}
+
+func (a *App) emitLaunchNotice(payload map[string]any) {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.EventsEmit(a.ctx, "launch:notice", payload)
 }
 
 // AddMagnet adds a magnet link. Returns the torrent ID.
@@ -70,8 +148,9 @@ func (a *App) PickAndAddTorrent(savePath string) (string, error) {
 }
 
 // Pause/Resume/Remove operate by id.
-func (a *App) Pause(id string) error  { return a.svc.Pause(engine.TorrentID(id)) }
-func (a *App) Resume(id string) error { return a.svc.Resume(engine.TorrentID(id)) }
+func (a *App) Pause(id string) error   { return a.svc.Pause(engine.TorrentID(id)) }
+func (a *App) Resume(id string) error  { return a.svc.Resume(engine.TorrentID(id)) }
+func (a *App) Recheck(id string) error { return a.svc.Recheck(engine.TorrentID(id)) }
 func (a *App) Remove(id string, deleteFiles bool) error {
 	return a.svc.Remove(a.ctx, engine.TorrentID(id), deleteFiles)
 }
@@ -158,6 +237,9 @@ func (a *App) ToggleAltSpeed() (bool, error)     { return a.svc.ToggleAltSpeed(a
 
 func (a *App) GetQueueLimits() api.QueueLimitsDTO        { return a.svc.GetQueueLimits(a.ctx) }
 func (a *App) SetQueueLimits(q api.QueueLimitsDTO) error { return a.svc.SetQueueLimits(a.ctx, q) }
+
+func (a *App) GetPeerLimits() api.PeerLimitsDTO        { return a.svc.GetPeerLimits(a.ctx) }
+func (a *App) SetPeerLimits(p api.PeerLimitsDTO) error { return a.svc.SetPeerLimits(a.ctx, p) }
 
 func (a *App) SetQueuePosition(infohash string, pos int) error {
 	return a.svc.SetQueuePosition(a.ctx, infohash, pos)
@@ -248,6 +330,57 @@ func (a *App) AppVersion() string {
 	return version
 }
 
+// GetDesktopIntegration / SetDesktopIntegration / QuitFully are the bindings
+// the system-tray + close-to-tray + Settings UI depend on. The DTO field names
+// are part of the wire contract with the frontend (see api.DesktopIntegrationDTO).
+func (a *App) GetDesktopIntegration() api.DesktopIntegrationDTO {
+	return a.svc.GetDesktopIntegration(a.ctx)
+}
+
+func (a *App) SetDesktopIntegration(c api.DesktopIntegrationDTO) error {
+	return a.svc.SetDesktopIntegration(a.ctx, c)
+}
+
+// QuitFully bypasses the close-to-tray OnBeforeClose hook and tears the
+// process down. Used by the tray's "Quit Mosaic" item — without this the
+// hook would just hide the window again, leaving the app un-quit-able from
+// the tray.
+func (a *App) QuitFully() {
+	if a.ctx == nil {
+		return
+	}
+	a.quitFully.Store(true)
+	wailsruntime.Quit(a.ctx)
+}
+
+// QuittingFully reports whether the most recent quit request was from
+// QuitFully (true) versus a normal X-button close (false). main.go's
+// OnBeforeClose hook reads this to decide whether to honor close-to-tray.
+func (a *App) QuittingFully() bool {
+	return a.quitFully.Load()
+}
+
+// ShowWindow is the tray "Show Mosaic" callback target — un-minimize and
+// raise the window. Safe to call before startup() (no-ops if ctx is nil).
+func (a *App) ShowWindow() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowUnminimise(a.ctx)
+	wailsruntime.WindowShow(a.ctx)
+}
+
+// ShowSettings raises the window AND emits navigate:settings so the SPA can
+// route to the Settings pane. Used by the tray's "Settings…" item.
+func (a *App) ShowSettings() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowUnminimise(a.ctx)
+	wailsruntime.WindowShow(a.ctx)
+	wailsruntime.EventsEmit(a.ctx, "navigate:settings")
+}
+
 func (a *App) GetUpdaterConfig() api.UpdaterConfigDTO {
 	return a.svc.GetUpdaterConfig(a.ctx)
 }
@@ -273,6 +406,38 @@ func (a *App) NotifyUpdateAvailable(info api.UpdateInfoDTO) {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "update:available", info)
+}
+
+// Platform returns the OS the desktop shell is running on ("darwin", "windows",
+// "linux"). The SPA queries this once at startup to decide whether to render
+// custom Win11-style window controls (Windows runs frameless).
+func (a *App) Platform() string {
+	return runtime.GOOS
+}
+
+// WindowMinimise minimizes the desktop window.
+func (a *App) WindowMinimise() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowMinimise(a.ctx)
+}
+
+// WindowMaximise toggles between maximized and restored states.
+func (a *App) WindowMaximise() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowToggleMaximise(a.ctx)
+}
+
+// WindowClose quits the app. Single-window desktop convention: closing the
+// only window terminates the process.
+func (a *App) WindowClose() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.Quit(a.ctx)
 }
 
 // OpenFolder reveals the given path in the OS file manager. Desktop-only —

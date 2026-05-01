@@ -145,12 +145,16 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, creds CredentialChecker) htt
 			}
 		}
 
-		// XXX revisit if exposing wider: Origin verification is bypassed because
-		// our auth gate (session cookie OR bearer API key) already ran above and
-		// the v1 deployment is LAN-scope only. If we ever expose this beyond the
-		// LAN, swap to an explicit OriginPatterns whitelist instead.
+		// Pin the Origin to the request Host to prevent Cross-Site WebSocket
+		// Hijacking: if a logged-in user visits a malicious page, the browser
+		// will happily attach our session cookie to a WS Upgrade — only the
+		// Origin header tells us the request actually came from our own SPA.
+		// Bearer-keyed callers (no cookie) aren't a CSWH risk but the same
+		// allow-list still lets them through because nhooyr only enforces
+		// OriginPatterns when the Origin header is set, which non-browser
+		// clients typically do not.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			InsecureSkipVerify: true,
+			OriginPatterns: []string{r.Host},
 		})
 		if err != nil {
 			return

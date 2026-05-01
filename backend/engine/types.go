@@ -37,6 +37,8 @@ type Snapshot struct {
 	QueuePosition int  // 0 = top of queue
 	ForceStart    bool
 	Queued        bool // true if scheduler is holding it back
+	Verifying     bool // hashing existing files against the metainfo
+	FilesMissing  bool // was-complete on prior session, now isn't (user deleted files)
 }
 
 // EventKind enumerates the kinds of EngineEvent.
@@ -65,6 +67,7 @@ type Backend interface {
 	AddFile(ctx context.Context, blob []byte, savePath string) (TorrentID, error)
 	Pause(id TorrentID) error
 	Resume(id TorrentID) error
+	Recheck(id TorrentID) error
 	Remove(id TorrentID, deleteFiles bool) error
 	List() []Snapshot
 	Snapshot(id TorrentID) (Snapshot, error)
@@ -72,9 +75,20 @@ type Backend interface {
 	SetFilePriorities(id TorrentID, prios map[int]Priority) error
 	SetGlobalRateLimits(downBytesPerSec, upBytesPerSec int) error // 0 = unlimited
 	SetIPBlocklist(reader io.Reader) error                        // nil clears
+	// ApplyPerTorrentMaxPeers updates the established-connection cap for every
+	// running torrent. Pass 0 to fall back to the engine's default (anacrolix
+	// uses 80). New torrents added afterwards inherit this value via the
+	// Client config — but the Client config can't be mutated at runtime, so
+	// the actual default-on-add comes from MaxPeersPerTorrent passed to
+	// NewAnacrolixBackend at startup.
+	ApplyPerTorrentMaxPeers(n int) error
 	SetQueuePosition(id TorrentID, pos int)
 	SetForceStart(id TorrentID, force bool)
 	ScheduledPause(id TorrentID, paused bool) // distinct from manual Pause
+	// MarkExpectedComplete tells the backend that this torrent was 100%
+	// complete on a prior session — so if VerifyData on add finds <100%,
+	// flag it as FilesMissing (user deleted files) and skip auto-download.
+	MarkExpectedComplete(id TorrentID)
 	Close() error
 }
 

@@ -1,5 +1,5 @@
 import {Show} from 'solid-js';
-import {Pause as PauseIcon, Play, Star, Trash2} from 'lucide-solid';
+import {AlertTriangle, Loader2, Pause as PauseIcon, Play, Star, Trash2} from 'lucide-solid';
 import type {Torrent} from '../../lib/bindings';
 import {fmtBytes, fmtETA, fmtPercent, fmtRate} from '../../lib/format';
 import {ProgressBar} from '../ui/ProgressBar';
@@ -34,6 +34,18 @@ export function TorrentCard(props: Props) {
           <div class="truncate font-medium text-zinc-100">{t().name}</div>
         </div>
         <div class="flex shrink-0 items-center gap-1.5">
+          <Show when={t().verifying}>
+            <span class="inline-flex items-center gap-1 rounded bg-amber-500/[.10] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
+              <Loader2 class="h-2.5 w-2.5 animate-spin" />
+              Verifying
+            </span>
+          </Show>
+          <Show when={t().files_missing}>
+            <span class="inline-flex items-center gap-1 rounded bg-rose-500/[.10] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-rose-300">
+              <AlertTriangle class="h-2.5 w-2.5" />
+              Files missing
+            </span>
+          </Show>
           <Show when={t().queued && !t().completed}>
             <span class="inline-flex items-center gap-1 rounded bg-zinc-800/60 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-zinc-400">
               Q{t().queue_position + 1}
