@@ -13,9 +13,14 @@ echo "==> build frontend first so main.go's go:embed has its target"
 echo "==> prime module cache"
 go mod download
 
-echo "==> wails build linux/amd64"
+echo "==> wails build linux/amd64 (webkit2_41 — Debian 12+ / Ubuntu 22.04+)"
+# -tags webkit2_41 swaps Wails's pkg-config from webkit2gtk-4.0 to -4.1.
+# Debian 13 (Trixie), Debian 12 (Bookworm), and Ubuntu 22.04+ all ship the
+# -4.1-0 runtime; the older -4.0-37 was dropped in Debian 13. Pairs with
+# the libwebkit2gtk-4.1-{0,dev} dep in nfpm.yaml.tmpl + release.yml.
 wails build \
     -platform linux/amd64 \
+    -tags webkit2_41 \
     -ldflags "-X main.version=${VERSION}" \
     -clean \
     -skipbindings \
