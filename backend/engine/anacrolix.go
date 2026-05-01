@@ -61,6 +61,11 @@ type AnacrolixConfig struct {
 	// expose a separate global cap; effective global ceiling is this value
 	// multiplied by the number of active torrents.
 	MaxPeersPerTorrent int
+	// SnapshotStore is an optional fast-resume hook. When non-nil, the engine
+	// consults it on startup-add to decide whether to skip the full
+	// piece-by-piece verify when the on-disk file state is unchanged since
+	// shutdown. nil-safe: the optimization just turns off.
+	SnapshotStore SnapshotStore
 }
 
 // AnacrolixBackend implements Backend on top of anacrolix/torrent.
@@ -99,6 +104,10 @@ type AnacrolixBackend struct {
 	ulLim *rate.Limiter
 
 	ipBlock *ipBlocklistProxy
+
+	// snapshotStore is the optional fast-resume hook. nil disables the
+	// optimization. See SnapshotStore for the lifecycle.
+	snapshotStore SnapshotStore
 }
 
 type rateSample struct {
@@ -120,16 +129,17 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		tcfg.EstablishedConnsPerTorrent = cfg.MaxPeersPerTorrent
 	}
 	// Default is 2 — caps how many pieces hash in parallel per torrent.
-	// On modern multi-core machines verifying a multi-GB torrent at 2
-	// hashers takes 5+ minutes per GB; bumping to NumCPU/2 (capped 8)
-	// gets us close to disk-bound. Pairs with the parallel dispatch
-	// loop in verifyAndStart.
-	hashers := goruntime.NumCPU() / 2
+	// v0.2.10 bumped this to NumCPU/2 (capped 8) but in practice anacrolix's
+	// client-locker contention means 8 hashers gives the same wall-time as
+	// 2 while generating noticeably more heat. Cap at NumCPU/4 with a 2..4
+	// floor/ceiling — past that the outer goroutines just spin on the lock.
+	// Pairs with the parallel dispatch loop in verifyAndStart.
+	hashers := goruntime.NumCPU() / 4
 	if hashers < 2 {
 		hashers = 2
 	}
-	if hashers > 8 {
-		hashers = 8
+	if hashers > 4 {
+		hashers = 4
 	}
 	tcfg.PieceHashersPerTorrent = hashers
 	if cfg.EnableEncryption {
@@ -166,6 +176,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		dlLim:          dlLim,
 		ulLim:          ulLim,
 		ipBlock:        ipBlock,
+		snapshotStore:  cfg.SnapshotStore,
 	}, nil
 }
 
@@ -225,6 +236,26 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	a.setVerifying(id, true)
 	defer a.setVerifying(id, false)
 
+	// Fast-resume: if we have a snapshot from a prior session that ended
+	// complete and the on-disk file state still matches, anacrolix's
+	// bolt-backed piece-completion store already knows every piece is good.
+	// Skip the full hash and let it serve cached completion lookups. This
+	// turns a multi-minute multi-GB rehash into a stat() per file.
+	if a.snapshotStore != nil {
+		if snap, wasComplete, ok := a.snapshotStore.LoadVerifySnapshot(id); ok && wasComplete {
+			if info := t.Info(); info != nil {
+				saveTo := a.saveDirFor(id)
+				if cur, err := computeFileSnapshot(info, saveTo); err == nil && bytes.Equal(snap, cur) {
+					log.Printf("verify: snapshot match — skipping hash for torrent %s", id)
+					if ctx.Err() == nil {
+						t.DownloadAll()
+					}
+					return
+				}
+			}
+		}
+	}
+
 	verifyDataParallel(ctx, t)
 
 	a.verifyMu.RLock()
@@ -248,7 +279,31 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	if ctx.Err() != nil {
 		return
 	}
+
+	// Now that the torrent is fully present, persist the snapshot so the
+	// next startup can take the fast-resume path. Errors are logged but not
+	// propagated — a missing snapshot just means we re-verify next time.
+	if a.snapshotStore != nil && t.BytesMissing() == 0 {
+		if info := t.Info(); info != nil {
+			saveTo := a.saveDirFor(id)
+			if cur, err := computeFileSnapshot(info, saveTo); err == nil {
+				if err := a.snapshotStore.SaveVerifySnapshot(id, cur, true); err != nil {
+					log.Printf("verify: save snapshot for %s: %v", id, err)
+				}
+			}
+		}
+	}
+
 	t.DownloadAll()
+}
+
+// saveDirFor returns the per-torrent save root captured at AddFile/AddMagnet
+// time (same value passed to anacrolix's storage.NewFile). Files for the
+// torrent live at filepath.Join(saveDir, info.Name, file.Path...).
+func (a *AnacrolixBackend) saveDirFor(id TorrentID) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.bySaveTo[id]
 }
 
 // verifyDataParallel hashes every piece of t, but unlike t.VerifyData()
@@ -256,20 +311,21 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 // up to `workers` outer goroutines so the lib's piece-hasher worker pool
 // stays saturated. anacrolix's t.VerifyData has a TODO admitting the
 // sequential design; queuing-1-and-waiting-1 means PieceHashersPerTorrent
-// > 1 buys us nothing. Cap parallelism at NumCPU/2 (matches what we set
-// PieceHashersPerTorrent to in NewAnacrolixBackend) since hashing is
-// CPU-bound on modern SSDs.
+// > 1 buys us nothing. v0.2.10 used NumCPU/2 capped at 8 here, but the
+// client locker contention inside anacrolix means more outer goroutines
+// just spin without throughput — so v0.2.11 caps at NumCPU/4 (2..4) to
+// match PieceHashersPerTorrent in NewAnacrolixBackend.
 func verifyDataParallel(ctx context.Context, t *torrent.Torrent) {
 	n := t.NumPieces()
 	if n == 0 {
 		return
 	}
-	workers := goruntime.NumCPU() / 2
+	workers := goruntime.NumCPU() / 4
 	if workers < 2 {
 		workers = 2
 	}
-	if workers > 8 {
-		workers = 8
+	if workers > 4 {
+		workers = 4
 	}
 	if workers > n {
 		workers = n
@@ -395,14 +451,34 @@ func (a *AnacrolixBackend) ApplyPerTorrentMaxPeers(n int) error {
 // Recheck re-hashes every piece against the metainfo. Surfaced via the
 // Recheck context-menu item in the SPA. Runs on a goroutine — large torrents
 // take a while; while running the Verifying pill shows in the UI.
+//
+// We invalidate the fast-resume snapshot up front: a Recheck means the user
+// wants the verify to actually run, and once it finishes we'll write a new
+// snapshot from the just-verified state.
 func (a *AnacrolixBackend) Recheck(id TorrentID) error {
 	t, ok := a.find(id)
 	if !ok {
 		return errors.New("not found")
 	}
+	if a.snapshotStore != nil {
+		if err := a.snapshotStore.DeleteVerifySnapshot(id); err != nil {
+			log.Printf("verify: delete snapshot for %s: %v", id, err)
+		}
+	}
 	a.setVerifying(id, true)
 	go func() {
 		verifyDataParallel(context.Background(), t)
+		// Re-establish the snapshot if the torrent ended fully present.
+		if a.snapshotStore != nil && t.BytesMissing() == 0 {
+			if info := t.Info(); info != nil {
+				saveTo := a.saveDirFor(id)
+				if cur, err := computeFileSnapshot(info, saveTo); err == nil {
+					if err := a.snapshotStore.SaveVerifySnapshot(id, cur, true); err != nil {
+						log.Printf("verify: save snapshot post-recheck for %s: %v", id, err)
+					}
+				}
+			}
+		}
 		a.setVerifying(id, false)
 	}()
 	return nil

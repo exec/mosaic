@@ -99,12 +99,14 @@ func main() {
 		enableEnc = false
 	}
 
+	verifySnaps := persistence.NewVerifySnapshots(db)
 	backend, err := engine.NewAnacrolixBackend(engine.AnacrolixConfig{
 		DataDir:            filepath.Join(paths.DataDir, "engine"),
 		ListenPort:         listenPort,
 		EnableDHT:          enableDHT,
 		EnableEncryption:   enableEnc,
 		MaxPeersPerTorrent: maxPeersPerTorrent,
+		SnapshotStore:      &verifySnapshotAdapter{store: verifySnaps},
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("open engine backend")
