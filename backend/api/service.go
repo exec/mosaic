@@ -134,9 +134,10 @@ const (
 	settingWebEnabled  = "web_enabled"
 	settingWebPort     = "web_port"
 	settingWebBindAll  = "web_bind_all"
-	settingWebUsername = "web_username"
-	settingWebPassHash = "web_password_hash"
-	settingWebAPIKey   = "web_api_key"
+	settingWebUsername    = "web_username"
+	settingWebPassHash    = "web_password_hash"
+	settingWebAPIKey      = "web_api_key"
+	settingWebPassUserSet = "web_password_user_set"
 
 	settingUpdaterEnabled         = "updater_enabled"
 	settingUpdaterChannel         = "updater_channel"
@@ -227,19 +228,46 @@ func (s *Service) fireWebConfigChanged(c WebConfigDTO) {
 }
 
 func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
-	hash, err := cred.HashPassword(plain)
-	if err != nil {
+	if err := s.setWebPasswordHash(ctx, plain); err != nil {
 		return err
 	}
-	if err := s.settings.Set(ctx, settingWebPassHash, hash); err != nil {
-		return err
-	}
+	// User-initiated password set — flip the "user set" flag so the
+	// daemon's per-boot ephemeral-password loop stops rotating it. The
+	// loop reads IsWebPasswordUserSet on every startup; once true, the
+	// stored hash is treated as the operator's own and never replaced.
+	_ = s.settings.Set(ctx, settingWebPassUserSet, "true")
 	// Invalidate every active session — the old password is no longer valid,
 	// any browser still holding a pre-change cookie must re-authenticate.
 	if s.sessions != nil {
 		s.sessions.RevokeAll()
 	}
 	return nil
+}
+
+// SetWebPasswordEphemeral persists a password hash without flipping the
+// "user set" flag and without touching active sessions. Intended only for
+// the mosaicd daemon's first-launch / per-restart auto-generated password
+// flow (qBittorrent-nox style). Calling this leaves the daemon in a state
+// where the next restart will replace this password again — until the
+// operator logs in and calls SetWebPassword from the UI.
+func (s *Service) SetWebPasswordEphemeral(ctx context.Context, plain string) error {
+	return s.setWebPasswordHash(ctx, plain)
+}
+
+// IsWebPasswordUserSet reports whether the operator has explicitly set a
+// password via SetWebPassword (UI / REST). Used by mosaicd to decide
+// whether to mint a fresh ephemeral password on each boot.
+func (s *Service) IsWebPasswordUserSet(ctx context.Context) bool {
+	v, _ := s.settings.Get(ctx, settingWebPassUserSet)
+	return v == "true"
+}
+
+func (s *Service) setWebPasswordHash(ctx context.Context, plain string) error {
+	hash, err := cred.HashPassword(plain)
+	if err != nil {
+		return err
+	}
+	return s.settings.Set(ctx, settingWebPassHash, hash)
 }
 
 func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {

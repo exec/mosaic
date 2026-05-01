@@ -1,24 +1,41 @@
-#!/usr/bin/env bash
-# Runs after the .deb / .rpm unpacks files. Refreshes the systemd unit cache
-# but does NOT auto-start the service — let the operator opt in explicitly so
-# we don't surprise anyone with a freshly-bound TCP listener.
+#!/bin/bash
+# Auto-enables + starts the systemd unit on .deb / .rpm install. Idempotent
+# on upgrades (uses systemctl try-restart so a running instance picks up the
+# new binary; a stopped one stays stopped). Mirrors qBittorrent-nox's
+# behavior: a daemon you installed should run.
 set -e
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
+
+    # Fresh install vs. upgrade is detected by whether the unit is already
+    # enabled. New install → enable + start. Upgrade → just try-restart so
+    # we don't surprise an operator who deliberately stopped it.
+    if ! systemctl is-enabled --quiet mosaicd.service 2>/dev/null; then
+        systemctl enable mosaicd.service >/dev/null 2>&1 || true
+        systemctl start mosaicd.service >/dev/null 2>&1 || true
+    else
+        systemctl try-restart mosaicd.service >/dev/null 2>&1 || true
+    fi
 fi
 
 cat <<'EOF'
 
-Mosaic daemon installed.
+Mosaic daemon installed and started.
 
-  Enable + start now:    sudo systemctl enable --now mosaicd
-  View status / logs:    sudo systemctl status mosaicd
-                         sudo journalctl -u mosaicd -f
+  Find the temporary web-interface password (regenerated each restart):
+    sudo journalctl -u mosaicd -e | grep -A4 'temporary web-interface password' | tail -8
 
-The first launch will generate a random web-interface password and write it
-to /var/lib/mosaic/mosaicd-credentials (mode 0600, owned by 'mosaic'). It is
-also logged to journald — `journalctl -u mosaicd | grep -i password`.
+  Or watch live:
+    sudo journalctl -u mosaicd -f
+
+  Status / restart / stop:
+    sudo systemctl status mosaicd
+    sudo systemctl restart mosaicd
+    sudo systemctl stop mosaicd
+
+The temporary password rotates on every restart. Log in once and change it
+via Settings → Web Interface in the browser to make it persist.
 
 Documentation: https://mosaic.byexec.com/docs/daemon/
 
