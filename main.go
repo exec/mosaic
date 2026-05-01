@@ -267,6 +267,15 @@ func main() {
 		Mac: &mac.Options{
 			TitleBar:   mac.TitleBarHiddenInset(),
 			Appearance: mac.NSAppearanceNameDarkAqua,
+			// Wails's AppDelegate implements application:openFile: and routes
+			// magnet:// via continueUserActivity / its own AppleEvent handler.
+			// Both intercept the AppKit dispatch BEFORE our NSAppleEventManager
+			// +load handler can see kAEOpenDocuments / kAEGetURL — that's why
+			// our custom bridge never fired in v0.1.13–v0.2.4. Use the proper
+			// Wails hooks here. Buffered until OnStartup (Wails enforces this),
+			// so app.HandleLaunchArgs is safe to call.
+			OnFileOpen: func(path string) { app.HandleLaunchArgs([]string{path}) },
+			OnUrlOpen:  func(url string) { app.HandleLaunchArgs([]string{url}) },
 		},
 		OnBeforeClose: onBeforeClose,
 		// SingleInstanceLock: when the user double-clicks a .torrent or follows
