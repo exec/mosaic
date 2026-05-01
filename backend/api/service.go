@@ -228,14 +228,22 @@ func (s *Service) fireWebConfigChanged(c WebConfigDTO) {
 }
 
 func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
+	// Write the "user set" flag BEFORE the hash so a partial failure cannot
+	// silently downgrade the operator back to ephemeral-password mode on the
+	// next mosaicd restart. If the flag write fails, we return early — the
+	// operator's old password keeps working AND the flag is still false,
+	// which is a safe state. If the hash write fails *after* we set the
+	// flag, the operator's old password also keeps working (we never wrote
+	// the new hash); the flag claims "user set" but the existing hash is
+	// either the previous user-set hash or the most recent ephemeral hash
+	// the operator already authenticated against — so the daemon won't
+	// rotate it on next boot, which matches the operator's intent.
+	if err := s.settings.Set(ctx, settingWebPassUserSet, "true"); err != nil {
+		return fmt.Errorf("persist web_password_user_set flag: %w", err)
+	}
 	if err := s.setWebPasswordHash(ctx, plain); err != nil {
 		return err
 	}
-	// User-initiated password set — flip the "user set" flag so the
-	// daemon's per-boot ephemeral-password loop stops rotating it. The
-	// loop reads IsWebPasswordUserSet on every startup; once true, the
-	// stored hash is treated as the operator's own and never replaced.
-	_ = s.settings.Set(ctx, settingWebPassUserSet, "true")
 	// Invalidate every active session — the old password is no longer valid,
 	// any browser still holding a pre-change cookie must re-authenticate.
 	if s.sessions != nil {

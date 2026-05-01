@@ -6,14 +6,28 @@
 set -e
 
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload || true
+    # daemon-reload errors are surfaced (not silenced) so a broken unit file
+    # is visible to the operator instead of getting swept under the rug.
+    systemctl daemon-reload || echo "mosaicd-postinstall: systemctl daemon-reload failed (continuing)" >&2
 
-    # Fresh install vs. upgrade is detected by whether the unit is already
-    # enabled. New install → enable + start. Upgrade → just try-restart so
-    # we don't surprise an operator who deliberately stopped it.
-    if ! systemctl is-enabled --quiet mosaicd.service 2>/dev/null; then
+    # Distinguish a fresh install from an upgrade with a marker file under
+    # the daemon's StateDirectory. We can't use `systemctl is-enabled` for
+    # this — an operator who deliberately disabled the unit before upgrade
+    # would get re-enabled on every package update, which is rude.
+    #
+    # Fresh install   → enable + start.
+    # Existing state  → try-restart only, respecting whatever enabled/active
+    #                   choice the operator currently has set.
+    if [ ! -f /var/lib/mosaic/.installed ]; then
         systemctl enable mosaicd.service >/dev/null 2>&1 || true
         systemctl start mosaicd.service >/dev/null 2>&1 || true
+        # Drop the marker AFTER the enable+start so a half-failed first-run
+        # gets retried on the next install rather than being mistaken for
+        # an upgrade. Owned by the mosaic user so the daemon could rewrite
+        # it later if we ever need to.
+        install -m 0644 -o mosaic -g mosaic /dev/null /var/lib/mosaic/.installed 2>/dev/null \
+            || touch /var/lib/mosaic/.installed 2>/dev/null \
+            || true
     else
         systemctl try-restart mosaicd.service >/dev/null 2>&1 || true
     fi

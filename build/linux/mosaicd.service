@@ -15,7 +15,14 @@ RestartSec=5
 User=mosaic
 Group=mosaic
 
-# Hardening
+# State lives under /var/lib/mosaic. systemd creates this with the right
+# owner via StateDirectory=, and we redirect logs there too (mosaicd's
+# --data-dir flag also moves LogDir to <data-dir>/logs), so we don't need
+# LogsDirectory= or a /var/log/mosaic in ReadWritePaths.
+StateDirectory=mosaic
+ReadWritePaths=/var/lib/mosaic
+
+# Hardening — filesystem & namespaces
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -23,10 +30,35 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
-ReadWritePaths=/var/lib/mosaic /var/log/mosaic
-StateDirectory=mosaic
-LogsDirectory=mosaic
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Hardening — execution model. Go binaries are JIT-free, so denying W^X
+# pages is safe and blocks an entire class of memory-corruption exploits.
+MemoryDenyWriteExecute=true
+
+# Hardening — network. The daemon binds an HTTPS port and talks to peers
+# over TCP/UDP; AF_NETLINK / AF_PACKET / AF_BLUETOOTH have no use here.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Hardening — capabilities. mosaicd binds a high port (>1024) only and has
+# no need for any capability. Empty bounding + ambient sets prevent any
+# inherited capability from leaking into the daemon process.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Hardening — system calls. @system-service is the recommended baseline
+# for long-running services; it allows file I/O, networking, and memory
+# management while blocking @debug, @mount, @cpu-emulation, etc.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
