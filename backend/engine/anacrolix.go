@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	goruntime "runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -118,6 +119,19 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	if cfg.MaxPeersPerTorrent > 0 {
 		tcfg.EstablishedConnsPerTorrent = cfg.MaxPeersPerTorrent
 	}
+	// Default is 2 — caps how many pieces hash in parallel per torrent.
+	// On modern multi-core machines verifying a multi-GB torrent at 2
+	// hashers takes 5+ minutes per GB; bumping to NumCPU/2 (capped 8)
+	// gets us close to disk-bound. Pairs with the parallel dispatch
+	// loop in verifyAndStart.
+	hashers := goruntime.NumCPU() / 2
+	if hashers < 2 {
+		hashers = 2
+	}
+	if hashers > 8 {
+		hashers = 8
+	}
+	tcfg.PieceHashersPerTorrent = hashers
 	if cfg.EnableEncryption {
 		tcfg.HeaderObfuscationPolicy.Preferred = true
 		tcfg.HeaderObfuscationPolicy.RequirePreferred = false
@@ -211,7 +225,7 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	a.setVerifying(id, true)
 	defer a.setVerifying(id, false)
 
-	t.VerifyData()
+	verifyDataParallel(ctx, t)
 
 	a.verifyMu.RLock()
 	wasComplete := a.expectedComplete[id]
@@ -235,6 +249,48 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 		return
 	}
 	t.DownloadAll()
+}
+
+// verifyDataParallel hashes every piece of t, but unlike t.VerifyData()
+// (which iterates pieces sequentially and blocks on each one), it dispatches
+// up to `workers` outer goroutines so the lib's piece-hasher worker pool
+// stays saturated. anacrolix's t.VerifyData has a TODO admitting the
+// sequential design; queuing-1-and-waiting-1 means PieceHashersPerTorrent
+// > 1 buys us nothing. Cap parallelism at NumCPU/2 (matches what we set
+// PieceHashersPerTorrent to in NewAnacrolixBackend) since hashing is
+// CPU-bound on modern SSDs.
+func verifyDataParallel(ctx context.Context, t *torrent.Torrent) {
+	n := t.NumPieces()
+	if n == 0 {
+		return
+	}
+	workers := goruntime.NumCPU() / 2
+	if workers < 2 {
+		workers = 2
+	}
+	if workers > 8 {
+		workers = 8
+	}
+	if workers > n {
+		workers = n
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		case sem <- struct{}{}:
+		}
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			_ = t.Piece(idx).VerifyDataContext(ctx)
+		}(i)
+	}
+	wg.Wait()
 }
 
 func (a *AnacrolixBackend) setVerifying(id TorrentID, v bool) {
@@ -346,7 +402,7 @@ func (a *AnacrolixBackend) Recheck(id TorrentID) error {
 	}
 	a.setVerifying(id, true)
 	go func() {
-		t.VerifyData()
+		verifyDataParallel(context.Background(), t)
 		a.setVerifying(id, false)
 	}()
 	return nil
