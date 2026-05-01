@@ -47,6 +47,16 @@ func (a *App) startup(ctx context.Context) {
 		func(path string) { a.HandleLaunchArgs([]string{path}) },
 		func(url string) { a.HandleLaunchArgs([]string{url}) },
 	)
+	// Self-heal Windows file associations. Auto-update doesn't run installer
+	// code, so users on a stale install (or anyone who installed pre-v0.1.13
+	// before the NSIS file-association block existed) will never see Mosaic
+	// as an option in Settings → Default apps unless we write the registry
+	// entries ourselves on startup. No-op on macOS / Linux.
+	if exe, err := os.Executable(); err == nil {
+		if err := platform.EnsureFileAssociations(exe); err != nil {
+			log.Warn().Err(err).Msg("file-association registry write failed")
+		}
+	}
 	// Handle any magnet: URL or .torrent path passed on the command line at
 	// first launch (Windows + Linux always; macOS when launched via `open`).
 	// SecondInstanceLaunch (configured in main.go) routes args from a second
