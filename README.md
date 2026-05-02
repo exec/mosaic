@@ -6,7 +6,19 @@ A polished cross-platform BitTorrent client. Go + Wails + the [anacrolix](https:
 
 ## Install
 
-Grab the asset for your platform from [the latest release](https://github.com/exec/mosaic/releases/latest). Filenames are versioned (e.g. `Mosaic-v0.2.11-...`), so the per-release page is the canonical pointer.
+**Debian / Ubuntu (apt, recommended):** Adds `repo.x86-64.com` and keeps `mosaic` (GUI) and `mosaicd` (headless daemon) on the latest version automatically. The in-app updater detects the apt-managed install and steps aside so dpkg stays the source of truth.
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://repo.x86-64.com/exec.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/exec.gpg
+echo "deb [signed-by=/etc/apt/keyrings/exec.gpg] https://repo.x86-64.com/ stable main" \
+    | sudo tee /etc/apt/sources.list.d/exec.list
+sudo apt update && sudo apt install mosaic     # GUI
+# OR
+sudo apt update && sudo apt install mosaicd    # headless daemon
+```
+
+**Other platforms:** grab the asset from [the latest release](https://github.com/exec/mosaic/releases/latest).
 
 | Platform | Asset |
 |----------|-------|
@@ -15,7 +27,7 @@ Grab the asset for your platform from [the latest release](https://github.com/ex
 | Linux (headless)  | `Mosaic-vX.Y.Z-linux-amd64-mosaicd.{deb,rpm}` or `mosaicd-vX.Y.Z-linux-amd64.tar.gz` — daemon-only build for servers / NAS, controlled over the HTTPS+WS interface (same concept as `qbittorrent-nox`) |
 | Windows           | `Mosaic-vX.Y.Z-windows-amd64-installer.exe` (NSIS, per-user) or `…-portable.exe` |
 
-Each release also publishes a `SHA256SUMS` manifest; verifying against it before running is recommended. Full per-platform install notes (incl. file association registration, dock + magnet handler quirks, signing status): [docs/installation/](https://mosaic.byexec.com/docs/installation/).
+Each release publishes a `SHA256SUMS` manifest; verifying against it before running is recommended. Full per-platform install notes (incl. file association registration, dock + magnet handler quirks, signing status, Gnome AppIndicator extension setup): [docs/installation/](https://mosaic.byexec.com/docs/installation/).
 
 ## Documentation
 
