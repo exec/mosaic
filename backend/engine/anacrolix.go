@@ -415,29 +415,32 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 		}
 	}
 
-	// Fast-resume: if we have a snapshot from a prior session and the
-	// on-disk file state still matches, anacrolix's bolt-backed piece-
-	// completion store already knows the per-piece state. Skip the full
-	// hash and let it serve cached completion lookups. The wasComplete
-	// flag is recorded honestly but no longer gates the optimization —
-	// pre-v0.5.4 partial downloads had no snapshot persisted, so they
-	// always went through the slow verifyDataParallel pass. Now Pause
-	// and Close save checkpoint snapshots, so pause/restart skips
-	// re-verifying the bytes we just wrote ourselves.
+	// Fast-resume: if we have a snapshot from a prior session that ended
+	// COMPLETE and the on-disk file state still matches, bolt's
+	// piece-completion store already has accurate per-piece truth and we
+	// can skip the full re-hash.
+	//
+	// Partial torrents do NOT take this path even when we have a snapshot,
+	// because anacrolix's storage init runs setCompletionFromPartFiles
+	// (file-torrent.go:49-83) which wipes any "complete" bolt entries
+	// for files whose safeOsPath is missing or has the wrong size — i.e.
+	// every partial-with-.part-files torrent. By the time we reach
+	// verifyAndStart bolt has zero complete pieces for such a torrent,
+	// and skipping the rehash would tell anacrolix to start over from
+	// scratch (the v0.5.4 regression). The slow verify path repopulates
+	// bolt by re-hashing the .part contents, which is the only correct
+	// thing to do until we either disable UsePartFiles or pre-restore
+	// bolt before storage init runs — both bigger changes tracked
+	// separately.
 	if a.snapshotStore != nil {
-		if snap, wasComplete, ok := a.snapshotStore.LoadVerifySnapshot(id); ok {
+		if snap, wasComplete, ok := a.snapshotStore.LoadVerifySnapshot(id); ok && wasComplete {
 			if info := t.Info(); info != nil {
 				saveTo := a.saveDirFor(id)
 				if cur, err := computeFileSnapshot(info, saveTo); err == nil && bytes.Equal(snap, cur) {
-					log.Printf("verify: snapshot match — skipping hash for torrent %s (wasComplete=%v)", id, wasComplete)
-					// Stored snapshot is still valid; mark as saved so
-					// the per-tick List() path doesn't recompute it for
-					// the complete case.
-					if wasComplete {
-						a.snapshotMu.Lock()
-						a.snapshotSaved[id] = true
-						a.snapshotMu.Unlock()
-					}
+					log.Printf("verify: snapshot match — skipping hash for torrent %s", id)
+					a.snapshotMu.Lock()
+					a.snapshotSaved[id] = true
+					a.snapshotMu.Unlock()
 					if ctx.Err() == nil {
 						setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
 					}
@@ -515,49 +518,6 @@ func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torre
 	a.snapshotMu.Lock()
 	a.snapshotSaved[id] = true
 	a.snapshotMu.Unlock()
-}
-
-// saveSnapshotForCheckpoint writes the fast-resume snapshot for a
-// torrent at a known-consistent point in its lifetime — typically when
-// the user pauses or the engine is shutting down. Unlike
-// saveSnapshotIfComplete this does NOT require BytesMissing == 0, and
-// it does NOT consult/update snapshotSaved (the dedup applies to the
-// "complete and quiesced" flow, not the explicit checkpoint flow).
-// wasComplete is recorded honestly so consumers can still distinguish
-// fully-present from partial.
-//
-// Pre-v0.5.4 we only ever saved snapshots for complete torrents. A
-// partial download paused or the app closed mid-flight had no snapshot
-// recorded, so the next launch hit the slow verifyDataParallel path —
-// and during that the torrent's pieces had storageCompletionOk=true (bolt
-// said so) but anacrolix still gated requests on the in-progress
-// verify. User saw "connects to peers fine but doesn't continue
-// download" because verify was iterating thousands of pieces while the
-// peers waited choked. Checkpointing on pause + close means the next
-// launch's fast-resume path skips verify entirely when files haven't
-// changed off-Mosaic.
-func (a *AnacrolixBackend) saveSnapshotForCheckpoint(id TorrentID, t *torrent.Torrent) {
-	// Skip if verify is in progress — bolt's piece-completion entries
-	// reflect a partially-verified state and capturing the file digest
-	// against that would let the next launch's fast-resume path trust
-	// stale piece truth. Wait for the verify to settle; the next
-	// pause/close (or the in-band runtime-completion saver in List)
-	// will checkpoint correctly.
-	a.verifyMu.RLock()
-	verifying := a.verifying[id]
-	a.verifyMu.RUnlock()
-	if verifying {
-		return
-	}
-	complete := t.BytesMissing() == 0
-	if !a.writeSnapshot(id, t, complete) {
-		return
-	}
-	if complete {
-		a.snapshotMu.Lock()
-		a.snapshotSaved[id] = true
-		a.snapshotMu.Unlock()
-	}
 }
 
 // writeSnapshot is the shared implementation: compute the file-state
@@ -708,12 +668,12 @@ func (a *AnacrolixBackend) Pause(id TorrentID) error {
 	a.pausedMu.Lock()
 	a.paused[id] = true
 	a.pausedMu.Unlock()
-	// Checkpoint the file-state snapshot at pause. The pieces on disk
-	// right now match what bolt's piece-completion store says we have;
-	// recording that lets the next launch's verifyAndStart fast-resume
-	// path skip the slow per-piece rehash. Best-effort; a failed save
-	// just means the next launch falls back to the legacy verify path.
-	a.saveSnapshotForCheckpoint(id, t)
+	// Snapshot the file state if (and only if) the torrent is fully
+	// complete — partial-torrent snapshots can't drive fast-resume
+	// because anacrolix's setCompletionFromPartFiles wipes bolt's
+	// "complete" entries for any file whose safeOsPath is missing or
+	// short, which is every partial-with-.part-files state.
+	a.saveSnapshotIfComplete(id, t)
 	return nil
 }
 
@@ -958,15 +918,13 @@ func (a *AnacrolixBackend) Close() error {
 	case <-time.After(5 * time.Second):
 		log.Printf("anacrolix close: verify drain timeout (5s); forcing client close")
 	}
-	// Checkpoint every torrent's file-state snapshot before tearing the
-	// client down. The next launch's verifyAndStart will compare the
-	// stored snapshot against the on-disk state; if they match (which
-	// they will, barring off-Mosaic file changes between sessions), the
-	// slow per-piece rehash is skipped entirely. Pre-v0.5.4 only
-	// completed torrents got snapshots, so partial downloads always
-	// took the slow verify path on restart.
+	// Save snapshots for any complete torrents that haven't yet captured
+	// one this session (the runtime-completion saver in List could have
+	// missed the last transition). Partial torrents are intentionally
+	// skipped — see the comment in verifyAndStart's fast-resume block
+	// for why partial snapshots can't drive fast-resume today.
 	for _, t := range a.client.Torrents() {
-		a.saveSnapshotForCheckpoint(idFor(t), t)
+		a.saveSnapshotIfComplete(idFor(t), t)
 	}
 	errs := a.client.Close()
 	// Always close the bolt piece-completion store, even if the client
