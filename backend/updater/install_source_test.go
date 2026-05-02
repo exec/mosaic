@@ -19,6 +19,9 @@ func TestDetectInstallSource_DefaultIsManual(t *testing.T) {
 	// without dpkg-installed mosaic, also manual. Confirm the default
 	// path doesn't false-positive when neither signal is present.
 	t.Setenv("APPIMAGE", "")
+	withSentinelPaths(t, []string{filepath.Join(t.TempDir(), "absent")})
+	withDpkgGlob(t, filepath.Join(t.TempDir(), "no-such-*.list"))
+
 	got := DetectInstallSource()
 	if runtime.GOOS != "linux" {
 		if got != InstallSourceManual {
@@ -26,29 +29,92 @@ func TestDetectInstallSource_DefaultIsManual(t *testing.T) {
 		}
 		return
 	}
-	// On a Linux test runner without /var/lib/dpkg/info/mosaic*.list, we
-	// expect manual. If the list file IS present (someone is running
-	// tests on a mosaic-installed box), skip rather than fail.
-	matches, _ := filepath.Glob("/var/lib/dpkg/info/mosaic*.list")
-	if len(matches) > 0 {
-		t.Skip("dpkg has mosaic*.list on this host; skipping default-is-manual test")
-	}
 	if got != InstallSourceManual {
-		t.Errorf("Linux without dpkg list should default to manual; got %q", got)
+		t.Errorf("Linux without sentinel or dpkg list should default to manual; got %q", got)
 	}
 }
 
-// On non-Linux hosts the dpkg-list parsing is dead code. This test
-// uses a runtime check rather than build tags so the test file stays
-// portable.
-func TestIsAPTInstalled_FalseWhenListMissing(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("isAPTInstalled is Linux-only behavior")
-	}
-	if _, err := os.Stat("/var/lib/dpkg/info/mosaic.list"); err == nil {
-		t.Skip("dpkg list present on host; skipping negative test")
-	}
+// isAPTInstalled is platform-agnostic at the file-IO layer; the Linux-
+// gating happens one level up in DetectInstallSource. Stubbing both
+// signals lets us exercise it on any host.
+func TestIsAPTInstalled_FalseWhenSignalsAbsent(t *testing.T) {
+	withSentinelPaths(t, []string{filepath.Join(t.TempDir(), "absent")})
+	withDpkgGlob(t, filepath.Join(t.TempDir(), "no-such-*.list"))
 	if isAPTInstalled() {
-		t.Errorf("isAPTInstalled returned true with no mosaic*.list present")
+		t.Errorf("isAPTInstalled returned true with no sentinel and no mosaic*.list present")
 	}
+}
+
+func TestIsAPTInstalled_SentinelPresent(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "installed-by-apt")
+	if err := os.WriteFile(sentinel, []byte("mosaic 2026-05-02T00:00:00Z\n"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	withSentinelPaths(t, []string{sentinel})
+	// Point the dpkg fallback somewhere with no matches so we know the
+	// positive answer came from the sentinel, not the legacy path.
+	withDpkgGlob(t, filepath.Join(t.TempDir(), "no-such-*.list"))
+
+	if !isAPTInstalled() {
+		t.Errorf("isAPTInstalled returned false despite sentinel at %q", sentinel)
+	}
+}
+
+func TestIsAPTInstalled_FallbackToDpkgList(t *testing.T) {
+	// Sentinel absent → fall through to the legacy dpkg .list parser.
+	// Stage a fake mosaic.list that enumerates the running test binary's
+	// path so the matcher succeeds.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	dpkgDir := t.TempDir()
+	listFile := filepath.Join(dpkgDir, "mosaic.list")
+	if err := os.WriteFile(listFile, []byte(exe+"\n"), 0o644); err != nil {
+		t.Fatalf("write list file: %v", err)
+	}
+	withSentinelPaths(t, []string{filepath.Join(t.TempDir(), "absent")})
+	withDpkgGlob(t, filepath.Join(dpkgDir, "mosaic*.list"))
+
+	if !isAPTInstalled() {
+		t.Errorf("isAPTInstalled returned false despite dpkg .list listing %q", exe)
+	}
+}
+
+func TestSentinelExists_RejectsDirectory(t *testing.T) {
+	// A directory at the sentinel path must NOT count — we wrote a regular
+	// file in postinst, anything else there is unexpected and untrusted.
+	dir := t.TempDir()
+	if sentinelExists(dir) {
+		t.Errorf("sentinelExists(%q) returned true for a directory", dir)
+	}
+}
+
+func TestSentinelExists_FileFound(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "marker")
+	if err := os.WriteFile(f, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !sentinelExists(f) {
+		t.Errorf("sentinelExists(%q) returned false for a regular file", f)
+	}
+}
+
+// withSentinelPaths swaps the package-level sentinel list for a test and
+// restores it on cleanup. The seam is intentionally tiny (a []string
+// var) so production callers stay path-clean.
+func withSentinelPaths(t *testing.T, paths []string) {
+	t.Helper()
+	prev := sentinelPaths
+	sentinelPaths = paths
+	t.Cleanup(func() { sentinelPaths = prev })
+}
+
+// withDpkgGlob swaps the legacy dpkg .list glob for a test.
+func withDpkgGlob(t *testing.T, glob string) {
+	t.Helper()
+	prev := dpkgListGlob
+	dpkgListGlob = glob
+	t.Cleanup(func() { dpkgListGlob = prev })
 }
