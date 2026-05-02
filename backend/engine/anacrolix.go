@@ -105,6 +105,15 @@ type AnacrolixBackend struct {
 
 	ipBlock *ipBlocklistProxy
 
+	// pieceCompletion is the shared bolt-backed piece-completion store
+	// rooted in cfg.DataDir, so anacrolix's "is this piece valid"
+	// metadata stays in our app data dir instead of getting sprinkled
+	// into every user save path as `.torrent.bolt.db`. Closed in
+	// Close(). Pre-v0.4.1 the per-torrent storage was constructed via
+	// storage.NewFile(savePath), which creates a fresh bolt next to
+	// the content; this field replaces that behavior.
+	pieceCompletion storage.PieceCompletion
+
 	// snapshotStore is the optional fast-resume hook. nil disables the
 	// optimization. See SnapshotStore for the lifecycle.
 	snapshotStore SnapshotStore
@@ -157,7 +166,19 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	} else {
 		tcfg.HeaderObfuscationPolicy.Preferred = false
 	}
-	tcfg.DefaultStorage = storage.NewFile(cfg.DataDir)
+	// Single shared piece-completion store, rooted in our app data dir
+	// (cfg.DataDir = paths.DataDir/engine). This is the "have I already
+	// validated this piece" cache anacrolix consults at startup so it
+	// doesn't re-hash everything. Pre-v0.4.1 we used storage.NewFile()
+	// per-torrent, which auto-creates a `.torrent.bolt.db` next to the
+	// content files in each save path — visible to users in their
+	// Downloads folder. Now there's exactly one bolt file, in our
+	// engine dir. (cfg.DataDir is MkdirAll-ed at the top of this func.)
+	pieceCompletion, err := storage.NewBoltPieceCompletion(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("init piece completion store: %w", err)
+	}
+	tcfg.DefaultStorage = storage.NewFileWithCompletion(cfg.DataDir, pieceCompletion)
 
 	dlLim := rate.NewLimiter(rate.Inf, 256<<10)
 	ulLim := rate.NewLimiter(rate.Inf, 256<<10)
@@ -169,10 +190,12 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 
 	c, err := torrent.NewClient(tcfg)
 	if err != nil {
+		_ = pieceCompletion.Close()
 		return nil, fmt.Errorf("anacrolix client: %w", err)
 	}
 	return &AnacrolixBackend{
-		client:         c,
+		client:           c,
+		pieceCompletion:  pieceCompletion,
 		bySaveTo:         make(map[TorrentID]string),
 		prevRates:        make(map[TorrentID]rateSample),
 		paused:           make(map[TorrentID]bool),
@@ -216,7 +239,7 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	if err != nil {
 		return "", err
 	}
-	spec.Storage = storage.NewFile(savePath)
+	spec.Storage = storage.NewFileWithCompletion(savePath, a.pieceCompletion)
 	t, _, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
@@ -387,7 +410,7 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 		return "", err
 	}
 	spec := torrent.TorrentSpecFromMetaInfo(mi)
-	spec.Storage = storage.NewFile(savePath)
+	spec.Storage = storage.NewFileWithCompletion(savePath, a.pieceCompletion)
 	t, _, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
@@ -599,6 +622,12 @@ func prioToAnacrolix(p Priority) anacrolix_types.PiecePriority {
 
 func (a *AnacrolixBackend) Close() error {
 	errs := a.client.Close()
+	// Always close the bolt piece-completion store, even if the client
+	// shutdown returned errors — leaving the bolt open would leak its
+	// file lock and break the next process startup.
+	if a.pieceCompletion != nil {
+		_ = a.pieceCompletion.Close()
+	}
 	if len(errs) > 0 {
 		return errs[0]
 	}

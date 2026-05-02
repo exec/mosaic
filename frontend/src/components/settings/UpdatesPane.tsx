@@ -75,6 +75,14 @@ export function UpdatesPane(props: Props) {
   };
 
   const aptManaged = () => props.config.install_source === 'apt';
+  // Persisted (not in-flight) "enable" state. When the user has explicitly
+  // turned auto-updates off and saved, the pane shouldn't tempt them to
+  // Check / Install — both backend calls succeed regardless of this flag,
+  // so the previous behavior was a clickable button that surfaced an
+  // unhelpful "updater disabled" toast. Channel selector also greys out
+  // since it's only meaningful when checks happen. The Enable toggle and
+  // Save stay live so the user can flip back on.
+  const checksDisabled = () => !aptManaged() && !props.config.enabled;
 
   return (
     <div class="mx-auto max-w-2xl px-6 py-6">
@@ -102,7 +110,7 @@ export function UpdatesPane(props: Props) {
             </span>
           </div>
         </Show>
-        <Show when={!aptManaged() && props.info?.available}>
+        <Show when={!aptManaged() && !checksDisabled() && props.info?.available}>
           <div class="mt-3 rounded-md bg-accent-500/10 p-3 text-sm" data-testid="updater-available">
             <div class="text-accent-200">
               Update available: <span class="font-mono">{props.info!.latest_version}</span>
@@ -151,7 +159,7 @@ export function UpdatesPane(props: Props) {
             Enable automatic update checks
           </label>
 
-          <fieldset class="mt-4">
+          <fieldset class="mt-4" disabled={checksDisabled()}>
             <legend class="text-xs uppercase tracking-wider text-zinc-500 mb-1">Channel</legend>
             <div class="flex gap-4 text-sm text-zinc-200">
               <label class="flex items-center gap-1.5 cursor-pointer">
@@ -184,13 +192,19 @@ export function UpdatesPane(props: Props) {
           <button
             type="button"
             onClick={check}
-            disabled={checking()}
-            class="inline-flex items-center gap-1.5 rounded-md border border-white/[.06] bg-white/[.04] px-3 py-1.5 text-sm text-zinc-200 hover:bg-white/[.06] disabled:opacity-50"
+            disabled={checking() || checksDisabled()}
+            title={checksDisabled() ? 'Auto-updates are disabled — re-enable above and click Save first.' : undefined}
+            class="inline-flex items-center gap-1.5 rounded-md border border-white/[.06] bg-white/[.04] px-3 py-1.5 text-sm text-zinc-200 hover:bg-white/[.06] disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="updater-check"
           >
             <RefreshCw class={`h-3.5 w-3.5 ${checking() ? 'animate-spin' : ''}`} />
             Check now
           </button>
+          <Show when={checksDisabled()}>
+            <span class="text-xs text-zinc-500">
+              Auto-updates are disabled — re-enable above and click Save to check.
+            </span>
+          </Show>
           <div class="flex-1" />
           <Button variant="primary" onClick={save} disabled={!dirty()} data-testid="updater-save">
             Save

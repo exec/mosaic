@@ -542,10 +542,12 @@ func TestDesktopIntegration_DefaultsOnFreshDB(t *testing.T) {
 	svc, _ := newTestService(t)
 	got := svc.GetDesktopIntegration(context.Background())
 
-	// Spec defaults: tray on, close-to-tray off, start-minimized off,
-	// all three notification toggles on. Frontend depends on these.
+	// Spec defaults: tray on, close-to-tray on (matches qBittorrent /
+	// Discord / Steam — closing the window into a running tray was
+	// surprising as default-off behavior), start-minimized off, all
+	// three notification toggles on. Frontend depends on these.
 	require.True(t, got.TrayEnabled, "TrayEnabled should default to true")
-	require.False(t, got.CloseToTray, "CloseToTray should default to false")
+	require.True(t, got.CloseToTray, "CloseToTray should default to true")
 	require.False(t, got.StartMinimized, "StartMinimized should default to false")
 	require.True(t, got.NotifyOnComplete)
 	require.True(t, got.NotifyOnError)
