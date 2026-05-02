@@ -7,6 +7,25 @@ on:
 permissions:
   contents: write
 
+# Pinned tool versions. Cache keys below include these strings, so a
+# version bump = cache miss = fresh install. Bumping is the only way to
+# rotate cached binaries; pinning means we never accidentally pick up an
+# upstream release that hasn't been validated against this build.
+#
+#   WAILS_VERSION    — must match the wails/v2 version in go.mod, otherwise
+#                       the CLI's bindings/codegen can drift from the lib.
+#   NFPM_VERSION     — same nfpm we use for parley/rune/phantasm packaging.
+#   APPIMAGETOOL_PIN — opaque cache-bust string. AppImageKit only ships a
+#                       rolling "continuous" tag, so we pin by the date we
+#                       last vetted it. Bump to force re-download.
+#   NSIS_VERSION     — choco package version for makensis. Choco install
+#                       writes to a fixed path that we cache wholesale.
+env:
+  WAILS_VERSION: 'v2.12.0'
+  NFPM_VERSION: 'v2.42.1'
+  APPIMAGETOOL_PIN: 'continuous-2026-05'
+  NSIS_VERSION: '3.10'
+
 jobs:
   build:
     strategy:
@@ -38,16 +57,47 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          # Caches both the module download cache (~/go/pkg/mod) and the
+          # build cache (GOCACHE) keyed on go.sum. The build cache is
+          # content-addressed, so a stale entry can't satisfy a changed
+          # source — Go re-keys on file content hashes.
           cache: true
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
-      - run: cd frontend && npm ci
-      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-      - name: Linux system deps
+      # Resolve $(go env GOPATH)/bin in a cross-platform way and add it to
+      # PATH. Subsequent cache+install steps target this dir, so the cached
+      # tool binaries land where build scripts expect them.
+      - name: Resolve Go bin dir
+        id: gobin
+        shell: bash
+        run: |
+          gopath_bin="$(go env GOPATH)/bin"
+          mkdir -p "$gopath_bin"
+          echo "path=$gopath_bin" >> "$GITHUB_OUTPUT"
+          echo "$gopath_bin" >> "$GITHUB_PATH"
+
+      # ---- wails CLI: pinned + cached across runs ----
+      # Pre-pin: every release rebuilt wails from source via `go install
+      # ...@latest` (~30-60s). Now the binary is cached keyed on
+      # WAILS_VERSION, so installs only happen on a version bump.
+      - name: Cache wails binary
+        id: cache-wails
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.gobin.outputs.path }}/wails${{ runner.os == 'Windows' && '.exe' || '' }}
+          key: ${{ runner.os }}-wails-${{ env.WAILS_VERSION }}
+
+      - name: Install wails (cache miss)
+        if: steps.cache-wails.outputs.cache-hit != 'true'
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      - run: cd frontend && npm ci
+
+      - name: Linux system deps (apt)
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
@@ -55,27 +105,69 @@ jobs:
           # webkit2gtk-4.1-dev is what -tags webkit2_41 needs at link time
           # (Debian 12+ / Ubuntu 22.04 jammy-updates ship -4.1-0 runtime).
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config libfuse2
-          # nfpm — not in jammy apt, install via go (PATH set up by setup-go)
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
-          # appimagetool
-          wget -O /usr/local/bin/appimagetool \
+
+      # ---- nfpm: pinned + cached (Linux only) ----
+      - name: Cache nfpm binary
+        if: matrix.platform == 'linux'
+        id: cache-nfpm
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.gobin.outputs.path }}/nfpm
+          key: linux-nfpm-${{ env.NFPM_VERSION }}
+
+      - name: Install nfpm (cache miss)
+        if: matrix.platform == 'linux' && steps.cache-nfpm.outputs.cache-hit != 'true'
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@${{ env.NFPM_VERSION }}
+
+      # ---- appimagetool: cached download (Linux only) ----
+      # Pinned to APPIMAGETOOL_PIN (a date-stamp cache-bust string, since
+      # AppImageKit only ships a rolling "continuous" tag). Caches under
+      # ~/.local/bin so we don't need sudo to write/restore.
+      - name: Add ~/.local/bin to PATH (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache appimagetool
+        if: matrix.platform == 'linux'
+        id: cache-appimagetool
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/appimagetool
+          key: linux-appimagetool-${{ env.APPIMAGETOOL_PIN }}
+
+      - name: Download appimagetool (cache miss)
+        if: matrix.platform == 'linux' && steps.cache-appimagetool.outputs.cache-hit != 'true'
+        run: |
+          wget -qO ~/.local/bin/appimagetool \
             https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x /usr/local/bin/appimagetool
+          chmod +x ~/.local/bin/appimagetool
 
       - name: Windows AzureSignTool
         if: matrix.platform == 'windows'
         run: dotnet tool install --global AzureSignTool
 
-      - name: Windows NSIS
+      # ---- NSIS: cached install dir (Windows only) ----
+      # `choco install nsis` writes a fixed install dir; we cache the whole
+      # tree keyed on NSIS_VERSION so subsequent runs skip the install
+      # entirely. Always re-add to PATH because GITHUB_PATH state is per-run.
+      - name: Cache NSIS install
         if: matrix.platform == 'windows'
-        # windows-latest doesn't ship with makensis. wails build -nsis silently
-        # warns and skips the installer when it's missing; install via choco
-        # so the .exe installer gets built. choco only updates PATH for FUTURE
-        # shells, so we also append the install dir to GITHUB_PATH so the
-        # build step in this same job sees it.
-        run: |
-          choco install nsis -y --no-progress
-          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        id: cache-nsis
+        uses: actions/cache@v4
+        with:
+          path: 'C:\Program Files (x86)\NSIS'
+          key: windows-nsis-${{ env.NSIS_VERSION }}
+
+      - name: Install NSIS (cache miss)
+        if: matrix.platform == 'windows' && steps.cache-nsis.outputs.cache-hit != 'true'
+        run: choco install nsis --version ${{ env.NSIS_VERSION }} -y --no-progress
+        shell: pwsh
+
+      - name: NSIS to PATH
+        if: matrix.platform == 'windows'
+        run: echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         shell: pwsh
 
       - name: Build (macOS)
