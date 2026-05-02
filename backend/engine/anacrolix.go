@@ -400,9 +400,19 @@ func (a *AnacrolixBackend) spawnVerify(ctx context.Context, id TorrentID, t *tor
 func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *torrent.Torrent) {
 	// Wait for metainfo. AddFile already has it (channel is pre-closed);
 	// AddMagnet has to fetch it via DHT/PEX before we can hash anything.
+	// Listen on engineCtx too: anacrolix's gotMetainfoC is closed by
+	// onSetInfo (when metainfo IS received), NOT by t.Drop / Client.Close,
+	// so a magnet that never resolves would wedge the goroutine forever
+	// and the engine's verifyWg.Wait at shutdown couldn't return until
+	// the 5s drain timeout (or, on macOS at least, longer — Wails's
+	// shutdown order kept the X-button click feeling like the app was
+	// frozen). engineCtx.Done firing on Close drops these goroutines
+	// promptly so verifyWg drains in milliseconds.
 	select {
 	case <-t.GotInfo():
 	case <-ctx.Done():
+		return
+	case <-a.engineCtx.Done():
 		return
 	}
 	// Past GotInfo — switch from the caller's ctx (which an HTTP handler
