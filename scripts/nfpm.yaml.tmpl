@@ -26,7 +26,16 @@ overrides:
     depends:
       - libgtk-3-0
       - libwebkit2gtk-4.1-0
+    # Recommends pulls these in on Debian/Ubuntu desktops by default
+    # (apt --install-recommends is the desktop default). gnome-shell-
+    # extension-appindicator is what makes our tray icon visible on
+    # vanilla Gnome — without it Gnome ignores the StatusNotifierItem
+    # protocol entirely. Harmless no-op on KDE/XFCE/MATE.
+    recommends:
+      - gnome-shell-extension-appindicator
   rpm:
     depends:
       - gtk3
       - webkit2gtk4.1
+    recommends:
+      - gnome-shell-extension-appindicator

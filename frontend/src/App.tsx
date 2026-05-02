@@ -206,7 +206,7 @@ function AuthenticatedApp() {
   return (
     <>
       <WindowShell
-        isWindows={platform() === 'windows'}
+        frameless={platform() === 'windows' || platform() === 'linux'}
         view={store.state.view}
         settingsPane={store.state.settingsPane}
         onNavigate={store.setView}
