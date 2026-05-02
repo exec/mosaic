@@ -137,6 +137,15 @@ type AnacrolixBackend struct {
 	// fast-resume path.
 	snapshotMu    sync.Mutex
 	snapshotSaved map[TorrentID]bool
+
+	// onError is the engine-side hook for surfacing per-torrent errors
+	// (out-of-disk-space being the canonical case). Wired by Engine via
+	// SetErrorHandler at construction. Without it, anacrolix's default
+	// onWriteChunkErr handler silently flips the torrent into
+	// dataDownloadDisallowed — peers stay connected but no piece is ever
+	// requested again, with zero indication to the user.
+	onErrorMu sync.RWMutex
+	onError   func(TorrentID, error)
 }
 
 type rateSample struct {
@@ -234,6 +243,48 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	}, nil
 }
 
+// SetErrorHandler registers a callback for per-torrent backend errors —
+// chunk write failures (ENOSPC, permission denied) and storage read
+// failures during piece-completion lookup. Engine wires this at
+// construction via the optional-interface assertion in NewEngine; the
+// callback emits EventError on the engine event bus.
+func (a *AnacrolixBackend) SetErrorHandler(f func(TorrentID, error)) {
+	a.onErrorMu.Lock()
+	a.onError = f
+	a.onErrorMu.Unlock()
+}
+
+// raiseError is the internal hook every backend-side error path goes
+// through. Logs at warn level (the user-visible event is the load-bearing
+// surface; the log is a debugging aid) and calls the registered handler
+// if any. Safe to call before SetErrorHandler — silently dropped.
+func (a *AnacrolixBackend) raiseError(id TorrentID, err error) {
+	log.Printf("backend error for torrent %s: %v", id, err)
+	a.onErrorMu.RLock()
+	cb := a.onError
+	a.onErrorMu.RUnlock()
+	if cb != nil {
+		cb(id, err)
+	}
+}
+
+// installWriteErrorHook wires anacrolix's per-torrent userOnWriteChunkErr
+// callback so chunk write failures surface to the user instead of
+// silently disabling the torrent. Setting userOnWriteChunkErr bypasses
+// anacrolix's default handler (which calls disallowDataDownloadLocked
+// on its own), so we have to call DisallowDataDownload ourselves to
+// match — otherwise anacrolix would keep retrying the doomed write and
+// peers would stay actively requesting pieces we can't store.
+//
+// On user Resume we'll call AllowDataDownload to clear the disallow
+// flag — that's the recovery path once the user frees disk space.
+func (a *AnacrolixBackend) installWriteErrorHook(id TorrentID, t *torrent.Torrent) {
+	t.SetOnWriteChunkError(func(err error) {
+		t.DisallowDataDownload()
+		a.raiseError(id, fmt.Errorf("write failed (likely insufficient disk space): %w", err))
+	})
+}
+
 // SetIPBlocklist parses a PeerGuardian-format reader and installs the resulting
 // IPList as the active block list. Passing nil clears it.
 func (a *AnacrolixBackend) SetIPBlocklist(reader io.Reader) error {
@@ -271,6 +322,7 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	a.bySaveTo[id] = savePath
 	a.byID[id] = t
 	a.mu.Unlock()
+	a.installWriteErrorHook(id, t)
 	go a.verifyAndStart(ctx, id, t)
 	return id, nil
 }
@@ -306,6 +358,25 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 
 	a.setVerifying(id, true)
 	defer a.setVerifying(id, false)
+
+	// Disk-space precheck. Once metadata is in we know how many bytes
+	// the torrent will need; if the save path's filesystem can't fit
+	// what's missing (BytesMissing already discounts what's on disk),
+	// fail fast with a clear error rather than letting anacrolix start
+	// requesting and surfacing ENOSPC chunk-write errors mid-flight.
+	// 64 MB headroom for filesystem overhead and a margin against
+	// concurrent writers; we'd rather error a borderline torrent than
+	// silently disable it after consuming the last few hundred MB.
+	if info := t.Info(); info != nil {
+		if needed := t.BytesMissing(); needed > 0 {
+			if free := diskFreeBytes(a.saveDirFor(id)); free >= 0 && free < needed+(64<<20) {
+				t.DisallowDataDownload()
+				a.raiseError(id, fmt.Errorf("insufficient disk space: %d bytes free, need %d (+64 MB headroom) for %q",
+					free, needed, info.Name))
+				return
+			}
+		}
+	}
 
 	// Fast-resume: if we have a snapshot from a prior session that ended
 	// complete and the on-disk file state still matches, anacrolix's
@@ -515,6 +586,7 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	a.bySaveTo[id] = savePath
 	a.byID[id] = t
 	a.mu.Unlock()
+	a.installWriteErrorHook(id, t)
 	// Same verify-then-start flow as AddMagnet — the GotInfo wait inside
 	// verifyAndStart is a no-op here since metainfo is already attached.
 	go a.verifyAndStart(ctx, id, t)
@@ -549,6 +621,11 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 	a.verifyMu.Lock()
 	delete(a.filesMissing, id)
 	a.verifyMu.Unlock()
+	// Resume is also the recovery path after a disk-full / write-error
+	// stoppage: AllowDataDownload clears the dataDownloadDisallowed flag
+	// our write-error hook (and anacrolix's storage-completion error
+	// path) sets. Idempotent if it was never disallowed.
+	t.AllowDataDownload()
 	return nil
 }
 
