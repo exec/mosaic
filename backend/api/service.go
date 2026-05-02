@@ -50,8 +50,10 @@ type Service struct {
 	desktopHookMu    sync.RWMutex
 	onDesktopChanged func(DesktopIntegrationDTO)
 
-	updater    *updater.Updater // may be nil if not yet attached
-	appVersion string
+	updater       *updater.Updater // may be nil if not yet attached
+	appVersion    string
+	installSource updater.InstallSource // "apt" | "appimage" | "manual"
+	rssPoller     *RSSPoller            // may be nil during startup; set by AttachRSSPoller
 
 	// updateInstalledNotifier, if set, is invoked after a successful
 	// InstallUpdate so the OS-level desktop notification fires. Wired via
@@ -153,6 +155,10 @@ const (
 	settingDesktopNotifyOnComplete = "desktop.notify_on_complete"
 	settingDesktopNotifyOnError    = "desktop.notify_on_error"
 	settingDesktopNotifyOnUpdate   = "desktop.notify_on_update"
+	// Sticky "user clicked Dismiss on the Gnome AppIndicator prompt"
+	// flag. Only consulted on Linux/Gnome sessions when the tray
+	// watcher is absent; persists across launches so we don't nag.
+	settingGnomeAppIndicatorDismissed = "desktop.gnome_appindicator_dismissed"
 )
 
 // WebConfigDTO is the transport shape for the optional HTTP+WS interface.
@@ -294,7 +300,16 @@ func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
 func (s *Service) VerifyWebCredentials(ctx context.Context, username, plain string) bool {
 	user, _ := s.settings.Get(ctx, settingWebUsername)
 	hash, _ := s.settings.Get(ctx, settingWebPassHash)
-	if user == "" || hash == "" {
+	// Match GetWebConfig's default. Fresh installs (especially mosaicd's
+	// minted-password path) never populate settingWebUsername explicitly,
+	// so the stored value is "" — but the banner / Settings → Web Interface
+	// shows "admin" because that's what GetWebConfig reports. Without this
+	// fallback, logging in with the displayed username silently fails
+	// here ("" != "admin"), surfacing as an unhelpful "invalid credentials".
+	if user == "" {
+		user = "admin"
+	}
+	if hash == "" {
 		return false
 	}
 	if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 {
@@ -318,6 +333,10 @@ type UpdaterConfigDTO struct {
 	Channel         string `json:"channel"`           // "stable" | "beta"
 	LastCheckedAt   int64  `json:"last_checked_at"`   // unix seconds
 	LastSeenVersion string `json:"last_seen_version"`
+	// InstallSource classifies how this binary was installed: "apt"
+	// (managed by apt — auto-updater is dormant), "appimage", or
+	// "manual". The SPA renders Updates pane copy off this field.
+	InstallSource string `json:"install_source"`
 }
 
 // UpdateInfoDTO mirrors updater.Info plus CurrentVersion so the UI can render
@@ -334,9 +353,35 @@ type UpdateInfoDTO struct {
 // AttachUpdater wires the live *updater.Updater + build-time version into the
 // Service after construction. main.go calls this once at startup; tests can
 // leave it unset to exercise the disabled-updater path.
-func (s *Service) AttachUpdater(u *updater.Updater, version string) {
+//
+// installSource is the freshly-detected classification of how the running
+// binary was installed (apt / appimage / manual). The SPA reads it via
+// UpdaterConfigDTO so the Updates pane can render an "apt-managed — use
+// `apt upgrade` to update" banner instead of a misleading toggle.
+func (s *Service) AttachUpdater(u *updater.Updater, version string, installSource updater.InstallSource) {
 	s.updater = u
 	s.appVersion = version
+	s.installSource = installSource
+}
+
+// AttachRSSPoller wires the live *RSSPoller into the Service so the SPA's
+// "refresh" button on a feed row can trigger an immediate poll via
+// PollFeedNow. The poller and Service live in the same package so this is
+// purely a back-reference, not a layering escape hatch. main.go calls
+// this once at startup.
+func (s *Service) AttachRSSPoller(p *RSSPoller) {
+	s.rssPoller = p
+}
+
+// PollFeedNow polls a single RSS feed immediately, bypassing its
+// scheduled interval. Used by the SPA's per-row refresh icon. Returns
+// an error if the poller hasn't been attached or the feed lookup /
+// HTTP fetch fails.
+func (s *Service) PollFeedNow(ctx context.Context, feedID int) error {
+	if s.rssPoller == nil {
+		return fmt.Errorf("rss poller not attached")
+	}
+	return s.rssPoller.PollNow(ctx, feedID)
 }
 
 // AppVersion returns the build-time version string the Service was attached
@@ -367,11 +412,16 @@ func (s *Service) UpdaterChannel(ctx context.Context) string {
 
 func (s *Service) GetUpdaterConfig(ctx context.Context) UpdaterConfigDTO {
 	seen, _ := s.settings.Get(ctx, settingUpdaterLastSeenVersion)
+	src := string(s.installSource)
+	if src == "" {
+		src = string(updater.InstallSourceManual)
+	}
 	return UpdaterConfigDTO{
 		Enabled:         s.UpdaterEnabled(ctx),
 		Channel:         s.UpdaterChannel(ctx),
 		LastCheckedAt:   int64(s.intSetting(ctx, settingUpdaterLastChecked)),
 		LastSeenVersion: seen,
+		InstallSource:   src,
 	}
 }
 
@@ -410,6 +460,9 @@ func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
 func (s *Service) InstallUpdate(ctx context.Context) error {
 	if s.updater == nil {
 		return fmt.Errorf("updater disabled")
+	}
+	if s.installSource == updater.InstallSourceAPT {
+		return fmt.Errorf("this Mosaic is managed by apt — run `sudo apt update && sudo apt upgrade mosaic` to update")
 	}
 	last := s.updater.Last()
 	if err := s.updater.Install(ctx, last); err != nil {
@@ -498,6 +551,21 @@ func (s *Service) SetDesktopIntegration(ctx context.Context, c DesktopIntegratio
 	}
 	s.fireDesktopIntegrationChanged(c)
 	return nil
+}
+
+// IsGnomeAppIndicatorPromptDismissed reports whether the user has
+// previously clicked Dismiss on the in-app Gnome AppIndicator prompt.
+// Once true, the SPA stops showing the prompt even if the tray watcher
+// is still absent — manual re-trigger via Settings would be the path
+// back to nagging if we ever surface that.
+func (s *Service) IsGnomeAppIndicatorPromptDismissed(ctx context.Context) bool {
+	v, _ := s.settings.Get(ctx, settingGnomeAppIndicatorDismissed)
+	return v == "true"
+}
+
+// DismissGnomeAppIndicatorPrompt persists the "user said no" flag.
+func (s *Service) DismissGnomeAppIndicatorPrompt(ctx context.Context) error {
+	return s.settings.Set(ctx, settingGnomeAppIndicatorDismissed, "true")
 }
 
 // OnDesktopIntegrationChange registers a synchronous callback invoked after a

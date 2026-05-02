@@ -17,6 +17,7 @@ import (
 	"mosaic/backend/engine"
 	"mosaic/backend/platform"
 	"mosaic/backend/remote"
+	"mosaic/backend/tray"
 )
 
 // App is the Wails-bound type. Methods on App become callable from the
@@ -293,6 +294,12 @@ func (a *App) DeleteFeed(id int) error {
 	return a.svc.DeleteFeed(a.ctx, id)
 }
 
+// PollFeedNow polls a single RSS feed immediately, bypassing its
+// scheduled interval. Surfaced by the SPA's per-row refresh icon.
+func (a *App) PollFeedNow(id int) error {
+	return a.svc.PollFeedNow(a.ctx, id)
+}
+
 func (a *App) ListFiltersByFeed(feedID int) ([]api.FilterDTO, error) {
 	return a.svc.ListFiltersByFeed(a.ctx, feedID)
 }
@@ -413,6 +420,49 @@ func (a *App) NotifyUpdateAvailable(info api.UpdateInfoDTO) {
 // custom Win11-style window controls (Windows runs frameless).
 func (a *App) Platform() string {
 	return runtime.GOOS
+}
+
+// GnomeTrayStatus reports the live state of Gnome's StatusNotifierItem
+// support so the SPA can render an in-app prompt to enable / install
+// the AppIndicator extension when the user can't otherwise see Mosaic's
+// tray icon. Always returns "not_applicable" off Linux/Gnome, when the
+// user has previously dismissed the prompt, or when the tray watcher is
+// already serving (the icon will render — no prompt needed).
+//
+// Possible values: "not_applicable", "needs_install", "needs_enable",
+// "needs_restart". See backend/tray/gnome_linux.go for the precise
+// classification logic.
+func (a *App) GnomeTrayStatus() string {
+	if runtime.GOOS != "linux" {
+		return string(tray.GnomePromptStatusNotApplicable)
+	}
+	if a.svc.IsGnomeAppIndicatorPromptDismissed(a.ctx) {
+		return string(tray.GnomePromptStatusNotApplicable)
+	}
+	return string(tray.EvaluateGnomePromptStatus(a.ctx))
+}
+
+// EnableGnomeTray flips the dconf key that gnome-shell reads at startup
+// to enable the AppIndicator extension for the current user. The user
+// still needs to log out + back in (or restart gnome-shell) for the
+// change to take effect; the SPA surfaces that requirement after this
+// returns.
+func (a *App) EnableGnomeTray() error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("EnableGnomeTray: only supported on Linux")
+	}
+	if !tray.IsGnomeSession() {
+		return fmt.Errorf("EnableGnomeTray: not a Gnome session")
+	}
+	return tray.EnableAppIndicatorExtension(a.ctx)
+}
+
+// DismissGnomeTrayPrompt persists the user's "don't show this again"
+// choice. Cleared only by manually wiping the desktop.gnome_appindicator_dismissed
+// setting (we don't surface a UI for that yet — re-installing the deb
+// also doesn't clear it, by design).
+func (a *App) DismissGnomeTrayPrompt() error {
+	return a.svc.DismissGnomeAppIndicatorPrompt(a.ctx)
 }
 
 // WindowMinimise minimizes the desktop window.

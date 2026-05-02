@@ -49,6 +49,20 @@ func NewRSSPoller(svc *Service, feeds *persistence.Feeds, filters *persistence.F
 
 func (p *RSSPoller) Close() { close(p.stop) }
 
+// PollNow polls a single feed immediately, regardless of its
+// LastPolled / IntervalMin schedule. Used by the SPA's "refresh"
+// button on each feed row. Returns the same error pollOne would have
+// raised in the background; the SPA surfaces it as a toast. The
+// LastPolled / ETag side effects are persisted as part of pollOne so
+// after this returns, a fresh feeds.Get reflects the new state.
+func (p *RSSPoller) PollNow(ctx context.Context, feedID int) error {
+	f, err := p.feeds.Get(ctx, feedID)
+	if err != nil {
+		return fmt.Errorf("rss: load feed %d: %w", feedID, err)
+	}
+	return p.pollOne(ctx, f)
+}
+
 func (p *RSSPoller) run() {
 	t := time.NewTicker(60 * time.Second)
 	defer t.Stop()

@@ -125,6 +125,15 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	tcfg.DataDir = cfg.DataDir
 	tcfg.ListenPort = cfg.ListenPort
 	tcfg.NoDHT = !cfg.EnableDHT
+	// Continue uploading once a torrent finishes downloading. Anacrolix's
+	// default is "altruism off": it uploads tit-for-tat WHILE downloading
+	// (to encourage peers to reciprocate) but stops once we have nothing
+	// to gain. For a desktop BitTorrent client that's the wrong default —
+	// every other client (qBittorrent, Transmission, Deluge…) seeds by
+	// default. Without this flag, completed torrents in Mosaic appear in
+	// the "Seeding" tab but never actually push bytes to peers.
+	// See anacrolix/torrent torrent.go's `seeding()` gate.
+	tcfg.Seed = true
 	if cfg.MaxPeersPerTorrent > 0 {
 		tcfg.EstablishedConnsPerTorrent = cfg.MaxPeersPerTorrent
 	}

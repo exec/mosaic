@@ -7,8 +7,10 @@ require (
 	github.com/anacrolix/torrent v1.61.0
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/energye/systray v1.0.3
+	github.com/esiqveland/notify v0.13.3
 	github.com/gen2brain/beeep v0.11.2
 	github.com/go-chi/chi/v5 v5.2.5
+	github.com/godbus/dbus/v5 v5.2.0
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/rs/zerolog v1.35.1
@@ -60,14 +62,12 @@ require (
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/edsrzf/mmap-go v1.1.0 // indirect
-	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
 	github.com/go-llsqlite/crawshaw v0.5.6-0.20250312230104-194977a03421 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/godbus/dbus/v5 v5.2.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-github/v74 v74.0.0 // indirect

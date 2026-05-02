@@ -11,6 +11,7 @@ type Props = {
   onCreateFeed: (f: FeedDTO) => Promise<void>;
   onUpdateFeed: (f: FeedDTO) => Promise<void>;
   onDeleteFeed: (id: number) => Promise<void>;
+  onPollFeed: (id: number) => Promise<void>;
   onLoadFilters: (feedID: number) => Promise<void>;
   onCreateFilter: (f: FilterDTO) => Promise<void>;
   onUpdateFilter: (f: FilterDTO) => Promise<void>;
@@ -33,6 +34,7 @@ export function RSSPane(props: Props) {
   const [editingFeedID, setEditingFeedID] = createSignal<number | null>(null);
   const [expanded, setExpanded] = createSignal<Set<number>>(new Set());
   const [creatingFilterFor, setCreatingFilterFor] = createSignal<number | null>(null);
+  const [pollingFeedID, setPollingFeedID] = createSignal<number | null>(null);
   const [editingFilterID, setEditingFilterID] = createSignal<number | null>(null);
 
   const toggleExpand = async (feedID: number) => {
@@ -103,10 +105,30 @@ export function RSSPane(props: Props) {
                         <span class="font-mono text-xs text-zinc-500 truncate max-w-[280px]" title={feed.url}>{feed.url}</span>
                       </button>
                       <div class="flex items-center gap-3">
-                        <span class="text-xs text-zinc-500" title={`Polls every ${feed.interval_min} min`}>
-                          <RefreshCw class="inline h-3 w-3 mr-1 align-text-bottom" />
+                        <button
+                          type="button"
+                          class="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-zinc-500 transition-colors hover:bg-white/[.04] hover:text-zinc-200 disabled:opacity-50"
+                          title={pollingFeedID() === feed.id ? 'Polling…' : `Refresh now (auto-polls every ${feed.interval_min} min)`}
+                          disabled={pollingFeedID() !== null}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            setPollingFeedID(feed.id);
+                            try {
+                              await props.onPollFeed(feed.id);
+                              toast.success(`Refreshed "${feed.name}"`);
+                            } catch (err) {
+                              toast.error(`Refresh failed — ${String(err)}`);
+                            } finally {
+                              setPollingFeedID(null);
+                            }
+                          }}
+                        >
+                          <RefreshCw
+                            class="h-3 w-3"
+                            classList={{'animate-spin': pollingFeedID() === feed.id}}
+                          />
                           {fmtLastPolled(feed.last_polled)}
-                        </span>
+                        </button>
                         <div class="flex gap-1">
                           <button class="grid h-7 w-7 place-items-center rounded text-zinc-500 hover:bg-white/[.04] hover:text-zinc-100" onClick={() => setEditingFeedID(feed.id)} title="Edit">
                             <Pencil class="h-3 w-3" />
@@ -329,10 +351,19 @@ function FilterForm(props: {
   const [savePath, setSavePath] = createSignal(props.initial.save_path);
   const [enabled, setEnabled] = createSignal(props.initial.enabled);
 
+  const regexEmpty = () => regex().trim() === '';
   const regexValid = () => {
     const r = regex().trim();
     if (!r) return false;
     try { new RegExp(r); return true; } catch { return false; }
+  };
+  // Surfaces *why* Save is disabled. Plain "disabled button" gave no
+  // signal — users (correctly) couldn't tell whether the regex, the
+  // category dropdown, or something else was blocking submit.
+  const disabledReason = () => {
+    if (regexEmpty()) return 'Enter a regex to enable Save.';
+    if (!regexValid()) return 'Regex is invalid — fix the syntax to enable Save.';
+    return null;
   };
 
   return (
@@ -352,7 +383,9 @@ function FilterForm(props: {
       }}
     >
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
-        <label class="text-xs text-zinc-500">Regex</label>
+        <label class="text-xs text-zinc-500">
+          Regex <span class="text-rose-400" aria-label="required">*</span>
+        </label>
         <input
           class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none"
           classList={{'border-rose-500/50': regex().trim() !== '' && !regexValid()}}
@@ -364,19 +397,22 @@ function FilterForm(props: {
       </div>
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Category</label>
-        <select
-          class="w-fit rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
-          value={categoryID() ?? ''}
-          onChange={(e) => {
-            const v = e.currentTarget.value;
-            setCategoryID(v === '' ? null : parseInt(v, 10));
-          }}
-        >
-          <option value="">— None —</option>
-          <For each={props.categories}>
-            {(c) => <option value={c.id}>{c.name}</option>}
-          </For>
-        </select>
+        <div class="flex items-center gap-2">
+          <select
+            class="w-fit rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+            value={categoryID() ?? ''}
+            onChange={(e) => {
+              const v = e.currentTarget.value;
+              setCategoryID(v === '' ? null : parseInt(v, 10));
+            }}
+          >
+            <option value="">— None —</option>
+            <For each={props.categories}>
+              {(c) => <option value={c.id}>{c.name}</option>}
+            </For>
+          </select>
+          <span class="text-xs text-zinc-500">optional</span>
+        </div>
       </div>
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Save path</label>
@@ -394,7 +430,10 @@ function FilterForm(props: {
           Enabled
         </label>
       </div>
-      <div class="flex justify-end gap-2 mt-1">
+      <div class="flex items-center justify-end gap-2 mt-1">
+        <Show when={disabledReason()}>
+          <span class="mr-auto text-xs text-zinc-500">{disabledReason()}</span>
+        </Show>
         <Button type="button" variant="ghost" onClick={props.onCancel}>
           <X class="h-3.5 w-3.5" />
           Cancel

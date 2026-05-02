@@ -238,12 +238,32 @@ func main() {
 	svc.AttachSessionRevoker(sessions)
 	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir)
 	defer remoteSrv.Stop()
-	svc.OnWebConfigChange(remoteSrv.Apply)
+	// Runtime web-config changes (operator flips port via Settings) are
+	// logged but non-fatal — the daemon stays alive on the previous
+	// listener. Bootstrap is different: see below.
+	svc.OnWebConfigChange(func(c api.WebConfigDTO) {
+		if err := remoteSrv.Apply(c); err != nil {
+			log.Error().Err(err).Int("port", c.Port).Msg("mosaicd: web config change failed")
+		}
+	})
 	// Apply our locally-mutated web config (which may have force-enabled or
 	// applied --port / --bind-all overrides on top of the persisted state)
 	// rather than re-reading from the DB — otherwise our in-memory overrides
 	// would be lost the moment the server starts.
-	remoteSrv.Apply(web)
+	if err := remoteSrv.Apply(web); err != nil {
+		// mosaicd is useless without its web interface, so bind failure
+		// at bootstrap is fatal. The most common cause in practice is a
+		// port collision (qBittorrent-nox / Transmission / another
+		// mosaicd already on 8080); spell that out so the operator
+		// doesn't have to grep journalctl for clues.
+		log.Fatal().
+			Err(err).
+			Int("port", web.Port).
+			Bool("bind_all", web.BindAll).
+			Msgf("mosaicd: failed to bind web interface on port %d — likely already in use by another process. "+
+				"Stop the conflicting service or relaunch mosaicd with --port <other> "+
+				"(or set a new port persistently in /var/lib/mosaic/mosaic.db).", web.Port)
+	}
 
 	scheme := "http"
 	if web.BindAll {
