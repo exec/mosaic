@@ -246,7 +246,35 @@ export function createTorrentsStore() {
     addTorrentBytes: (bytes: Uint8Array, savePath: string) => api.addTorrentBytes(bytes, savePath),
     pause: (id: string) => api.pause(id),
     resume: (id: string) => api.resume(id),
-    remove: (id: string, deleteFiles: boolean) => api.remove(id, deleteFiles),
+    remove: async (id: string, deleteFiles: boolean) => {
+      await api.remove(id, deleteFiles);
+      // Removing the focused torrent should also tear down the inspector
+      // pane and drop the row from any active selection — otherwise the
+      // pane keeps rendering the last cached detail of a torrent that no
+      // longer exists, and bulk operations operate on a phantom selection.
+      // The websocket / engine tick is eventually-consistent on the row
+      // list, so we proactively patch the local UI state instead of
+      // waiting for the next tick to remove the row.
+      setState(produce((s) => {
+        if (s.inspectorOpenId === id) {
+          s.inspectorOpenId = null;
+          s.inspectorDetail = null;
+          s.bandwidthRing = [];
+        }
+        if (s.selection.has(id)) {
+          const next = new Set(s.selection);
+          next.delete(id);
+          s.selection = next;
+        }
+      }));
+      // Best-effort backend de-focus when we just closed the inspector
+      // (matches closeInspector). Failure is non-fatal — the engine
+      // simply keeps emitting inspector ticks for a torrent we'll
+      // ignore on the frontend until the row drops out of the list.
+      if (state.inspectorOpenId === null) {
+        try { await api.clearInspectorFocus(); } catch { /* ignore */ }
+      }
+    },
 
     // Selection
     select: (id: string) => setState(produce((s) => { s.selection = new Set([id]); })),
