@@ -12,6 +12,7 @@ import (
 	"os"
 	goruntime "runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,6 +68,12 @@ type AnacrolixConfig struct {
 	// piece-by-piece verify when the on-disk file state is unchanged since
 	// shutdown. nil-safe: the optimization just turns off.
 	SnapshotStore SnapshotStore
+	// ClientVersion is "Mosaic/0.5.7"-style and is sent in three places:
+	// HTTP tracker User-Agent, BitTorrent extended handshake client name,
+	// and (truncated) the BEP-20 peer-id prefix. Empty falls back to
+	// anacrolix's defaults ("anacrolix-torrent/<v>"), which is what
+	// other peers + trackers were seeing pre-v0.5.7.
+	ClientVersion string
 }
 
 // AnacrolixBackend implements Backend on top of anacrolix/torrent.
@@ -210,6 +217,19 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		tcfg.HeaderObfuscationPolicy.RequirePreferred = false
 	} else {
 		tcfg.HeaderObfuscationPolicy.Preferred = false
+	}
+	// Client identification. The HTTP User-Agent goes to tracker scrapes;
+	// ExtendedHandshakeClientVersion is what other BitTorrent clients see
+	// on the BEP-10 extended handshake; Bep20 is the 8-byte peer-id
+	// prefix. Convention is "-XXNNNN-" where XX is a two-letter client
+	// code and NNNN is a 4-digit version. We use "MS" (Mosaic). Falls
+	// back to anacrolix's defaults if ClientVersion is empty.
+	if cfg.ClientVersion != "" {
+		tcfg.HTTPUserAgent = cfg.ClientVersion
+		tcfg.ExtendedHandshakeClientVersion = cfg.ClientVersion
+		if bep20 := bep20PeerID(cfg.ClientVersion); bep20 != "" {
+			tcfg.Bep20 = bep20
+		}
 	}
 	// Single shared piece-completion store, rooted in our app data dir
 	// (cfg.DataDir = paths.DataDir/engine). This is the "have I already
@@ -876,7 +896,25 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	a.snapshotMu.Lock()
 	delete(a.snapshotSaved, id)
 	a.snapshotMu.Unlock()
-	t.Drop()
+	// t.Drop holds the client lock while it tears the torrent down, and
+	// inside that the cleanup waits on a per-torrent wait group that
+	// covers (among other things) tracker stop announces. A
+	// tracker that's hanging on a TCP connect (HTTP-only trackers like
+	// the checkmyiptorrent variant the user hit) can hold this for as
+	// long as the OS connect timeout, blocking the UI's "Remove" call.
+	// Cap at 5s and let anacrolix finish on its own — our in-memory
+	// state has already been cleaned, the user has already been told
+	// "removed."
+	dropDone := make(chan struct{})
+	go func() {
+		t.Drop()
+		close(dropDone)
+	}()
+	select {
+	case <-dropDone:
+	case <-time.After(5 * time.Second):
+		log.Printf("remove: t.Drop timeout for %s — proceeding without waiting", id)
+	}
 	if deleteFiles && saveTo != "" {
 		if info := t.Info(); info != nil {
 			// Path-traversal defense: a malicious .torrent's info.Name can be
@@ -1013,9 +1051,20 @@ func (a *AnacrolixBackend) Close() error {
 	// Checkpoint every torrent before tearing down — partial AND complete.
 	// The per-piece bitmap saved here is replayed into bolt on the next
 	// add to skip the brutal re-hash that would otherwise scan every
-	// preallocated .part file end-to-end.
-	for _, t := range a.client.Torrents() {
-		a.saveSnapshotForCheckpoint(idFor(t), t)
+	// preallocated .part file end-to-end. Capped overall: each
+	// computeFileSnapshot stats every file in the torrent and we don't
+	// want a slow disk to wedge shutdown.
+	checkpointDone := make(chan struct{})
+	go func() {
+		for _, t := range a.client.Torrents() {
+			a.saveSnapshotForCheckpoint(idFor(t), t)
+		}
+		close(checkpointDone)
+	}()
+	select {
+	case <-checkpointDone:
+	case <-time.After(5 * time.Second):
+		log.Printf("anacrolix close: checkpoint loop timeout (5s); some snapshots may not have persisted")
 	}
 	errs := a.client.Close()
 	// Always close the bolt piece-completion store, even if the client
@@ -1093,6 +1142,16 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	}
 
 	if scope.Peers {
+		// anacrolix's Peer.DownloadRate() is BytesReadUsefulData /
+		// totalExpectingTime — a CUMULATIVE average over the entire
+		// peer connection lifetime, not a windowed instantaneous rate.
+		// For completed torrents this is misleading: a peer that fed
+		// us 60 MB in the first 10 seconds of a 60-second connection
+		// reads as "1 MB/s" forever, even after we hit 100% and stop
+		// requesting from them. Once BytesMissing == 0 we know we're
+		// not actively pulling chunks, so zero the per-peer download
+		// column rather than show a phantom rate.
+		complete := t.BytesMissing() == 0
 		for _, pc := range t.PeerConns() {
 			addr := pc.RemoteAddr.String()
 			ip := addr
@@ -1102,13 +1161,17 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 				port = p
 			}
 			name, _ := pc.PeerClientName.Load().(string)
+			var dlRate int64
+			if !complete {
+				dlRate = clampRate(pc.DownloadRate())
+			}
 			d.Peers = append(d.Peers, PeerEntry{
 				IP:           ip,
 				Port:         port,
 				ClientName:   name,
 				Flags:        peerFlagsFor(pc),
 				Progress:     pieceProgressOf(t, pc),
-				DownloadRate: clampRate(pc.DownloadRate()),
+				DownloadRate: dlRate,
 				UploadRate:   clampRate(pc.Stats().LastWriteUploadRate),
 				CountryCode:  "",
 			})
@@ -1166,6 +1229,51 @@ func splitHostPort(addr string) (string, int, error) {
 		return h, 0, err
 	}
 	return h, port, nil
+}
+
+// bep20PeerID derives the 8-byte BEP-20 peer-id prefix from a
+// "Mosaic/X.Y.Z" version string. Format is "-MSnnnn-" where nnnn is the
+// 4-digit zero-padded numeric version (X*100 + Y*10 + Z, capped at 4
+// digits). Returns "" if the input doesn't parse as a recognizable
+// semver — anacrolix will fall back to its default Bep20 in that case.
+//
+// Example: "Mosaic/0.5.7" → "-MS0057-".
+func bep20PeerID(clientVersion string) string {
+	// Pull the digits after the slash.
+	slash := strings.IndexByte(clientVersion, '/')
+	if slash < 0 || slash == len(clientVersion)-1 {
+		return ""
+	}
+	parts := strings.SplitN(clientVersion[slash+1:], ".", 4)
+	if len(parts) < 2 {
+		return ""
+	}
+	var nums [3]int
+	for i := 0; i < 3 && i < len(parts); i++ {
+		// Strip a leading "v" on the first part if present.
+		s := parts[i]
+		if i == 0 {
+			s = strings.TrimPrefix(s, "v")
+		}
+		// Only accept the leading run of digits — allows "0.5.7-rc1" → 0,5,7.
+		end := 0
+		for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+			end++
+		}
+		if end == 0 {
+			return ""
+		}
+		n, err := strconv.Atoi(s[:end])
+		if err != nil {
+			return ""
+		}
+		nums[i] = n
+	}
+	combined := nums[0]*100 + nums[1]*10 + nums[2]
+	if combined > 9999 {
+		combined = 9999
+	}
+	return fmt.Sprintf("-MS%04d-", combined)
 }
 
 // clampRate sanitizes anacrolix's float64 per-peer rate counters before

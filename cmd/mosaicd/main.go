@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -156,6 +157,7 @@ func main() {
 		EnableEncryption:   enableEnc,
 		MaxPeersPerTorrent: maxPeersPerTorrent,
 		SnapshotStore:      &verifySnapshotAdapter{store: verifySnaps},
+		ClientVersion:      "Mosaicd/" + strings.TrimPrefix(version, "v"),
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("open engine backend")
