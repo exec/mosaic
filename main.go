@@ -181,6 +181,13 @@ func main() {
 	if err := platform.StartSecondInstanceListener("io.github.exec.mosaic", app.HandleLaunchArgs); err != nil {
 		log.Warn().Err(err).Msg("single-instance listener failed; .torrent forwards from a running instance won't work")
 	}
+	// Close the listener on shutdown so the Accept goroutine returns and
+	// the OS releases the named pipe / socket file. Without this on
+	// Windows the pipe stays held until process termination, and the
+	// goroutine blocked on Accept can keep the Go runtime alive past
+	// the visible main-window close — surfacing as a lingering
+	// "mosaic.exe" in Task Manager.
+	defer platform.CleanupSingleInstance()
 
 	// Desktop integration: notifications subscriber + system tray.
 	//
