@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -110,6 +111,7 @@ func main() {
 		EnableEncryption:   enableEnc,
 		MaxPeersPerTorrent: maxPeersPerTorrent,
 		SnapshotStore:      &verifySnapshotAdapter{store: verifySnaps},
+		ClientVersion:      "Mosaic/" + strings.TrimPrefix(version, "v"),
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("open engine backend")
