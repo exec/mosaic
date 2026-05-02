@@ -308,7 +308,7 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 					a.snapshotSaved[id] = true
 					a.snapshotMu.Unlock()
 					if ctx.Err() == nil {
-						t.DownloadAll()
+						setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
 					}
 					return
 				}
@@ -344,7 +344,25 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	// next startup can take the fast-resume path.
 	a.saveSnapshotIfComplete(id, t)
 
-	t.DownloadAll()
+	setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
+}
+
+// setAllFilesPriority is the file-aware replacement for t.DownloadAll().
+// DownloadAll raises piece priorities directly via DownloadPieces() but
+// never touches File.prio, which means File.Priority() keeps returning
+// PiecePriorityNone (which we surface as "Skip" in the Files pane). The
+// piece-level effect is the same — anacrolix's purePriority() takes the
+// max across each piece's overlapping files plus the per-piece raise —
+// but iterating and SetPriority'ing each file lifts BOTH file.prio AND
+// the underlying pieces, so the UI displays the correct file priority
+// instead of misleading the user into thinking the files are skipped.
+//
+// Safe before t.GotInfo only if t.Files() returns the populated list; in
+// practice all callers are past GotInfo by the time they hit this.
+func setAllFilesPriority(t *torrent.Torrent, prio anacrolix_types.PiecePriority) {
+	for _, f := range t.Files() {
+		f.SetPriority(prio)
+	}
 }
 
 // saveSnapshotIfComplete writes the fast-resume verify snapshot if the
