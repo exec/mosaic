@@ -148,16 +148,21 @@ func main() {
 	if v, _ := settingsDAO.Get(ctx, "encryption_enabled"); v == "false" {
 		enableEnc = false
 	}
+	preallocateFullFiles := false
+	if v, _ := settingsDAO.Get(ctx, "storage.preallocate_full_files"); v == "true" {
+		preallocateFullFiles = true
+	}
 
 	verifySnaps := persistence.NewVerifySnapshots(db)
 	backend, err := engine.NewAnacrolixBackend(engine.AnacrolixConfig{
-		DataDir:            filepath.Join(paths.DataDir, "engine"),
-		ListenPort:         listenPort,
-		EnableDHT:          enableDHT,
-		EnableEncryption:   enableEnc,
-		MaxPeersPerTorrent: maxPeersPerTorrent,
-		SnapshotStore:      &verifySnapshotAdapter{store: verifySnaps},
-		ClientVersion:      "Mosaicd/" + strings.TrimPrefix(version, "v"),
+		DataDir:              filepath.Join(paths.DataDir, "engine"),
+		ListenPort:           listenPort,
+		EnableDHT:            enableDHT,
+		EnableEncryption:     enableEnc,
+		MaxPeersPerTorrent:   maxPeersPerTorrent,
+		SnapshotStore:        &verifySnapshotAdapter{store: verifySnaps},
+		ClientVersion:        "Mosaicd/" + strings.TrimPrefix(version, "v"),
+		PreallocateFullFiles: preallocateFullFiles,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("open engine backend")

@@ -30,30 +30,12 @@ Both depend on anacrolix continuing to (a) hold the `IPBlocklist` interface verb
 
 If the user installs the AppIndicator extension or logs into a different desktop session mid-run, `trayHandle` stays disabled and close-to-tray stays force-off until a relaunch. The Gnome enable flow tells the user to log out and back in, at which point the *next* Mosaic launch picks it up — but `energye/systray.Run`'s `LockOSThread`-bound runloop can't be re-spawned without a process restart anyway (already commented in `main.go`).
 
-**Direction:** lower-priority because the workaround is documented and the lib limitation is real. Worth surfacing "tray will activate after restart" copy in the Gnome enable flow so users aren't left wondering.
+**Direction:** lower-priority because the workaround is documented and the lib limitation is real. Worth surfacing "tray will activate after restart" copy in the Gnome enable flow so users aren't left wondering. (GnomeTrayPrompt's `needs_restart` branch already does this; double-check messaging covers the install-mid-session case.)
 
-### `UsePartFiles=false` as opt-in storage strategy
-`backend/engine/anacrolix.go` (NewAnacrolixBackend)
+### `PreallocateFullFiles` setting needs a UI surface
+`backend/engine/anacrolix.go` (PreallocateFullFiles), `main.go` reads `storage.preallocate_full_files`
 
-Currently we use anacrolix's default `UsePartFiles=true`, which preallocates a `.part` file at full torrent size at first write and keeps the final path empty until completion. That makes `setCompletionFromPartFiles` wipe bolt's piece-completion entries on every storage open (final path missing → all pieces marked notComplete). v0.5.6 worked around it with our own bolt-mirror replay, but the underlying interaction is fragile.
-
-`UsePartFiles=false` writes directly to the final path and preallocates there, which dodges the wipe entirely. Tradeoff: full disk-space commitment up front (vs. virtual file size that grows). Pair with the existing disk-space precheck.
-
-**Direction:** add a setting (`storage.preallocate_full`) defaulting to false (current behavior) but exposing a toggle in Settings → Storage. Users on roomy disks who want fast restart without the bolt-mirror dance can flip it on.
-
-### Stop-announce timeout for stuck trackers
-`backend/engine/anacrolix.go` (Remove + Close)
-
-v0.5.7 capped `t.Drop` at 5s in Remove and the checkpoint loop at 5s in Close, but anacrolix has no config knob to bound the underlying tracker stop-announce — we just orphan the goroutine. PR upstream a per-call timeout, or wrap our own HTTP transport with a deadline.
-
-**Direction:** wrap stop-announce in a context with a 2s deadline locally (HTTP transport-level), or land a config option in anacrolix. Either keeps the orphaned goroutine count bounded.
-
-### Per-peer windowed download rate
-`backend/engine/anacrolix.go` DetailedSnapshot peer loop
-
-anacrolix's `Peer.DownloadRate()` is `BytesReadUsefulData / totalExpectingTime` — a cumulative average over the connection lifetime, not a windowed instantaneous rate. v0.5.7 zeroes the column when the torrent is complete, but for in-progress downloads the per-peer column still reads the historical average instead of "how fast are bytes coming in *right now*."
-
-**Direction:** track `prevPeerStats[(torrentID, peerKey)] = {at, bytes}` in the backend. On DetailedSnapshot, compute (currentBytes - prevBytes) / (now - prevAt). Same shape as the per-torrent rate calc.
+v0.5.10 wired the engine + reads from settings DAO, but no Settings pane exposes it. Users who'd benefit from the fast-resume path that PreallocateFull provides (no per-restart `setCompletionFromPartFiles` wipe = instant resume) currently have to set the bit by editing the DB. Add a checkbox in Settings → General or a new Storage pane.
 
 ## Low-priority / FYI
 
@@ -67,19 +49,16 @@ v1.0.3, no commits in roughly two years. We've already wrapped PNG-as-ICO oursel
 ### Settings table mixes naming conventions
 `backend/api/service.go:148-161`
 
-`peer_listen_port` (snake_case) vs `desktop.tray_enabled` (dotted). Fine today; if we ever bulk-export settings or pattern-match for migration, the inconsistency is annoying. Cosmetic.
-
-### SQLite `busy_timeout=5000` untested under load
-`backend/persistence/db.go:25`
-
-Under heavy concurrent writes (RSS poller adding 50 magnets while user is renaming categories), 5s is the blast-radius cap before `database is locked` surfaces. Untested under that load.
-
-**Direction:** a stress test that hammers the DAO from multiple goroutines just to confirm the timeout is enough. ~30 LOC, cheap to write.
+`peer_listen_port` (snake_case) vs `desktop.tray_enabled` (dotted) vs `storage.preallocate_full_files` (dotted). Fine today; if we ever bulk-export settings or pattern-match for migration, the inconsistency is annoying. Cosmetic.
 
 ## Done
 
 - ✅ **`EventError` wired up** (v0.5.1) — `installWriteErrorHook` + `SetErrorHandler` emit real `EventError` on chunk-write failures (disk-full + storage errors).
 - ✅ **DTO drift snapshot test** (v0.5.0) — `backend/api/dto_snapshot_test.go` golden-files every DTO; CI fails on diff.
 - ✅ **APT-managed sentinel** (v0.5.1) — `/usr/share/mosaic/installed-by-apt` written by postinst; dpkg-glob fallback retained for backward compat.
-- ✅ **`beeep.AppName` race** (v0.5.9) — set immediately before each `beeep.Notify` call.
-- ✅ **Cert SANs for LAN bind** (v0.5.9) — detect bound interface address at Apply time, add to the regenerated cert's SAN list.
+- ✅ **`beeep.AppName` race** (v0.5.9) — set under a mutex immediately before each `beeep.Notify` call so a transitive importer can't stomp it.
+- ✅ **Cert SANs for LAN bind** (v0.5.9) — `EnsureSelfSignedCert` accepts `extraIPs`; `LocalInterfaceIPs()` enumerates non-loopback unicast addresses on BindAll, cache invalidates when a new IP shows up.
+- ✅ **Per-peer windowed download rate** (v0.5.9) — backend tracks `prevPeerRates[(TorrentID, "ip:port")]` and computes `(current - prev) / dt` per tick; replaces anacrolix's cumulative-lifetime average.
+- ✅ **Tracker HTTP transport timeouts** (v0.5.10) — `tcfg.WebTransport` set to a custom `http.Transport` with 10s dial / 15s response-header / 90s idle conn caps; stuck HTTP-only trackers no longer pin `t.Drop` past those bounds.
+- ✅ **SQLite `busy_timeout` stress test** (v0.5.10) — `TestOpen_BusyTimeoutSurvivesConcurrentWriters` confirms 5 s is enough for 8×50 concurrent inserts without surfacing `database is locked`.
+- ✅ **`UsePartFiles=false` opt-in** (v0.5.10) — `AnacrolixConfig.PreallocateFullFiles` toggles anacrolix's storage layer to preallocate the full file at the final path, dodging the `setCompletionFromPartFiles` bolt-wipe entirely. Reads `storage.preallocate_full_files` from settings DAO; UI surface still pending (see medium-priority entry above).
