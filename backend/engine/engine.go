@@ -26,6 +26,19 @@ func NewEngine(b Backend, tickRate time.Duration) *Engine {
 		tickRate: tickRate,
 		stop:     make(chan struct{}),
 	}
+	// Wire backend errors (out-of-disk-space, storage write failures) into
+	// the engine event stream so the notifications subscriber + UI surface
+	// them. Pre-v0.5.1 the backend's chunk-write errors fell into
+	// anacrolix's silent-disable path; users saw "50 peers, 0 bytes" with
+	// no signal anything was wrong. Backends that don't surface errors
+	// (FakeBackend) don't implement this optional method, so the assert
+	// is conditional.
+	if eh, ok := b.(interface{ SetErrorHandler(func(TorrentID, error)) }); ok {
+		eh.SetErrorHandler(func(id TorrentID, err error) {
+			snap, _ := b.Snapshot(id)
+			e.emit(EngineEvent{Kind: EventError, ID: id, Snapshot: snap, Err: err})
+		})
+	}
 	go e.run()
 	return e
 }
