@@ -1,7 +1,20 @@
 name: Release
 
+# Trigger model:
+#   - push to main: runs build matrix, populates the per-OS toolchain
+#     caches under refs/heads/main scope. Skips the release-upload job
+#     (gated on refs/tags/), so main pushes don't ship anything.
+#   - push to v*.*.* tag: runs build matrix AND release-upload. Cache
+#     lookups fall back to refs/heads/main and hit the warm caches the
+#     latest main push wrote.
+#
+# This is the workaround for actions/cache@v4's per-ref scoping: caches
+# created by a tag-push run live under refs/tags/<tag> and aren't visible
+# to other tag refs. v0.4.1 → v0.4.2 missed every tool cache for exactly
+# this reason. Now main carries the canonical caches and tags inherit.
 on:
   push:
+    branches: [main]
     tags: ['v*.*.*']
 
 permissions:
@@ -12,19 +25,25 @@ permissions:
 # rotate cached binaries; pinning means we never accidentally pick up an
 # upstream release that hasn't been validated against this build.
 #
-#   WAILS_VERSION    — must match the wails/v2 version in go.mod, otherwise
-#                       the CLI's bindings/codegen can drift from the lib.
-#   NFPM_VERSION     — same nfpm we use for parley/rune/phantasm packaging.
-#   APPIMAGETOOL_PIN — opaque cache-bust string. AppImageKit only ships a
-#                       rolling "continuous" tag, so we pin by the date we
-#                       last vetted it. Bump to force re-download.
-#   NSIS_VERSION     — choco package version for makensis. Choco install
-#                       writes to a fixed path that we cache wholesale.
+#   WAILS_VERSION       — must match the wails/v2 version in go.mod,
+#                          otherwise the CLI's bindings/codegen can drift
+#                          from the lib.
+#   NFPM_VERSION        — same nfpm we use for parley/rune/phantasm.
+#   APPIMAGETOOL_PIN    — opaque cache-bust string. AppImageKit only
+#                          ships a rolling "continuous" tag, so we pin by
+#                          the date we last vetted it. Bump to force
+#                          re-download.
+#   NSIS_VERSION        — choco package version for makensis. Choco
+#                          install writes to a fixed path we cache.
+#   AZURESIGNTOOL_VER   — dotnet-tool version for the Authenticode signer.
+#                          Pinned so the ~/.dotnet/tools cache key is
+#                          stable; bump when AST releases.
 env:
   WAILS_VERSION: 'v2.12.0'
   NFPM_VERSION: 'v2.42.1'
   APPIMAGETOOL_PIN: 'continuous-2026-05'
   NSIS_VERSION: '3.10'
+  AZURESIGNTOOL_VER: '6.0.0'
 
 jobs:
   build:
@@ -95,7 +114,10 @@ jobs:
         if: steps.cache-wails.outputs.cache-hit != 'true'
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
 
-      - run: cd frontend && npm ci
+      # --no-audit / --no-fund skip a chatty network round-trip and a
+      # post-install banner; both are pure dev ergonomics noise that adds
+      # a few seconds to every CI run with no signal we'd act on.
+      - run: cd frontend && npm ci --no-audit --no-fund
 
       - name: Linux system deps (apt)
         if: matrix.platform == 'linux'
@@ -144,9 +166,30 @@ jobs:
             https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x ~/.local/bin/appimagetool
 
-      - name: Windows AzureSignTool
+      # ---- AzureSignTool: pinned + cached (Windows only) ----
+      # `dotnet tool install --global` lands binaries in ~/.dotnet/tools
+      # (USERPROFILE\.dotnet\tools on Windows). Caching the whole dir
+      # keyed on AZURESIGNTOOL_VER lets subsequent runs skip the install.
+      - name: Cache AzureSignTool
         if: matrix.platform == 'windows'
-        run: dotnet tool install --global AzureSignTool
+        id: cache-azuresigntool
+        uses: actions/cache@v4
+        with:
+          path: ~\.dotnet\tools
+          key: windows-azuresigntool-${{ env.AZURESIGNTOOL_VER }}
+
+      - name: Install AzureSignTool (cache miss)
+        if: matrix.platform == 'windows' && steps.cache-azuresigntool.outputs.cache-hit != 'true'
+        run: dotnet tool install --global AzureSignTool --version ${{ env.AZURESIGNTOOL_VER }}
+
+      # The install step adds ~/.dotnet/tools to PATH via shell init; on
+      # a cache hit the install step is skipped, so we always re-add the
+      # path here. GITHUB_PATH state is per-run, so this is cheap and
+      # idempotent.
+      - name: AzureSignTool to PATH
+        if: matrix.platform == 'windows'
+        run: echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
 
       # ---- NSIS: cached install dir (Windows only) ----
       # `choco install nsis` writes a fixed install dir; we cache the whole
