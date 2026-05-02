@@ -105,7 +105,11 @@ func (s *Server) startLocked(cfg api.WebConfigDTO) error {
 	}
 
 	if useTLS {
-		cert, err := EnsureSelfSignedCert(filepath.Join(s.dataDir, "web-tls"))
+		// BindAll is the only path here, so the cert must cover not just
+		// loopback but every LAN interface IP a browser on the network
+		// might reach us at — otherwise users see a TLS-name-mismatch
+		// warning on first connect from anything that isn't localhost.
+		cert, err := EnsureSelfSignedCert(filepath.Join(s.dataDir, "web-tls"), LocalInterfaceIPs())
 		if err != nil {
 			return fmt.Errorf("ensure cert: %w", err)
 		}
