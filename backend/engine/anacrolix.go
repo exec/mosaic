@@ -73,7 +73,14 @@ type AnacrolixBackend struct {
 	client *torrent.Client
 
 	mu       sync.Mutex
-	bySaveTo map[TorrentID]string // id → save path (we set it per-torrent)
+	bySaveTo map[TorrentID]string             // id → save path (we set it per-torrent)
+	byID     map[TorrentID]*torrent.Torrent   // id → torrent handle, populated on Add, pruned on Remove
+	// Pre-v0.4.3 every per-id operation (Pause/Resume/Recheck/Remove/
+	// Snapshot/SetFilePriorities/ScheduledPause) called find() which
+	// linear-scanned client.Torrents(). With several hundred torrents
+	// the scheduler tick (2s) + inspector tick (1s) + per-call traffic
+	// turned that into measurable idle CPU. byID makes find() O(1).
+	// Same mutex (a.mu) as bySaveTo so the two stay consistent.
 
 	rateMu    sync.Mutex
 	prevRates map[TorrentID]rateSample
@@ -197,6 +204,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		client:           c,
 		pieceCompletion:  pieceCompletion,
 		bySaveTo:         make(map[TorrentID]string),
+		byID:             make(map[TorrentID]*torrent.Torrent),
 		prevRates:        make(map[TorrentID]rateSample),
 		paused:           make(map[TorrentID]bool),
 		queuePos:         make(map[TorrentID]int),
@@ -247,6 +255,7 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	id := idFor(t)
 	a.mu.Lock()
 	a.bySaveTo[id] = savePath
+	a.byID[id] = t
 	a.mu.Unlock()
 	go a.verifyAndStart(ctx, id, t)
 	return id, nil
@@ -418,6 +427,7 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	id := idFor(t)
 	a.mu.Lock()
 	a.bySaveTo[id] = savePath
+	a.byID[id] = t
 	a.mu.Unlock()
 	// Same verify-then-start flow as AddMagnet — the GotInfo wait inside
 	// verifyAndStart is a no-op here since metainfo is already attached.
@@ -524,6 +534,7 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	a.mu.Lock()
 	saveTo := a.bySaveTo[id]
 	delete(a.bySaveTo, id)
+	delete(a.byID, id)
 	a.mu.Unlock()
 	a.pausedMu.Lock()
 	delete(a.paused, id)
@@ -635,9 +646,25 @@ func (a *AnacrolixBackend) Close() error {
 }
 
 func (a *AnacrolixBackend) find(id TorrentID) (*torrent.Torrent, bool) {
-	for _, t := range a.client.Torrents() {
-		if idFor(t) == id {
-			return t, true
+	a.mu.Lock()
+	t, ok := a.byID[id]
+	a.mu.Unlock()
+	if ok {
+		return t, true
+	}
+	// Fallback to a linear scan if byID hasn't been populated yet
+	// (e.g. a torrent restored at startup before our Add path mapped
+	// it). Self-heals by populating byID on the way out so subsequent
+	// lookups are O(1). Removed-and-not-yet-pruned entries are caught
+	// here too: we'd find no matching id and return false, the caller
+	// gets "not found", and the stale a.byID entry (if any) was
+	// already cleared in Remove() above.
+	for _, candidate := range a.client.Torrents() {
+		if idFor(candidate) == id {
+			a.mu.Lock()
+			a.byID[id] = candidate
+			a.mu.Unlock()
+			return candidate, true
 		}
 	}
 	return nil, false

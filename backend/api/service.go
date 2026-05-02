@@ -806,6 +806,13 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 	for _, r := range records {
 		byHash[r.InfoHash] = r
 	}
+	// Pre-v0.4.3 we called s.tags.ForTorrent(ctx, infohash) inside the
+	// loop below — N+1 SELECTs every tick (~500ms cadence). One bulk
+	// fetch instead, hashed by infohash so the loop is an O(1) lookup.
+	tagsByHash, err := s.tags.ForAllTorrents(ctx)
+	if err != nil {
+		return nil, err
+	}
 	snaps := s.engine.List()
 	out := make([]TorrentDTO, 0, len(snaps))
 	for _, snap := range snaps {
@@ -822,10 +829,7 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 		if ok {
 			dto.CategoryID = rec.CategoryID
 		}
-		tags, err := s.tags.ForTorrent(ctx, string(snap.ID))
-		if err != nil {
-			return nil, err
-		}
+		tags := tagsByHash[string(snap.ID)]
 		dto.Tags = make([]TagDTO, 0, len(tags))
 		for _, tg := range tags {
 			dto.Tags = append(dto.Tags, TagDTO{ID: tg.ID, Name: tg.Name, Color: tg.Color})
