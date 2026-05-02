@@ -147,6 +147,21 @@ type AnacrolixBackend struct {
 	// requested again, with zero indication to the user.
 	onErrorMu sync.RWMutex
 	onError   func(TorrentID, error)
+
+	// engineCtx / engineCancel govern the lifetime of background verify
+	// goroutines. Each verifyAndStart goroutine ran with context.Background()
+	// pre-v0.5.3 (we'd peeled away the caller's ctx after GotInfo to stop
+	// HTTP/RSS-handler returns from cancelling verify). That fix left
+	// verify with no cancellation channel at all — Close() would call
+	// client.Close() and pieceCompletion.Close() while our outer
+	// verifyDataParallel goroutines were still dispatching VerifyDataContext
+	// calls into the now-closing client, holding the process open for as
+	// long as a multi-GB hash took. Now Close() cancels engineCtx first
+	// and waits on verifyWg, so verify shuts down cleanly before the
+	// client + bolt come down.
+	engineCtx    context.Context
+	engineCancel context.CancelFunc
+	verifyWg     sync.WaitGroup
 }
 
 type rateSample struct {
@@ -223,6 +238,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		_ = pieceCompletion.Close()
 		return nil, fmt.Errorf("anacrolix client: %w", err)
 	}
+	engineCtx, engineCancel := context.WithCancel(context.Background())
 	return &AnacrolixBackend{
 		client:           c,
 		pieceCompletion:  pieceCompletion,
@@ -241,6 +257,8 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		ulLim:          ulLim,
 		ipBlock:        ipBlock,
 		snapshotStore:  cfg.SnapshotStore,
+		engineCtx:      engineCtx,
+		engineCancel:   engineCancel,
 	}, nil
 }
 
@@ -324,8 +342,21 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	a.byID[id] = t
 	a.mu.Unlock()
 	a.installWriteErrorHook(id, t)
-	go a.verifyAndStart(ctx, id, t)
+	a.spawnVerify(ctx, id, t)
 	return id, nil
+}
+
+// spawnVerify runs verifyAndStart on a tracked goroutine so Close() can
+// wait for it to finish before tearing down the client + bolt. The
+// caller's ctx still governs the pre-GotInfo wait (so a Wails shutdown
+// or a slow magnet add can be cancelled during DHT lookup); past
+// GotInfo verifyAndStart switches to engineCtx, which Close() cancels.
+func (a *AnacrolixBackend) spawnVerify(ctx context.Context, id TorrentID, t *torrent.Torrent) {
+	a.verifyWg.Add(1)
+	go func() {
+		defer a.verifyWg.Done()
+		a.verifyAndStart(ctx, id, t)
+	}()
 }
 
 // verifyAndStart hashes existing files (so resume picks up partials), then
@@ -354,8 +385,13 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	case <-ctx.Done():
 		return
 	}
-	// Past GotInfo — decouple from caller. See doc comment.
-	ctx = context.Background()
+	// Past GotInfo — switch from the caller's ctx (which an HTTP handler
+	// or RSS poller will cancel as soon as the call returns) to the
+	// engine's lifetime ctx (which Close() cancels). Verify must outlive
+	// any specific request, but it MUST NOT outlive the engine — Close
+	// closes the bolt + anacrolix client, and an in-flight verify dispatch
+	// would crash or hang otherwise.
+	ctx = a.engineCtx
 
 	a.setVerifying(id, true)
 	defer a.setVerifying(id, false)
@@ -590,7 +626,7 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	a.installWriteErrorHook(id, t)
 	// Same verify-then-start flow as AddMagnet — the GotInfo wait inside
 	// verifyAndStart is a no-op here since metainfo is already attached.
-	go a.verifyAndStart(ctx, id, t)
+	a.spawnVerify(ctx, id, t)
 	return id, nil
 }
 
@@ -694,10 +730,18 @@ func (a *AnacrolixBackend) Recheck(id TorrentID) error {
 	delete(a.snapshotSaved, id)
 	a.snapshotMu.Unlock()
 	a.setVerifying(id, true)
+	a.verifyWg.Add(1)
 	go func() {
-		verifyDataParallel(context.Background(), t)
+		defer a.verifyWg.Done()
+		defer a.setVerifying(id, false)
+		verifyDataParallel(a.engineCtx, t)
+		// Don't snapshot if the engine is shutting down — saveSnapshotIfComplete
+		// writes to the snapshot store, which Close will tear down right after
+		// it cancels engineCtx and waits on verifyWg.
+		if a.engineCtx.Err() != nil {
+			return
+		}
 		a.saveSnapshotIfComplete(id, t)
-		a.setVerifying(id, false)
 	}()
 	return nil
 }
@@ -828,6 +872,33 @@ func prioToAnacrolix(p Priority) anacrolix_types.PiecePriority {
 }
 
 func (a *AnacrolixBackend) Close() error {
+	// Cancel engineCtx FIRST so verify goroutines stop dispatching new
+	// piece hashes; then wait for in-flight ones to drain. Without this,
+	// client.Close() races against verifyDataParallel still calling
+	// VerifyDataContext into a closing client — on Windows that surfaces
+	// as a lingering "mosaic.exe" in Task Manager, because the verify
+	// goroutines can hold the bolt mmap and a couple of anacrolix locks
+	// past the main process's last visible event.
+	//
+	// 5s timeout caps shutdown latency: anacrolix's VerifyDataContext
+	// respects ctx cancellation and our outer dispatch loop checks
+	// ctx.Done() between piece queues, so under normal conditions Wait
+	// returns within milliseconds. The timeout only matters if a piece
+	// hasher is wedged in disk I/O — better to drop it on the floor
+	// than block the whole UX of "X-button to fully exited" forever.
+	if a.engineCancel != nil {
+		a.engineCancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		a.verifyWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("anacrolix close: verify drain timeout (5s); forcing client close")
+	}
 	errs := a.client.Close()
 	// Always close the bolt piece-completion store, even if the client
 	// shutdown returned errors — leaving the bolt open would leak its
