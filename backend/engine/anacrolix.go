@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/http"
 	"os"
 	goruntime "runtime"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/iplist"
 	"github.com/anacrolix/torrent/metainfo"
@@ -74,6 +76,21 @@ type AnacrolixConfig struct {
 	// anacrolix's defaults ("anacrolix-torrent/<v>"), which is what
 	// other peers + trackers were seeing pre-v0.5.7.
 	ClientVersion string
+	// PreallocateFullFiles flips anacrolix's UsePartFiles from its default
+	// of true to false. Default behavior writes incomplete data into a
+	// `<name>.part` file alongside the eventual final path, which keeps
+	// disk commitment proportional to bytes downloaded — but means
+	// anacrolix's storage init runs setCompletionFromPartFiles on every
+	// open and wipes bolt's "complete" entries because the final path
+	// doesn't exist. We work around the wipe with a per-piece bitmap
+	// replay (see writeSnapshot + restoreBoltFromBitmap), but a user with
+	// plenty of disk can opt into PreallocateFullFiles=true to dodge the
+	// wipe entirely: anacrolix preallocates the full file at the final
+	// path immediately, setCompletionFromPartFiles sees the right size
+	// and leaves bolt alone, restart-after-pause is a stat() per file.
+	// Tradeoff: full disk commitment up front; couple with the existing
+	// disk-space precheck on add.
+	PreallocateFullFiles bool
 }
 
 // AnacrolixBackend implements Backend on top of anacrolix/torrent.
@@ -180,6 +197,12 @@ type AnacrolixBackend struct {
 	engineCtx    context.Context
 	engineCancel context.CancelFunc
 	verifyWg     sync.WaitGroup
+
+	// preallocateFullFiles mirrors AnacrolixConfig.PreallocateFullFiles
+	// so AddMagnet / AddFile can build per-spec storage with the same
+	// UsePartFiles behavior as the default storage. See AnacrolixConfig
+	// docstring for tradeoffs.
+	preallocateFullFiles bool
 }
 
 type rateSample struct {
@@ -204,6 +227,29 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	tcfg.DataDir = cfg.DataDir
 	tcfg.ListenPort = cfg.ListenPort
 	tcfg.NoDHT = !cfg.EnableDHT
+	// Tracker / webseed HTTP transport with sensible deadlines. Anacrolix
+	// hands all tracker scrapes (announces, scrapes, AND stop-announces on
+	// torrent removal) through this transport; without explicit timeouts it
+	// inherits the OS connect timeout (~75s on Linux, ~21s default on
+	// macOS, ~21s on Windows). A single hung HTTP-only tracker like the
+	// "checkmyiptorrent" variant pinned the client lock during t.Drop and
+	// wedged Remove for ages — v0.5.7 capped t.Drop at 5s on our side, but
+	// the underlying goroutine still had to time out. Now the dial itself
+	// caps at 10s, response-headers at 15s, idle conns at 90s — matching
+	// what most browsers use for HTTP. anacrolix's MaxConnsPerHost=10
+	// preserved.
+	tcfg.WebTransport = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxConnsPerHost:       10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	// Continue uploading once a torrent finishes downloading. Anacrolix's
 	// default is "altruism off": it uploads tit-for-tat WHILE downloading
 	// (to encourage peers to reciprocate) but stops once we have nothing
@@ -261,7 +307,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init piece completion store: %w", err)
 	}
-	tcfg.DefaultStorage = storage.NewFileWithCompletion(cfg.DataDir, pieceCompletion)
+	tcfg.DefaultStorage = newFileStorage(cfg.DataDir, pieceCompletion, cfg.PreallocateFullFiles)
 
 	dlLim := rate.NewLimiter(rate.Inf, 256<<10)
 	ulLim := rate.NewLimiter(rate.Inf, 256<<10)
@@ -296,9 +342,28 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		ulLim:          ulLim,
 		ipBlock:        ipBlock,
 		snapshotStore:  cfg.SnapshotStore,
-		engineCtx:      engineCtx,
-		engineCancel:   engineCancel,
+		engineCtx:            engineCtx,
+		engineCancel:         engineCancel,
+		preallocateFullFiles: cfg.PreallocateFullFiles,
 	}, nil
+}
+
+// newFileStorage builds anacrolix's file storage with our shared bolt
+// piece-completion store, honoring the preallocateFullFiles toggle.
+// PreallocateFull=true switches anacrolix's UsePartFiles to false: the
+// final file gets preallocated up front instead of writing to a .part
+// suffix. See AnacrolixConfig.PreallocateFullFiles for the tradeoff.
+func newFileStorage(saveDir string, pc storage.PieceCompletion, preallocateFull bool) storage.ClientImplCloser {
+	if !preallocateFull {
+		// Default path: anacrolix's UsePartFiles=true (the implicit
+		// default of NewFileWithCompletion).
+		return storage.NewFileWithCompletion(saveDir, pc)
+	}
+	return storage.NewFileOpts(storage.NewFileClientOpts{
+		ClientBaseDir:   saveDir,
+		PieceCompletion: pc,
+		UsePartFiles:    g.Some(false),
+	})
 }
 
 // SetErrorHandler registers a callback for per-torrent backend errors —
@@ -370,7 +435,7 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 	if err != nil {
 		return "", err
 	}
-	spec.Storage = storage.NewFileWithCompletion(savePath, a.pieceCompletion)
+	spec.Storage = newFileStorage(savePath, a.pieceCompletion, a.preallocateFullFiles)
 	t, _, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
@@ -767,7 +832,7 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 		return "", err
 	}
 	spec := torrent.TorrentSpecFromMetaInfo(mi)
-	spec.Storage = storage.NewFileWithCompletion(savePath, a.pieceCompletion)
+	spec.Storage = newFileStorage(savePath, a.pieceCompletion, a.preallocateFullFiles)
 	t, _, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
