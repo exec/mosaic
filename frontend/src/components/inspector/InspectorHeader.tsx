@@ -30,7 +30,16 @@ export function InspectorHeader(props: Props) {
         </button>
       </div>
       <div class="mt-3">
-        <ProgressBar value={props.detail?.progress ?? 0} active={!!props.detail && props.detail.progress < 1} />
+        <ProgressBar
+          value={props.detail?.progress ?? 0}
+          active={!!props.detail && !props.detail.paused && !props.detail.completed && props.detail.progress < 1}
+          status={
+            props.detail?.files_missing ? 'error'
+              : props.detail?.paused ? 'paused'
+              : props.detail?.completed ? 'completed'
+              : 'downloading'
+          }
+        />
       </div>
       <div class="mt-2 flex items-center justify-between font-mono text-xs tabular-nums text-zinc-500">
         <span>{fmtPercent(props.detail?.progress ?? 0)}</span>

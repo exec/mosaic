@@ -13,6 +13,9 @@
   "seeds": 5,
   "added_at": 1735689600,
   "completed_at": 1735776000,
+  "paused": false,
+  "completed": false,
+  "files_missing": false,
   "files": [
     {
       "index": 0,

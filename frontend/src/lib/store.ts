@@ -71,6 +71,32 @@ export type AppState = {
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
 
+// rowToDetail builds a partial DetailDTO from a Torrent row so the
+// inspector can render its overview/header immediately on torrent switch
+// without flashing to 0% and animating back up while it waits for the
+// first inspector:tick. Files/peers/trackers stay undefined here — those
+// tabs already render a "waiting for…" fallback when the data is missing.
+function rowToDetail(t: import('./bindings').Torrent): import('./bindings').DetailDTO {
+  return {
+    id: t.id,
+    name: t.name,
+    magnet: t.magnet,
+    save_path: t.save_path,
+    total_bytes: t.total_bytes,
+    bytes_done: t.bytes_done,
+    progress: t.progress,
+    ratio: t.bytes_done > 0 ? t.bytes_done / Math.max(1, t.total_bytes) : 0,
+    total_down: 0, // tick will fill in real cumulative counters
+    total_up: 0,
+    peers: t.peers,
+    seeds: t.seeds,
+    added_at: t.added_at,
+    paused: t.paused,
+    completed: t.completed,
+    files_missing: t.files_missing,
+  };
+}
+
 function tabsForActive(tab: InspectorTab): InspectorTab[] {
   return tab === 'overview' ? ['overview'] : ['overview', tab];
 }
@@ -302,7 +328,15 @@ export function createTorrentsStore() {
       setState(produce((s) => {
         s.inspectorOpenId = id;
         s.inspectorTab = tab;
-        s.inspectorDetail = null;
+        // Pre-seed inspectorDetail from the row we already have in the
+        // torrents list so the progress bar / header don't flash to 0
+        // and animate back up while we wait ~1s for the first
+        // inspector:tick. Files / peers / trackers stay undefined until
+        // the tick (those tabs already render a spinner / waiting state).
+        // Without this seeding the inspector header looked like the new
+        // torrent reset to 0% then "shot back up" on each torrent switch.
+        const row = s.torrents.find((t) => t.id === id);
+        s.inspectorDetail = row ? rowToDetail(row) : null;
         s.bandwidthRing = [];
       }));
       await api.setInspectorFocus(id, tabsForActive(tab));

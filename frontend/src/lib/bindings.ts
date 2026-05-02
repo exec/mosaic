@@ -151,6 +151,9 @@ export type DetailDTO = {
   seeds: number;
   added_at: number;
   completed_at?: number;
+  paused: boolean;
+  completed: boolean;
+  files_missing: boolean;
   files?: FileDTO[];
   peers_list?: PeerDTO[];
   trackers?: TrackerDTO[];

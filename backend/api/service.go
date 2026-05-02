@@ -894,6 +894,11 @@ type DetailDTO struct {
 	Seeds       int     `json:"seeds"`
 	AddedAt     int64   `json:"added_at"`
 	CompletedAt int64   `json:"completed_at,omitempty"`
+	// Status flags so the inspector can color the progress bar without
+	// re-deriving from the torrents list.
+	Paused       bool `json:"paused"`
+	Completed    bool `json:"completed"`
+	FilesMissing bool `json:"files_missing"`
 
 	Files     []FileDTO    `json:"files,omitempty"`
 	PeersList []PeerDTO    `json:"peers_list,omitempty"`
@@ -1012,9 +1017,12 @@ func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
 		Ratio:      ratioOf(snap.BytesDown, snap.BytesUp),
 		TotalDown:  snap.BytesDown,
 		TotalUp:    snap.BytesUp,
-		Peers:      snap.Peers,
-		Seeds:      snap.Seeds,
-		AddedAt:    addedAt.Unix(),
+		Peers:        snap.Peers,
+		Seeds:        snap.Seeds,
+		AddedAt:      addedAt.Unix(),
+		Paused:       snap.Paused,
+		Completed:    snap.Completed,
+		FilesMissing: snap.FilesMissing,
 	}
 	for _, f := range d.Files {
 		fp := 0.0

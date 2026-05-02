@@ -11,5 +11,8 @@
   "total_up": 805306368,
   "peers": 15,
   "seeds": 5,
-  "added_at": 1735689600
+  "added_at": 1735689600,
+  "paused": false,
+  "completed": false,
+  "files_missing": false
 }
