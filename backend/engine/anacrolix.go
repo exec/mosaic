@@ -124,6 +124,19 @@ type AnacrolixBackend struct {
 	// snapshotStore is the optional fast-resume hook. nil disables the
 	// optimization. See SnapshotStore for the lifecycle.
 	snapshotStore SnapshotStore
+
+	// snapshotSaved tracks ids whose verify snapshot has been written (or
+	// confirmed-still-valid) this process lifetime, so the per-tick check
+	// in List() doesn't recompute and rewrite the snapshot every poll.
+	// Cleared on Remove and Recheck. Pre-v0.4.4 the snapshot was saved
+	// only at the end of verifyAndStart — torrents that finished
+	// downloading mid-session never got a snapshot written until the
+	// *first* post-completion relaunch did a full re-verify (and that
+	// verify is what wrote it). Now any runtime completion triggers an
+	// immediate save so that first relaunch already takes the
+	// fast-resume path.
+	snapshotMu    sync.Mutex
+	snapshotSaved map[TorrentID]bool
 }
 
 type rateSample struct {
@@ -213,6 +226,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		verifying:        make(map[TorrentID]bool),
 		expectedComplete: make(map[TorrentID]bool),
 		filesMissing:     make(map[TorrentID]bool),
+		snapshotSaved:    make(map[TorrentID]bool),
 		dlLim:          dlLim,
 		ulLim:          ulLim,
 		ipBlock:        ipBlock,
@@ -288,6 +302,11 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 				saveTo := a.saveDirFor(id)
 				if cur, err := computeFileSnapshot(info, saveTo); err == nil && bytes.Equal(snap, cur) {
 					log.Printf("verify: snapshot match — skipping hash for torrent %s", id)
+					// Stored snapshot is still valid — mark as saved so
+					// the per-tick List() path doesn't recompute it.
+					a.snapshotMu.Lock()
+					a.snapshotSaved[id] = true
+					a.snapshotMu.Unlock()
 					if ctx.Err() == nil {
 						t.DownloadAll()
 					}
@@ -322,20 +341,57 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	}
 
 	// Now that the torrent is fully present, persist the snapshot so the
-	// next startup can take the fast-resume path. Errors are logged but not
-	// propagated — a missing snapshot just means we re-verify next time.
-	if a.snapshotStore != nil && t.BytesMissing() == 0 {
-		if info := t.Info(); info != nil {
-			saveTo := a.saveDirFor(id)
-			if cur, err := computeFileSnapshot(info, saveTo); err == nil {
-				if err := a.snapshotStore.SaveVerifySnapshot(id, cur, true); err != nil {
-					log.Printf("verify: save snapshot for %s: %v", id, err)
-				}
-			}
-		}
-	}
+	// next startup can take the fast-resume path.
+	a.saveSnapshotIfComplete(id, t)
 
 	t.DownloadAll()
+}
+
+// saveSnapshotIfComplete writes the fast-resume verify snapshot if the
+// torrent is fully present and we haven't already written one this session.
+// Called from three places: (1) verifyAndStart after the initial hash
+// (handles torrents added at 100%), (2) Recheck after a re-hash, and
+// (3) the engine ticker via List() when a torrent transitions to
+// Completed during the session — case (3) is the runtime-completion path
+// that pre-v0.4.4 was missing, leaving the *first* post-completion
+// relaunch to do a full unnecessary re-verify before the snapshot got
+// written.
+//
+// snapshotSaved guards against rewriting the same snapshot every 2s tick.
+// Concurrent ticks may all race past the dedup check; bolt writes are
+// idempotent and the post-save flag-set quiesces it after one tick.
+// Errors are logged but not propagated — a missing snapshot just means
+// the next launch re-verifies (the legacy behavior).
+func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torrent) {
+	if a.snapshotStore == nil {
+		return
+	}
+	a.snapshotMu.Lock()
+	saved := a.snapshotSaved[id]
+	a.snapshotMu.Unlock()
+	if saved {
+		return
+	}
+	if t.BytesMissing() != 0 {
+		return
+	}
+	info := t.Info()
+	if info == nil {
+		return
+	}
+	saveTo := a.saveDirFor(id)
+	cur, err := computeFileSnapshot(info, saveTo)
+	if err != nil {
+		log.Printf("verify: compute snapshot for %s: %v", id, err)
+		return
+	}
+	if err := a.snapshotStore.SaveVerifySnapshot(id, cur, true); err != nil {
+		log.Printf("verify: save snapshot for %s: %v", id, err)
+		return
+	}
+	a.snapshotMu.Lock()
+	a.snapshotSaved[id] = true
+	a.snapshotMu.Unlock()
 }
 
 // saveDirFor returns the per-torrent save root captured at AddFile/AddMagnet
@@ -507,20 +563,16 @@ func (a *AnacrolixBackend) Recheck(id TorrentID) error {
 			log.Printf("verify: delete snapshot for %s: %v", id, err)
 		}
 	}
+	// Clear the in-memory dedup so saveSnapshotIfComplete re-runs after the
+	// recheck finishes (it's the same write the original goroutine did
+	// inline pre-v0.4.4).
+	a.snapshotMu.Lock()
+	delete(a.snapshotSaved, id)
+	a.snapshotMu.Unlock()
 	a.setVerifying(id, true)
 	go func() {
 		verifyDataParallel(context.Background(), t)
-		// Re-establish the snapshot if the torrent ended fully present.
-		if a.snapshotStore != nil && t.BytesMissing() == 0 {
-			if info := t.Info(); info != nil {
-				saveTo := a.saveDirFor(id)
-				if cur, err := computeFileSnapshot(info, saveTo); err == nil {
-					if err := a.snapshotStore.SaveVerifySnapshot(id, cur, true); err != nil {
-						log.Printf("verify: save snapshot post-recheck for %s: %v", id, err)
-					}
-				}
-			}
-		}
+		a.saveSnapshotIfComplete(id, t)
 		a.setVerifying(id, false)
 	}()
 	return nil
@@ -542,6 +594,9 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	delete(a.forceStart, id)
 	delete(a.scheduledPause, id)
 	a.pausedMu.Unlock()
+	a.snapshotMu.Lock()
+	delete(a.snapshotSaved, id)
+	a.snapshotMu.Unlock()
 	t.Drop()
 	if deleteFiles && saveTo != "" {
 		if info := t.Info(); info != nil {
@@ -566,19 +621,36 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 func (a *AnacrolixBackend) List() []Snapshot {
 	ts := a.client.Torrents()
 	out := make([]Snapshot, 0, len(ts))
+	// Collect newly-completed ids inside the locked region; persist their
+	// fast-resume snapshots in goroutines after the locks are released so
+	// the file I/O doesn't block the tick. saveSnapshotIfComplete dedupes
+	// against snapshotSaved, so subsequent ticks observe completion as a
+	// no-op until Recheck or Remove clears the flag.
+	var completed []completedFor
 	a.rateMu.Lock()
-	defer a.rateMu.Unlock()
 	a.pausedMu.RLock()
-	defer a.pausedMu.RUnlock()
 	a.verifyMu.RLock()
-	defer a.verifyMu.RUnlock()
 	for _, t := range ts {
 		id := TorrentID(t.InfoHash().HexString())
 		snap, next := snapshotFor(t, a.prevRates[id], a.paused[id], a.queuePos[id], a.forceStart[id], a.scheduledPause[id], a.verifying[id], a.filesMissing[id])
 		a.prevRates[id] = next
 		out = append(out, snap)
+		if snap.Completed {
+			completed = append(completed, completedFor{id: id, t: t})
+		}
+	}
+	a.verifyMu.RUnlock()
+	a.pausedMu.RUnlock()
+	a.rateMu.Unlock()
+	for _, c := range completed {
+		go a.saveSnapshotIfComplete(c.id, c.t)
 	}
 	return out
+}
+
+type completedFor struct {
+	id TorrentID
+	t  *torrent.Torrent
 }
 
 func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
