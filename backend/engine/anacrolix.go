@@ -415,22 +415,29 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 		}
 	}
 
-	// Fast-resume: if we have a snapshot from a prior session that ended
-	// complete and the on-disk file state still matches, anacrolix's
-	// bolt-backed piece-completion store already knows every piece is good.
-	// Skip the full hash and let it serve cached completion lookups. This
-	// turns a multi-minute multi-GB rehash into a stat() per file.
+	// Fast-resume: if we have a snapshot from a prior session and the
+	// on-disk file state still matches, anacrolix's bolt-backed piece-
+	// completion store already knows the per-piece state. Skip the full
+	// hash and let it serve cached completion lookups. The wasComplete
+	// flag is recorded honestly but no longer gates the optimization —
+	// pre-v0.5.4 partial downloads had no snapshot persisted, so they
+	// always went through the slow verifyDataParallel pass. Now Pause
+	// and Close save checkpoint snapshots, so pause/restart skips
+	// re-verifying the bytes we just wrote ourselves.
 	if a.snapshotStore != nil {
-		if snap, wasComplete, ok := a.snapshotStore.LoadVerifySnapshot(id); ok && wasComplete {
+		if snap, wasComplete, ok := a.snapshotStore.LoadVerifySnapshot(id); ok {
 			if info := t.Info(); info != nil {
 				saveTo := a.saveDirFor(id)
 				if cur, err := computeFileSnapshot(info, saveTo); err == nil && bytes.Equal(snap, cur) {
-					log.Printf("verify: snapshot match — skipping hash for torrent %s", id)
-					// Stored snapshot is still valid — mark as saved so
-					// the per-tick List() path doesn't recompute it.
-					a.snapshotMu.Lock()
-					a.snapshotSaved[id] = true
-					a.snapshotMu.Unlock()
+					log.Printf("verify: snapshot match — skipping hash for torrent %s (wasComplete=%v)", id, wasComplete)
+					// Stored snapshot is still valid; mark as saved so
+					// the per-tick List() path doesn't recompute it for
+					// the complete case.
+					if wasComplete {
+						a.snapshotMu.Lock()
+						a.snapshotSaved[id] = true
+						a.snapshotMu.Unlock()
+					}
 					if ctx.Err() == nil {
 						setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
 					}
@@ -486,24 +493,13 @@ func setAllFilesPriority(t *torrent.Torrent, prio anacrolix_types.PiecePriority)
 }
 
 // saveSnapshotIfComplete writes the fast-resume verify snapshot if the
-// torrent is fully present and we haven't already written one this session.
-// Called from three places: (1) verifyAndStart after the initial hash
-// (handles torrents added at 100%), (2) Recheck after a re-hash, and
-// (3) the engine ticker via List() when a torrent transitions to
-// Completed during the session — case (3) is the runtime-completion path
-// that pre-v0.4.4 was missing, leaving the *first* post-completion
-// relaunch to do a full unnecessary re-verify before the snapshot got
-// written.
-//
-// snapshotSaved guards against rewriting the same snapshot every 2s tick.
-// Concurrent ticks may all race past the dedup check; bolt writes are
-// idempotent and the post-save flag-set quiesces it after one tick.
-// Errors are logged but not propagated — a missing snapshot just means
-// the next launch re-verifies (the legacy behavior).
+// torrent is fully present and we haven't already written one this
+// session. Per-tick dedup via snapshotSaved keeps the engine ticker's
+// per-completed-torrent goroutine from rewriting the same snapshot each
+// poll. Called from: verifyAndStart's tail (handles torrents added at
+// 100%), Recheck after a re-hash, and the engine ticker via List on
+// runtime completion.
 func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torrent) {
-	if a.snapshotStore == nil {
-		return
-	}
 	a.snapshotMu.Lock()
 	saved := a.snapshotSaved[id]
 	a.snapshotMu.Unlock()
@@ -513,23 +509,80 @@ func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torre
 	if t.BytesMissing() != 0 {
 		return
 	}
-	info := t.Info()
-	if info == nil {
-		return
-	}
-	saveTo := a.saveDirFor(id)
-	cur, err := computeFileSnapshot(info, saveTo)
-	if err != nil {
-		log.Printf("verify: compute snapshot for %s: %v", id, err)
-		return
-	}
-	if err := a.snapshotStore.SaveVerifySnapshot(id, cur, true); err != nil {
-		log.Printf("verify: save snapshot for %s: %v", id, err)
+	if !a.writeSnapshot(id, t, true) {
 		return
 	}
 	a.snapshotMu.Lock()
 	a.snapshotSaved[id] = true
 	a.snapshotMu.Unlock()
+}
+
+// saveSnapshotForCheckpoint writes the fast-resume snapshot for a
+// torrent at a known-consistent point in its lifetime — typically when
+// the user pauses or the engine is shutting down. Unlike
+// saveSnapshotIfComplete this does NOT require BytesMissing == 0, and
+// it does NOT consult/update snapshotSaved (the dedup applies to the
+// "complete and quiesced" flow, not the explicit checkpoint flow).
+// wasComplete is recorded honestly so consumers can still distinguish
+// fully-present from partial.
+//
+// Pre-v0.5.4 we only ever saved snapshots for complete torrents. A
+// partial download paused or the app closed mid-flight had no snapshot
+// recorded, so the next launch hit the slow verifyDataParallel path —
+// and during that the torrent's pieces had storageCompletionOk=true (bolt
+// said so) but anacrolix still gated requests on the in-progress
+// verify. User saw "connects to peers fine but doesn't continue
+// download" because verify was iterating thousands of pieces while the
+// peers waited choked. Checkpointing on pause + close means the next
+// launch's fast-resume path skips verify entirely when files haven't
+// changed off-Mosaic.
+func (a *AnacrolixBackend) saveSnapshotForCheckpoint(id TorrentID, t *torrent.Torrent) {
+	// Skip if verify is in progress — bolt's piece-completion entries
+	// reflect a partially-verified state and capturing the file digest
+	// against that would let the next launch's fast-resume path trust
+	// stale piece truth. Wait for the verify to settle; the next
+	// pause/close (or the in-band runtime-completion saver in List)
+	// will checkpoint correctly.
+	a.verifyMu.RLock()
+	verifying := a.verifying[id]
+	a.verifyMu.RUnlock()
+	if verifying {
+		return
+	}
+	complete := t.BytesMissing() == 0
+	if !a.writeSnapshot(id, t, complete) {
+		return
+	}
+	if complete {
+		a.snapshotMu.Lock()
+		a.snapshotSaved[id] = true
+		a.snapshotMu.Unlock()
+	}
+}
+
+// writeSnapshot is the shared implementation: compute the file-state
+// digest, persist it via the snapshot store, log + return false on any
+// error so callers know not to flip dedup state. Returns true on
+// successful save.
+func (a *AnacrolixBackend) writeSnapshot(id TorrentID, t *torrent.Torrent, complete bool) bool {
+	if a.snapshotStore == nil {
+		return false
+	}
+	info := t.Info()
+	if info == nil {
+		return false
+	}
+	saveTo := a.saveDirFor(id)
+	cur, err := computeFileSnapshot(info, saveTo)
+	if err != nil {
+		log.Printf("verify: compute snapshot for %s: %v", id, err)
+		return false
+	}
+	if err := a.snapshotStore.SaveVerifySnapshot(id, cur, complete); err != nil {
+		log.Printf("verify: save snapshot for %s: %v", id, err)
+		return false
+	}
+	return true
 }
 
 // saveDirFor returns the per-torrent save root captured at AddFile/AddMagnet
@@ -655,6 +708,12 @@ func (a *AnacrolixBackend) Pause(id TorrentID) error {
 	a.pausedMu.Lock()
 	a.paused[id] = true
 	a.pausedMu.Unlock()
+	// Checkpoint the file-state snapshot at pause. The pieces on disk
+	// right now match what bolt's piece-completion store says we have;
+	// recording that lets the next launch's verifyAndStart fast-resume
+	// path skip the slow per-piece rehash. Best-effort; a failed save
+	// just means the next launch falls back to the legacy verify path.
+	a.saveSnapshotForCheckpoint(id, t)
 	return nil
 }
 
@@ -898,6 +957,16 @@ func (a *AnacrolixBackend) Close() error {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		log.Printf("anacrolix close: verify drain timeout (5s); forcing client close")
+	}
+	// Checkpoint every torrent's file-state snapshot before tearing the
+	// client down. The next launch's verifyAndStart will compare the
+	// stored snapshot against the on-disk state; if they match (which
+	// they will, barring off-Mosaic file changes between sessions), the
+	// slow per-piece rehash is skipped entirely. Pre-v0.5.4 only
+	// completed torrents got snapshots, so partial downloads always
+	// took the slow verify path on restart.
+	for _, t := range a.client.Torrents() {
+		a.saveSnapshotForCheckpoint(idFor(t), t)
 	}
 	errs := a.client.Close()
 	// Always close the bolt piece-completion store, even if the client
