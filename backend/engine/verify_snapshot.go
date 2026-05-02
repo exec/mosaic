@@ -24,6 +24,19 @@ type SnapshotStore interface {
 	LoadVerifySnapshot(id TorrentID) (snapshot []byte, wasComplete bool, ok bool)
 	SaveVerifySnapshot(id TorrentID, snapshot []byte, wasComplete bool) error
 	DeleteVerifySnapshot(id TorrentID) error
+
+	// LoadPieceBitmap returns the file snapshot, completion flag, and the
+	// per-piece completion bitmap saved for the torrent. ok=false means
+	// no row exists; bitmap may still be nil even when ok=true (legacy
+	// rows saved before bitmap tracking — caller should fall back to
+	// the slow verify path when bitmap is nil).
+	LoadPieceBitmap(id TorrentID) (snapshot []byte, wasComplete bool, bitmap []byte, ok bool)
+	// SavePieceBitmap atomically persists snapshot + wasComplete + bitmap.
+	// bitmap is `(NumPieces + 7) / 8` bytes; bit i is 1 iff piece i is
+	// complete. Used to reconstruct anacrolix's bolt piece-completion
+	// store after its per-add storage init wipes "complete" entries
+	// for partial-with-.part-files torrents.
+	SavePieceBitmap(id TorrentID, snapshot []byte, wasComplete bool, bitmap []byte) error
 }
 
 // computeFileSnapshot returns a SHA-256 over the torrent's on-disk file
