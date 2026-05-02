@@ -3,6 +3,7 @@ module mosaic
 go 1.25.7
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/adrg/xdg v0.5.3
 	github.com/anacrolix/torrent v1.61.0
 	github.com/creativeprojects/go-selfupdate v1.5.2

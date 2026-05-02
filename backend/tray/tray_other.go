@@ -169,6 +169,20 @@ func (o *otherImpl) onReady() {
 	systray.SetTitle("Mosaic")
 	systray.SetTooltip("Mosaic — BitTorrent client")
 	systray.SetIcon(o.iconBytesForState())
+	// Single-click on the tray icon = "Show Mosaic". Matches qBittorrent /
+	// Discord / Steam / Slack — left-click reveals the window without
+	// requiring the user to fish through a context menu. Pre-fix the only
+	// way back to the window was right-click → "Show Mosaic", which most
+	// users (reasonably) didn't think to try.
+	//
+	// energye/systray dispatches onClick on left-click on Windows + Linux
+	// (it's not wired on macOS — we use NSStatusItem there directly via
+	// tray_darwin.{m,h}, which has its own click semantics).
+	systray.SetOnClick(func(_ systray.IMenu) {
+		if o.t.cb.OnShow != nil {
+			o.t.cb.OnShow()
+		}
+	})
 
 	o.itemMu.Lock()
 
