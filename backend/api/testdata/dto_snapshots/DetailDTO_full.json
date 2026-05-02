@@ -1,0 +1,49 @@
+{
+  "id": "deadbeef00112233445566778899aabbccddeeff",
+  "name": "Example.Release.1080p",
+  "magnet": "magnet:?xt=urn:btih:deadbeef",
+  "save_path": "/home/user/Downloads",
+  "total_bytes": 2147483648,
+  "bytes_done": 1073741824,
+  "progress": 0.5,
+  "ratio": 0.75,
+  "total_down": 1073741824,
+  "total_up": 805306368,
+  "peers": 15,
+  "seeds": 5,
+  "added_at": 1735689600,
+  "completed_at": 1735776000,
+  "files": [
+    {
+      "index": 0,
+      "path": "dir/file.bin",
+      "size": 1024,
+      "bytes_done": 512,
+      "progress": 0.5,
+      "priority": "high"
+    }
+  ],
+  "peers_list": [
+    {
+      "ip": "10.0.0.1",
+      "port": 51413,
+      "client": "qBittorrent",
+      "flags": "uTPex",
+      "progress": 0.42,
+      "download_rate": 1024,
+      "upload_rate": 2048,
+      "country": "US"
+    }
+  ],
+  "trackers": [
+    {
+      "url": "udp://tracker.example.com:1337",
+      "status": "ok",
+      "seeds": 10,
+      "peers": 20,
+      "downloaded": 100,
+      "last_announce": 1735689600,
+      "next_announce": 1735690200
+    }
+  ]
+}

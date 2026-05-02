@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "channel": "stable",
+  "last_checked_at": 1735689600,
+  "last_seen_version": "0.4.3",
+  "install_source": "apt"
+}

@@ -1,0 +1,6 @@
+{
+  "listen_port": 51413,
+  "max_peers_per_torrent": 80,
+  "dht_enabled": true,
+  "encryption_enabled": true
+}

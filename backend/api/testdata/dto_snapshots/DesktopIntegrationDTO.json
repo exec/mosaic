@@ -1,0 +1,8 @@
+{
+  "tray_enabled": true,
+  "close_to_tray": true,
+  "start_minimized": false,
+  "notify_on_complete": true,
+  "notify_on_error": true,
+  "notify_on_update": true
+}

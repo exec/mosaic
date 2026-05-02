@@ -1,0 +1,15 @@
+{
+  "id": "deadbeef00112233445566778899aabbccddeeff",
+  "name": "Example.Release.1080p",
+  "magnet": "magnet:?xt=urn:btih:deadbeef",
+  "save_path": "/home/user/Downloads",
+  "total_bytes": 2147483648,
+  "bytes_done": 1073741824,
+  "progress": 0.5,
+  "ratio": 0.75,
+  "total_down": 1073741824,
+  "total_up": 805306368,
+  "peers": 15,
+  "seeds": 5,
+  "added_at": 1735689600
+}
