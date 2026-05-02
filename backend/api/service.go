@@ -496,7 +496,7 @@ func (s *Service) MakeUpdateInfoDTO(info updater.Info) UpdateInfoDTO {
 // rename without coordinating with the frontend agent owning the settings UI.
 type DesktopIntegrationDTO struct {
 	TrayEnabled      bool `json:"tray_enabled"`       // default true
-	CloseToTray      bool `json:"close_to_tray"`      // default false on Linux/Windows; ignored on macOS
+	CloseToTray      bool `json:"close_to_tray"`      // default true on Linux/Windows when tray is enabled; ignored on macOS
 	StartMinimized   bool `json:"start_minimized"`    // default false — start hidden in tray, no window
 	NotifyOnComplete bool `json:"notify_on_complete"` // default true
 	NotifyOnError    bool `json:"notify_on_error"`    // default true
@@ -518,7 +518,13 @@ func (s *Service) boolSettingDefault(ctx context.Context, key string, def bool) 
 func (s *Service) GetDesktopIntegration(ctx context.Context) DesktopIntegrationDTO {
 	return DesktopIntegrationDTO{
 		TrayEnabled:      s.boolSettingDefault(ctx, settingDesktopTrayEnabled, true),
-		CloseToTray:      s.boolSettingDefault(ctx, settingDesktopCloseToTray, false),
+		// Default true (when tray is enabled): closing the window into a
+		// running tray icon matches every mainstream client (qBittorrent,
+		// Discord, Slack, Steam). Default-off was surprising — users
+		// closed the window expecting standard "minimize to tray" UX and
+		// instead lost their session. Users who want close = quit can
+		// flip this off in Settings → Desktop Integration.
+		CloseToTray:      s.boolSettingDefault(ctx, settingDesktopCloseToTray, true),
 		StartMinimized:   s.boolSettingDefault(ctx, settingDesktopStartMinimized, false),
 		NotifyOnComplete: s.boolSettingDefault(ctx, settingDesktopNotifyOnComplete, true),
 		NotifyOnError:    s.boolSettingDefault(ctx, settingDesktopNotifyOnError, true),
