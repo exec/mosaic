@@ -1,4 +1,6 @@
-# Mosaic
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Mosaic" width="480">
+</p>
 
 A polished cross-platform BitTorrent client. Go + Wails + the [anacrolix](https://github.com/anacrolix/torrent) engine on the backend; SolidJS + Tailwind on the frontend; SQLite for persistence; an HTTPS+WebSocket remote interface that serves the same SPA to a browser. Ships for macOS (universal), Linux, and Windows.
 
