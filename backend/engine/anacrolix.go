@@ -93,6 +93,17 @@ type AnacrolixBackend struct {
 	rateMu    sync.Mutex
 	prevRates map[TorrentID]rateSample
 
+	// prevPeerRates is the per-peer equivalent: anacrolix's
+	// Peer.DownloadRate() is a cumulative average over the whole
+	// connection lifetime, so for an active download a peer that fed
+	// chunks fast for the first 30s of a 5-minute session reads as a
+	// medium-rate average forever. We snapshot per-peer cumulative
+	// BytesReadUsefulData on each DetailedSnapshot tick and divide the
+	// delta by the elapsed time to surface a current speed.
+	// Keyed (TorrentID, "ip:port"); same lock as prevRates since
+	// DetailedSnapshot already holds it.
+	prevPeerRates map[TorrentID]map[string]peerRateSample
+
 	// pausedMu guards paused, queuePos, forceStart, scheduledPause. We extend
 	// the existing read-mostly mutex rather than introducing a new one — these
 	// maps are all read together by snapshotFor and written through the same
@@ -175,6 +186,13 @@ type rateSample struct {
 	at   time.Time
 	down int64
 	up   int64
+}
+
+// peerRateSample is a single tick's worth of per-peer cumulative data
+// counters. The next tick's rate is (current - sample) / (now - at).
+type peerRateSample struct {
+	at   time.Time
+	down int64
 }
 
 // NewAnacrolixBackend opens a torrent.Client with our config.
@@ -265,6 +283,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		bySaveTo:         make(map[TorrentID]string),
 		byID:             make(map[TorrentID]*torrent.Torrent),
 		prevRates:        make(map[TorrentID]rateSample),
+		prevPeerRates:    make(map[TorrentID]map[string]peerRateSample),
 		paused:           make(map[TorrentID]bool),
 		queuePos:         make(map[TorrentID]int),
 		forceStart:       make(map[TorrentID]bool),
@@ -906,6 +925,10 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	a.snapshotMu.Lock()
 	delete(a.snapshotSaved, id)
 	a.snapshotMu.Unlock()
+	a.rateMu.Lock()
+	delete(a.prevRates, id)
+	delete(a.prevPeerRates, id)
+	a.rateMu.Unlock()
 	// t.Drop holds the client lock while it tears the torrent down, and
 	// inside that the cleanup waits on a per-torrent wait group that
 	// covers (among other things) tracker stop announces. A
@@ -1152,16 +1175,20 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	}
 
 	if scope.Peers {
-		// anacrolix's Peer.DownloadRate() is BytesReadUsefulData /
-		// totalExpectingTime — a CUMULATIVE average over the entire
-		// peer connection lifetime, not a windowed instantaneous rate.
-		// For completed torrents this is misleading: a peer that fed
-		// us 60 MB in the first 10 seconds of a 60-second connection
-		// reads as "1 MB/s" forever, even after we hit 100% and stop
-		// requesting from them. Once BytesMissing == 0 we know we're
-		// not actively pulling chunks, so zero the per-peer download
-		// column rather than show a phantom rate.
+		// Per-peer windowed download rate: store last-tick cumulative
+		// BytesReadUsefulData per peer, divide the next tick's delta by
+		// the elapsed time. Falls back to 0 on the first tick (no prior
+		// sample) and on completion (we wouldn't be requesting chunks
+		// anyway). rateMu was already taken above for the per-torrent
+		// rate; reuse it for the per-peer map.
 		complete := t.BytesMissing() == 0
+		now := time.Now()
+		a.rateMu.Lock()
+		prevPeers := a.prevPeerRates[id]
+		if prevPeers == nil {
+			prevPeers = make(map[string]peerRateSample)
+		}
+		nextPeers := make(map[string]peerRateSample, len(prevPeers))
 		for _, pc := range t.PeerConns() {
 			addr := pc.RemoteAddr.String()
 			ip := addr
@@ -1171,10 +1198,24 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 				port = p
 			}
 			name, _ := pc.PeerClientName.Load().(string)
+			peerKey := addr // ip:port — stable per connection
+			// Assign Stats() to a local: Count.Int64 is a pointer-receiver
+			// method, and a field on a non-addressable function return
+			// value isn't itself addressable.
+			peerStats := pc.Stats()
+			cumDown := peerStats.ConnStats.BytesReadUsefulData.Int64()
 			var dlRate int64
 			if !complete {
-				dlRate = clampRate(pc.DownloadRate())
+				if prev, ok := prevPeers[peerKey]; ok {
+					if dt := now.Sub(prev.at).Seconds(); dt > 0 {
+						dlRate = int64(float64(cumDown-prev.down) / dt)
+						if dlRate < 0 {
+							dlRate = 0
+						}
+					}
+				}
 			}
+			nextPeers[peerKey] = peerRateSample{at: now, down: cumDown}
 			d.Peers = append(d.Peers, PeerEntry{
 				IP:           ip,
 				Port:         port,
@@ -1182,10 +1223,15 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 				Flags:        peerFlagsFor(pc),
 				Progress:     pieceProgressOf(t, pc),
 				DownloadRate: dlRate,
-				UploadRate:   clampRate(pc.Stats().LastWriteUploadRate),
+				UploadRate:   clampRate(peerStats.LastWriteUploadRate),
 				CountryCode:  "",
 			})
 		}
+		// Drop entries for peers that disconnected since the last tick
+		// (they're not in `seen`); nextPeers is already filtered to
+		// currently-present peers by virtue of being built from `conns`.
+		a.prevPeerRates[id] = nextPeers
+		a.rateMu.Unlock()
 	}
 
 	if scope.Trackers {
