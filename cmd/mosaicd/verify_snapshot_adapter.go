@@ -34,3 +34,16 @@ func (a *verifySnapshotAdapter) SaveVerifySnapshot(id engine.TorrentID, snapshot
 func (a *verifySnapshotAdapter) DeleteVerifySnapshot(id engine.TorrentID) error {
 	return a.store.Delete(context.Background(), string(id))
 }
+
+func (a *verifySnapshotAdapter) LoadPieceBitmap(id engine.TorrentID) ([]byte, bool, []byte, bool) {
+	snap, complete, bitmap, ok, err := a.store.GetWithBitmap(context.Background(), string(id))
+	if err != nil {
+		log.Warn().Err(err).Str("id", string(id)).Msg("load piece bitmap")
+		return nil, false, nil, false
+	}
+	return snap, complete, bitmap, ok
+}
+
+func (a *verifySnapshotAdapter) SavePieceBitmap(id engine.TorrentID, snapshot []byte, wasComplete bool, bitmap []byte) error {
+	return a.store.UpsertWithBitmap(context.Background(), string(id), snapshot, wasComplete, bitmap)
+}

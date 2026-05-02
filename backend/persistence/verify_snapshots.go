@@ -37,7 +37,33 @@ func (s *VerifySnapshots) Get(ctx context.Context, infohash string) ([]byte, boo
 	return snapshot, wc == 1, true, nil
 }
 
-// Upsert writes snapshot + wasComplete for the torrent.
+// GetWithBitmap returns Get + the saved piece-completion bitmap. bitmap
+// may be nil even when ok=true (legacy rows or rows saved before piece
+// state was tracked); callers fall back to verify in that case.
+func (s *VerifySnapshots) GetWithBitmap(ctx context.Context, infohash string) (snapshot []byte, wasComplete bool, bitmap []byte, ok bool, err error) {
+	var (
+		wc int
+		bm sql.RawBytes
+	)
+	err = s.db.SQL().QueryRowContext(ctx,
+		`SELECT snapshot, was_complete, piece_bitmap FROM verify_snapshots WHERE infohash = ?`,
+		infohash).Scan(&snapshot, &wc, &bm)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil, false, nil
+	}
+	if err != nil {
+		return nil, false, nil, false, err
+	}
+	if len(bm) > 0 {
+		bitmap = make([]byte, len(bm))
+		copy(bitmap, bm)
+	}
+	return snapshot, wc == 1, bitmap, true, nil
+}
+
+// Upsert writes snapshot + wasComplete for the torrent. Leaves any
+// existing piece_bitmap unchanged — callers that have a bitmap should
+// use UpsertWithBitmap.
 func (s *VerifySnapshots) Upsert(ctx context.Context, infohash string, snapshot []byte, wasComplete bool) error {
 	wc := 0
 	if wasComplete {
@@ -51,6 +77,28 @@ ON CONFLICT(infohash) DO UPDATE SET
   was_complete = excluded.was_complete,
   updated_at = excluded.updated_at`,
 		infohash, snapshot, wc, time.Now().Unix())
+	return err
+}
+
+// UpsertWithBitmap writes the file snapshot AND the piece-completion
+// bitmap atomically. The bitmap is what lets the next launch repopulate
+// anacrolix's bolt store after its per-add storage init wipes
+// "complete" entries — without it the engine has to re-hash every
+// piece on disk to figure out what's actually present.
+func (s *VerifySnapshots) UpsertWithBitmap(ctx context.Context, infohash string, snapshot []byte, wasComplete bool, bitmap []byte) error {
+	wc := 0
+	if wasComplete {
+		wc = 1
+	}
+	_, err := s.db.SQL().ExecContext(ctx, `
+INSERT INTO verify_snapshots (infohash, snapshot, was_complete, updated_at, piece_bitmap)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(infohash) DO UPDATE SET
+  snapshot = excluded.snapshot,
+  was_complete = excluded.was_complete,
+  updated_at = excluded.updated_at,
+  piece_bitmap = excluded.piece_bitmap`,
+		infohash, snapshot, wc, time.Now().Unix(), bitmap)
 	return err
 }
 

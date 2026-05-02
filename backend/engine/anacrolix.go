@@ -415,32 +415,32 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 		}
 	}
 
-	// Fast-resume: if we have a snapshot from a prior session that ended
-	// COMPLETE and the on-disk file state still matches, bolt's
-	// piece-completion store already has accurate per-piece truth and we
-	// can skip the full re-hash.
+	// Fast-resume: if we have a snapshot from a prior session and the
+	// on-disk file state still matches, replay the saved per-piece
+	// bitmap into bolt to undo anacrolix's setCompletionFromPartFiles
+	// wipe (which fired during AddTorrentSpec for any partial torrent),
+	// then skip the full re-hash. For complete torrents the bitmap
+	// matches what bolt already has and the replay is a no-op; for
+	// partials it's the difference between a stat-per-file fast resume
+	// and reading every byte of a 13 GB preallocated .part to find the
+	// 200 MB we actually have.
 	//
-	// Partial torrents do NOT take this path even when we have a snapshot,
-	// because anacrolix's storage init runs setCompletionFromPartFiles
-	// (file-torrent.go:49-83) which wipes any "complete" bolt entries
-	// for files whose safeOsPath is missing or has the wrong size — i.e.
-	// every partial-with-.part-files torrent. By the time we reach
-	// verifyAndStart bolt has zero complete pieces for such a torrent,
-	// and skipping the rehash would tell anacrolix to start over from
-	// scratch (the v0.5.4 regression). The slow verify path repopulates
-	// bolt by re-hashing the .part contents, which is the only correct
-	// thing to do until we either disable UsePartFiles or pre-restore
-	// bolt before storage init runs — both bigger changes tracked
-	// separately.
+	// If file digest doesn't match (user deleted/edited bytes
+	// off-Mosaic between sessions), we fall through to verifyDataParallel
+	// — the bitmap would be lying about what's on disk. Same fall-through
+	// applies if no snapshot was ever saved (legacy or first-Add).
 	if a.snapshotStore != nil {
-		if snap, wasComplete, ok := a.snapshotStore.LoadVerifySnapshot(id); ok && wasComplete {
+		if snap, wasComplete, bitmap, ok := a.snapshotStore.LoadPieceBitmap(id); ok {
 			if info := t.Info(); info != nil {
 				saveTo := a.saveDirFor(id)
 				if cur, err := computeFileSnapshot(info, saveTo); err == nil && bytes.Equal(snap, cur) {
-					log.Printf("verify: snapshot match — skipping hash for torrent %s", id)
-					a.snapshotMu.Lock()
-					a.snapshotSaved[id] = true
-					a.snapshotMu.Unlock()
+					restored := a.restoreBoltFromBitmap(t, bitmap)
+					log.Printf("verify: snapshot match — skipping hash for %s (wasComplete=%v, restored=%d pieces)", id, wasComplete, restored)
+					if wasComplete {
+						a.snapshotMu.Lock()
+						a.snapshotSaved[id] = true
+						a.snapshotMu.Unlock()
+					}
 					if ctx.Err() == nil {
 						setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
 					}
@@ -495,13 +495,11 @@ func setAllFilesPriority(t *torrent.Torrent, prio anacrolix_types.PiecePriority)
 	}
 }
 
-// saveSnapshotIfComplete writes the fast-resume verify snapshot if the
-// torrent is fully present and we haven't already written one this
-// session. Per-tick dedup via snapshotSaved keeps the engine ticker's
-// per-completed-torrent goroutine from rewriting the same snapshot each
-// poll. Called from: verifyAndStart's tail (handles torrents added at
-// 100%), Recheck after a re-hash, and the engine ticker via List on
-// runtime completion.
+// saveSnapshotIfComplete is the per-tick dedup'd path for completed
+// torrents — once a torrent finishes downloading and the engine ticker
+// observes the transition, this fires once and snapshotSaved quiesces
+// it. Bitmap is recorded too so a fully-complete torrent's restart
+// avoids touching disk at all.
 func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torrent) {
 	a.snapshotMu.Lock()
 	saved := a.snapshotSaved[id]
@@ -520,10 +518,44 @@ func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torre
 	a.snapshotMu.Unlock()
 }
 
+// saveSnapshotForCheckpoint records the file digest + per-piece bitmap
+// at a quiesced point in the torrent's lifetime — typically pause or
+// engine shutdown. Unlike saveSnapshotIfComplete it works for partial
+// torrents too: the bitmap captures exactly which pieces bolt thinks
+// are complete RIGHT NOW, and the next add can replay it after
+// anacrolix's storage init wipes bolt for partials. Skips while verify
+// is mid-flight (capturing a half-verified state would replay
+// nonsense). wasComplete is recorded honestly.
+func (a *AnacrolixBackend) saveSnapshotForCheckpoint(id TorrentID, t *torrent.Torrent) {
+	a.verifyMu.RLock()
+	verifying := a.verifying[id]
+	a.verifyMu.RUnlock()
+	if verifying {
+		return
+	}
+	complete := t.BytesMissing() == 0
+	if !a.writeSnapshot(id, t, complete) {
+		return
+	}
+	if complete {
+		a.snapshotMu.Lock()
+		a.snapshotSaved[id] = true
+		a.snapshotMu.Unlock()
+	}
+}
+
 // writeSnapshot is the shared implementation: compute the file-state
-// digest, persist it via the snapshot store, log + return false on any
-// error so callers know not to flip dedup state. Returns true on
-// successful save.
+// digest + per-piece completion bitmap, persist them via the snapshot
+// store atomically. The bitmap is what lets the next launch avoid the
+// brutal "verify all 13 GB to find the 200 MB we have" rehash —
+// anacrolix's setCompletionFromPartFiles wipes bolt's complete entries
+// for any partial-with-.part-files torrent, but if the file digest
+// matches what we recorded with the bitmap, we know the disk state
+// hasn't changed off-Mosaic and can replay the bitmap straight back
+// into bolt to restore anacrolix's per-piece view in one cheap loop.
+//
+// Falls back to plain snapshot save (no bitmap) if reading per-piece
+// completion fails — the legacy verify path still covers correctness.
 func (a *AnacrolixBackend) writeSnapshot(id TorrentID, t *torrent.Torrent, complete bool) bool {
 	if a.snapshotStore == nil {
 		return false
@@ -538,11 +570,71 @@ func (a *AnacrolixBackend) writeSnapshot(id TorrentID, t *torrent.Torrent, compl
 		log.Printf("verify: compute snapshot for %s: %v", id, err)
 		return false
 	}
-	if err := a.snapshotStore.SaveVerifySnapshot(id, cur, complete); err != nil {
-		log.Printf("verify: save snapshot for %s: %v", id, err)
+	bitmap := piecesToBitmap(t)
+	if err := a.snapshotStore.SavePieceBitmap(id, cur, complete, bitmap); err != nil {
+		log.Printf("verify: save snapshot/bitmap for %s: %v", id, err)
 		return false
 	}
 	return true
+}
+
+// piecesToBitmap reads anacrolix's per-piece completion view via
+// PieceState and packs it into a `(NumPieces+7)/8`-byte bitmap. Bit i
+// is set iff piece i is complete. Reading PieceState is cheap (no
+// disk I/O — it's a memory read off the cached completion state).
+func piecesToBitmap(t *torrent.Torrent) []byte {
+	n := t.NumPieces()
+	if n <= 0 {
+		return nil
+	}
+	out := make([]byte, (n+7)/8)
+	for i := 0; i < n; i++ {
+		if t.PieceState(i).Complete {
+			out[i/8] |= 1 << (uint(i) & 7)
+		}
+	}
+	return out
+}
+
+// restoreBoltFromBitmap replays a saved per-piece completion bitmap
+// into anacrolix's bolt store. Called after AddTorrentSpec runs (which
+// invokes setCompletionFromPartFiles, wiping any "complete" bolt
+// entries for partial torrents) but before verifyAndStart kicks off —
+// the next time anacrolix consults bolt for piece N, it sees the
+// restored truth and storageCompletionOk flips to true so the piece
+// becomes eligible for requests immediately, no re-hash needed.
+//
+// Caller is responsible for verifying the file-state snapshot matches
+// before calling this; otherwise we'd be lying to anacrolix about what
+// bytes are actually on disk.
+func (a *AnacrolixBackend) restoreBoltFromBitmap(t *torrent.Torrent, bitmap []byte) int {
+	if a.pieceCompletion == nil || len(bitmap) == 0 {
+		return 0
+	}
+	n := t.NumPieces()
+	ih := t.InfoHash()
+	restored := 0
+	for i := 0; i < n; i++ {
+		byteIdx := i / 8
+		if byteIdx >= len(bitmap) {
+			break
+		}
+		complete := bitmap[byteIdx]&(1<<(uint(i)&7)) != 0
+		if !complete {
+			// We don't restore "incomplete" — bolt's default state for
+			// missing entries is already storageCompletionOk=false /
+			// piece-not-complete. Setting false explicitly would just
+			// add a row per piece for no benefit. Pieces marked
+			// complete are the only ones worth replaying.
+			continue
+		}
+		if err := a.pieceCompletion.Set(metainfo.PieceKey{InfoHash: ih, Index: i}, true); err != nil {
+			log.Printf("verify: restore piece %d for %s: %v", i, idFor(t), err)
+			continue
+		}
+		restored++
+	}
+	return restored
 }
 
 // saveDirFor returns the per-torrent save root captured at AddFile/AddMagnet
@@ -668,12 +760,12 @@ func (a *AnacrolixBackend) Pause(id TorrentID) error {
 	a.pausedMu.Lock()
 	a.paused[id] = true
 	a.pausedMu.Unlock()
-	// Snapshot the file state if (and only if) the torrent is fully
-	// complete — partial-torrent snapshots can't drive fast-resume
-	// because anacrolix's setCompletionFromPartFiles wipes bolt's
-	// "complete" entries for any file whose safeOsPath is missing or
-	// short, which is every partial-with-.part-files state.
-	a.saveSnapshotIfComplete(id, t)
+	// Checkpoint the file state + per-piece bitmap. The bitmap is what
+	// makes fast-resume work for partial torrents post-anacrolix's
+	// per-add storage init wipe — the next add will replay it back into
+	// bolt after the wipe so anacrolix sees the actual disk state
+	// without re-hashing every piece.
+	a.saveSnapshotForCheckpoint(id, t)
 	return nil
 }
 
@@ -918,13 +1010,12 @@ func (a *AnacrolixBackend) Close() error {
 	case <-time.After(5 * time.Second):
 		log.Printf("anacrolix close: verify drain timeout (5s); forcing client close")
 	}
-	// Save snapshots for any complete torrents that haven't yet captured
-	// one this session (the runtime-completion saver in List could have
-	// missed the last transition). Partial torrents are intentionally
-	// skipped — see the comment in verifyAndStart's fast-resume block
-	// for why partial snapshots can't drive fast-resume today.
+	// Checkpoint every torrent before tearing down — partial AND complete.
+	// The per-piece bitmap saved here is replayed into bolt on the next
+	// add to skip the brutal re-hash that would otherwise scan every
+	// preallocated .part file end-to-end.
 	for _, t := range a.client.Torrents() {
-		a.saveSnapshotIfComplete(idFor(t), t)
+		a.saveSnapshotForCheckpoint(idFor(t), t)
 	}
 	errs := a.client.Close()
 	// Always close the bolt piece-completion store, even if the client
