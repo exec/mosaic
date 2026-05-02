@@ -130,6 +130,7 @@ const emptyUpdaterConfig: UpdaterConfigDTO = {
   channel: 'stable',
   last_checked_at: 0,
   last_seen_version: '',
+  install_source: 'manual',
 };
 
 const defaultDesktopIntegration: DesktopIntegrationDTO = {
@@ -433,6 +434,14 @@ export function createTorrentsStore() {
         s.feeds = fs ?? [];
         delete s.filtersByFeed[id];
       }));
+    },
+    pollFeed: async (id: number) => {
+      // Triggers an immediate fetch on the backend regardless of the
+      // feed's poll-interval schedule. Refresh the feed list afterward
+      // so last_polled / etag updates land in state.
+      await api.pollFeedNow(id);
+      const fs = await api.listFeeds();
+      setState(produce((s) => { s.feeds = fs ?? []; }));
     },
     refreshFiltersForFeed: async (feedID: number) => {
       const rows = await api.listFiltersByFeed(feedID);

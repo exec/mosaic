@@ -142,6 +142,7 @@ func main() {
 	defer scheduleEngine.Close()
 	rssPoller := api.NewRSSPoller(svc, feeds, filters)
 	defer rssPoller.Close()
+	svc.AttachRSSPoller(rssPoller)
 
 	// Optional HTTPS+WS remote interface. Reads its enabled/port/bind state
 	// from settings; restarts whenever SetWebConfig fires the change hook.
@@ -155,8 +156,20 @@ func main() {
 	svc.AttachSessionRevoker(sessions)
 	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir)
 	defer remoteSrv.Stop()
-	svc.OnWebConfigChange(remoteSrv.Apply)
-	remoteSrv.Apply(svc.GetWebConfig(ctx))
+	// The remote interface is optional in the GUI — the user has the
+	// native window even if the web surface fails to bind. Log loudly
+	// (so the user can see it in support output) but don't crash; the
+	// SPA's Settings → Web Interface pane will show "enabled" with no
+	// listener, which is the existing path for "you tried to enable
+	// it but the port was taken."
+	svc.OnWebConfigChange(func(c api.WebConfigDTO) {
+		if err := remoteSrv.Apply(c); err != nil {
+			log.Warn().Err(err).Int("port", c.Port).Msg("remote: web config change failed (port likely in use)")
+		}
+	})
+	if err := remoteSrv.Apply(svc.GetWebConfig(ctx)); err != nil {
+		log.Warn().Err(err).Msg("remote: bootstrap failed (port likely in use) — desktop UI is unaffected")
+	}
 
 	app := NewApp(svc, hub)
 
@@ -260,8 +273,16 @@ func main() {
 			app.NotifyUpdateAvailable(dto)
 		},
 	})
-	svc.AttachUpdater(upd, version)
-	if svc.UpdaterEnabled(ctx) {
+	installSource := updater.DetectInstallSource()
+	svc.AttachUpdater(upd, version, installSource)
+	// Apt-managed installs defer upgrades to apt — running our own
+	// updater on top would either need root to rewrite the dpkg
+	// database (gross), or get clobbered on the next `apt upgrade`
+	// (also gross). Skip the periodic check; the SPA's Updates pane
+	// surfaces the same reasoning so the toggle isn't misleading.
+	if installSource == updater.InstallSourceAPT {
+		log.Info().Msg("auto-updater disabled: managed by apt — use `sudo apt upgrade mosaic` for updates")
+	} else if svc.UpdaterEnabled(ctx) {
 		go upd.Schedule(ctx)
 	}
 

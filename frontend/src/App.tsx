@@ -7,6 +7,7 @@ import {isWailsRuntime} from './lib/runtime';
 import {ThemeProvider} from './components/theme/ThemeProvider';
 import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
 import {WindowShell} from './components/shell/WindowShell';
+import {GnomeTrayPrompt} from './components/shell/GnomeTrayPrompt';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
 import {UpdateToast} from './components/shell/UpdateToast';
 import {TorrentList} from './components/list/TorrentList';
@@ -297,6 +298,7 @@ function AuthenticatedApp() {
             onCreateFeed={(f) => store.createFeed(f)}
             onUpdateFeed={(f) => store.updateFeed(f)}
             onDeleteFeed={(id) => store.deleteFeed(id)}
+            onPollFeed={(id) => store.pollFeed(id)}
             onLoadFiltersForFeed={(feedID) => store.refreshFiltersForFeed(feedID)}
             onCreateFilter={(f) => store.createFilter(f)}
             onUpdateFilter={(f) => store.updateFilter(f)}
@@ -388,6 +390,7 @@ function AuthenticatedApp() {
         onInstall={() => { store.setView('settings'); store.setSettingsPane('updates'); }}
         onDismiss={() => {}}
       />
+      <GnomeTrayPrompt />
     </>
   );
 }

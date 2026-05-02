@@ -169,6 +169,9 @@ export type UpdaterConfigDTO = {
   channel: 'stable' | 'beta';
   last_checked_at: number;
   last_seen_version: string;
+  // How the running binary was installed. "apt" means the in-app
+  // updater is dormant — apt owns upgrades. See backend/updater/install_source.go.
+  install_source: 'apt' | 'appimage' | 'manual';
 };
 
 export type UpdateInfoDTO = {
@@ -239,6 +242,7 @@ export const api = {
   createFeed: (f: FeedDTO) => transport.invoke<number>('CreateFeed', f),
   updateFeed: (f: FeedDTO) => transport.invoke<void>('UpdateFeed', f),
   deleteFeed: (id: number) => transport.invoke<void>('DeleteFeed', id),
+  pollFeedNow: (id: number) => transport.invoke<void>('PollFeedNow', id),
   listFiltersByFeed: (feedID: number) => transport.invoke<FilterDTO[]>('ListFiltersByFeed', feedID),
   createFilter: (f: FilterDTO) => transport.invoke<number>('CreateFilter', f),
   updateFilter: (f: FilterDTO) => transport.invoke<void>('UpdateFilter', f),
@@ -261,6 +265,11 @@ export const api = {
   windowMinimise: () => transport.invoke<void>('WindowMinimise'),
   windowMaximise: () => transport.invoke<void>('WindowMaximise'),
   windowClose: () => transport.invoke<void>('WindowClose'),
+  // Gnome AppIndicator prompt — see app.go's GnomeTrayStatus comment.
+  // Status is one of: "not_applicable" | "needs_install" | "needs_enable" | "needs_restart".
+  gnomeTrayStatus: () => transport.invoke<string>('GnomeTrayStatus'),
+  enableGnomeTray: () => transport.invoke<void>('EnableGnomeTray'),
+  dismissGnomeTrayPrompt: () => transport.invoke<void>('DismissGnomeTrayPrompt'),
 };
 
 export function onTorrentsTick(handler: (rows: Torrent[]) => void): () => void {

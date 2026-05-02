@@ -12,6 +12,7 @@ const baseCfg: UpdaterConfigDTO = {
   channel: 'stable',
   last_checked_at: 0,
   last_seen_version: '',
+  install_source: 'manual',
 };
 
 const updateAvailableInfo: UpdateInfoDTO = {

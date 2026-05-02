@@ -55,6 +55,7 @@ type Props = {
   onCreateFeed: (f: FeedDTO) => Promise<void>;
   onUpdateFeed: (f: FeedDTO) => Promise<void>;
   onDeleteFeed: (id: number) => Promise<void>;
+  onPollFeed: (id: number) => Promise<void>;
   onLoadFiltersForFeed: (feedID: number) => Promise<void>;
   onCreateFilter: (f: FilterDTO) => Promise<void>;
   onUpdateFilter: (f: FilterDTO) => Promise<void>;
@@ -127,6 +128,7 @@ export function SettingsRoute(props: Props) {
               onCreateFeed={props.onCreateFeed}
               onUpdateFeed={props.onUpdateFeed}
               onDeleteFeed={props.onDeleteFeed}
+              onPollFeed={props.onPollFeed}
               onLoadFilters={props.onLoadFiltersForFeed}
               onCreateFilter={props.onCreateFilter}
               onUpdateFilter={props.onUpdateFilter}

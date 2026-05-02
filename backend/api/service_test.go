@@ -429,6 +429,26 @@ func TestService_VerifyWebCredentials_NoPasswordSet(t *testing.T) {
 	require.False(t, svc.VerifyWebCredentials(ctx, "alice", "anything"))
 }
 
+// TestService_VerifyWebCredentials_DefaultsToAdmin pins the mosaicd
+// first-boot contract: when SetWebPasswordEphemeral runs on a fresh DB
+// (nothing has called SetWebConfig yet, so settingWebUsername is ""),
+// VerifyWebCredentials must accept the same default username
+// GetWebConfig hands back ("admin"). Without this, the printed banner
+// says "Username: admin" but logging in with admin returns "invalid
+// credentials" because the stored value is "" != "admin".
+func TestService_VerifyWebCredentials_DefaultsToAdmin_OnFreshDB(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	// Do NOT call SetWebConfig — leave settingWebUsername unset to
+	// mimic mosaicd's first-boot state. The ephemeral-password path
+	// only writes the password hash, not the username.
+	require.NoError(t, svc.SetWebPasswordEphemeral(ctx, "auto-generated-pw"))
+	require.True(t, svc.VerifyWebCredentials(ctx, "admin", "auto-generated-pw"),
+		"login with the displayed default username must succeed")
+	require.False(t, svc.VerifyWebCredentials(ctx, "admin", "wrong"))
+	require.False(t, svc.VerifyWebCredentials(ctx, "someone-else", "auto-generated-pw"))
+}
+
 func TestService_RotateAPIKey_AndVerify(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()

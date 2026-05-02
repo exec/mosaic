@@ -40,13 +40,17 @@ func NewServer(svc *api.Service, hub *Hub, sessions *SessionStore, staticFS fs.F
 	return &Server{svc: svc, hub: hub, sessions: sessions, staticFS: staticFS, dataDir: dataDir}
 }
 
-// Apply starts, stops, or restarts the server to match cfg.
-func (s *Server) Apply(cfg api.WebConfigDTO) {
+// Apply starts, stops, or restarts the server to match cfg. Returns the
+// error from net.Listen / startLocked so callers can decide whether the
+// failure is fatal (mosaicd's bootstrap: yes, the daemon is useless
+// without its web surface) or recoverable (GUI Mosaic during runtime
+// re-config: log + surface in UI, don't kill the desktop session).
+func (s *Server) Apply(cfg api.WebConfigDTO) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.srv != nil && s.current == cfg {
-		return // unchanged
+		return nil // unchanged
 	}
 
 	if s.srv != nil {
@@ -55,12 +59,16 @@ func (s *Server) Apply(cfg api.WebConfigDTO) {
 	s.current = cfg
 
 	if !cfg.Enabled {
-		return
+		return nil
 	}
 
 	if err := s.startLocked(cfg); err != nil {
+		// Log here so we always have a server-side trail even if the
+		// caller swallows the returned error.
 		log.Error().Err(err).Msg("remote: start web interface")
+		return err
 	}
+	return nil
 }
 
 // Stop tears down the running server (no-op if not running).

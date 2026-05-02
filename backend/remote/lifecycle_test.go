@@ -163,7 +163,11 @@ func TestServer_ApplyDisablesRunning(t *testing.T) {
 
 func TestService_OnWebConfigChange_FiresFromSetWebConfig(t *testing.T) {
 	svc, srv := newServerFixture(t)
-	svc.OnWebConfigChange(srv.Apply)
+	// Apply now returns an error so callers can decide whether to
+	// fatal (mosaicd bootstrap) or log (GUI / runtime re-config).
+	// The OnWebConfigChange hook signature is fixed at func(WebConfigDTO),
+	// so wrap to discard.
+	svc.OnWebConfigChange(func(c api.WebConfigDTO) { _ = srv.Apply(c) })
 
 	// SetWebConfig should now restart srv.
 	port := freePort(t)
