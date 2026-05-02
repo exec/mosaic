@@ -37,12 +37,15 @@ var assets embed.FS
 var version = "dev"
 
 func main() {
-	// On Windows, when File Explorer launches us with a .torrent path while
-	// another Mosaic is already running, we MUST forward args + exit before
-	// touching anacrolix's listen port (port-bind would fail and log.Fatal
-	// would kill us before reaching Wails's SingleInstanceLock dispatch).
-	// Wails-format mutex+WM_COPYDATA — see backend/platform/single_instance_*
-	// for the wire details. No-op on macOS / Linux.
+	// On Windows + Linux, when the file manager launches us with a
+	// .torrent path while another Mosaic is already running, we MUST
+	// forward args + exit before touching anacrolix's listen port
+	// (port-bind would fail and log.Fatal would kill us before reaching
+	// the second-instance dispatch). Windows uses Wails's mutex+WM_COPYDATA
+	// wire; Linux uses our own Unix socket because Wails's D-Bus single-
+	// instance silently fails on common setups (Wayland, sandboxed
+	// launchers, missing XDG_RUNTIME_DIR). See
+	// backend/platform/single_instance_*.go. No-op on macOS.
 	if platform.EarlyForwardLaunchArgs("io.github.exec.mosaic") {
 		os.Exit(0)
 	}
@@ -157,6 +160,15 @@ func main() {
 
 	app := NewApp(svc, hub)
 
+	// Linux second-instance listener. Bound here (after the early-forward
+	// check has returned false, so we know we're the first instance) so any
+	// file-handler launches that fire while we're booting are queued and
+	// dispatched as soon as app.HandleLaunchArgs is safe to call. No-op on
+	// Windows + macOS — both rely on Wails's own second-instance plumbing.
+	if err := platform.StartSecondInstanceListener("io.github.exec.mosaic", app.HandleLaunchArgs); err != nil {
+		log.Warn().Err(err).Msg("single-instance listener failed; .torrent forwards from a running instance won't work")
+	}
+
 	// Desktop integration: notifications subscriber + system tray.
 	//
 	// The subscriber consumes engine events and fires beeep notifications on
@@ -193,7 +205,25 @@ func main() {
 		trayHandle.SetAltSpeedActive(l.AltActive)
 	}
 
-	if desktopCfg.TrayEnabled {
+	// On Linux (and only Linux), check whether anyone is actually watching
+	// for tray icons before starting the tray goroutine. Vanilla Gnome
+	// rejects the StatusNotifierItem protocol; users have to install the
+	// AppIndicator extension before our tray icon would render anywhere.
+	// If the watcher isn't there, starting the tray is a silent no-op
+	// from the user's POV — they'd see no icon AND, worse, close-to-tray
+	// would orphan the window into a hidden state with no way to bring
+	// it back. Disable both for the session and log the fix.
+	trayAvailable := tray.Available()
+	if goruntime.GOOS == "linux" && !trayAvailable {
+		log.Warn().Msg(
+			"system tray not available on this desktop session " +
+				"(no StatusNotifierWatcher owner). Tray icon hidden, " +
+				"close-to-tray disabled. On Gnome, install " +
+				"gnome-shell-extension-appindicator (and enable it via " +
+				"the Extensions app) to get a tray icon.",
+		)
+	}
+	if desktopCfg.TrayEnabled && trayAvailable {
 		trayHandle.Start()
 	}
 	defer trayHandle.Stop()
@@ -254,6 +284,12 @@ func main() {
 		if !cfg.TrayEnabled || !cfg.CloseToTray {
 			return false
 		}
+		// Linux without an active StatusNotifier watcher: the user can't
+		// see the tray icon, so hiding the window would strand it. Quit
+		// instead.
+		if !trayAvailable {
+			return false
+		}
 		if app.ctx != nil {
 			wailsruntime.WindowHide(app.ctx)
 		}
@@ -268,7 +304,7 @@ func main() {
 		// frontend still mounts and connects to the WS / fetches state on
 		// load — only the OS window is hidden until the user opens it from
 		// the tray.
-		StartHidden: desktopCfg.StartMinimized && desktopCfg.TrayEnabled && goruntime.GOOS != "darwin",
+		StartHidden: desktopCfg.StartMinimized && desktopCfg.TrayEnabled && trayAvailable && goruntime.GOOS != "darwin",
 		// On macOS, X button hides the app (Cmd+H equivalent) at the AppKit
 		// layer instead of triggering OnBeforeClose. Dock-click auto-unhides.
 		// Cmd+Q and dock right-click → Quit still terminate cleanly via the
@@ -312,10 +348,10 @@ func main() {
 			app,
 		},
 	}
-	// On Windows we hide the OS titlebar entirely and render our own
-	// minimize/maximize/close controls in the top-right of the SPA. macOS
-	// keeps its hidden-inset titlebar (traffic lights stay).
-	if goruntime.GOOS == "windows" {
+	// On Windows + Linux we hide the OS titlebar entirely and render our
+	// own minimize/maximize/close controls in the top-right of the SPA.
+	// macOS keeps its hidden-inset titlebar (traffic lights stay).
+	if goruntime.GOOS == "windows" || goruntime.GOOS == "linux" {
 		opts.Frameless = true
 	}
 	err = wails.Run(opts)

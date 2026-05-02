@@ -134,3 +134,15 @@ func EarlyForwardLaunchArgs(uniqueId string) bool {
 	procSendMessageW.Call(hwnd, uintptr(wmCopyData), 0, uintptr(unsafe.Pointer(&cd)))
 	return true
 }
+
+// StartSecondInstanceListener is a no-op on Windows. Wails's normal
+// SingleInstanceLock infrastructure (its hidden message-only window +
+// WM_COPYDATA receiver) handles the receive side; our
+// EarlyForwardLaunchArgs handles the second-instance forward.
+func StartSecondInstanceListener(uniqueId string, onArgs func(args []string)) error {
+	return nil
+}
+
+// CleanupSingleInstance is a no-op on Windows; the early mutex is
+// auto-released when the process exits.
+func CleanupSingleInstance() {}

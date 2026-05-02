@@ -1,7 +1,7 @@
 import {api} from '../../lib/bindings';
 
 // Win11-style caption controls — three 46×32 buttons in the top-right.
-// Used only on Wails+Windows where we hide the OS title bar.
+// Used on Wails+Windows and Wails+Linux where we hide the OS title bar.
 export function WindowControls() {
   return (
     <div

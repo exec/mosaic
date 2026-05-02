@@ -10,7 +10,10 @@ import {DropZone} from './DropZone';
 import {WindowControls} from './WindowControls';
 
 type Props = {
-  isWindows: boolean;
+  // True on platforms where we hide the OS title bar entirely and render
+  // our own minimize/maximize/close controls (Windows + Linux). macOS
+  // keeps its native traffic-lights via Wails's hidden-inset titlebar.
+  frameless: boolean;
   view: AppView;
   settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
@@ -58,7 +61,7 @@ export function WindowShell(props: Props) {
           for a follow-up mousemove that doesn't always arrive when the
           window is already key. Parley hit this on Tauri and solved it the
           same way. h-7 covers the traffic-lights inset on macOS and sits
-          left of WindowControls on Windows. */}
+          left of WindowControls on Windows + Linux. */}
       <div class="flex h-7 shrink-0">
         <div
           class="flex-1"
@@ -75,7 +78,7 @@ export function WindowShell(props: Props) {
             }
           }}
         />
-        <Show when={props.isWindows}>
+        <Show when={props.frameless}>
           <WindowControls />
         </Show>
       </div>
