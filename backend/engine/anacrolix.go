@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"os"
 	goruntime "runtime"
@@ -598,6 +599,22 @@ func (a *AnacrolixBackend) Pause(id TorrentID) error {
 	if !ok {
 		return errors.New("not found")
 	}
+	// Two-step pause:
+	//   1. DisallowDataDownload — stops anacrolix from issuing piece
+	//      requests, even if peer conns come back up. This is the
+	//      load-bearing guarantee.
+	//   2. SetMaxEstablishedConns(0) — drops existing peer conns and
+	//      refuses new ones, so we're not accepting/uploading either.
+	//
+	// Pre-fix Pause only did #2, which has a known race against the
+	// scheduler tick: scheduler reads List() at t=0, user clicks Pause
+	// at t=10ms (paused flag flips, conns drop), scheduler iterates the
+	// stale snapshot and calls ScheduledPause(id, false) →
+	// SetMaxEstablishedConns(80), peers reconnect, anacrolix happily
+	// resumes piece requests because the priority lift is still in place.
+	// User sees a paused torrent that's still downloading. Disallow
+	// closes the gap regardless of conn-cap thrashing.
+	t.DisallowDataDownload()
 	t.SetMaxEstablishedConns(0)
 	a.pausedMu.Lock()
 	a.paused[id] = true
@@ -902,8 +919,8 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 				ClientName:   name,
 				Flags:        peerFlagsFor(pc),
 				Progress:     pieceProgressOf(t, pc),
-				DownloadRate: int64(pc.DownloadRate()),
-				UploadRate:   int64(pc.Stats().LastWriteUploadRate),
+				DownloadRate: clampRate(pc.DownloadRate()),
+				UploadRate:   clampRate(pc.Stats().LastWriteUploadRate),
 				CountryCode:  "",
 			})
 		}
@@ -960,6 +977,25 @@ func splitHostPort(addr string) (string, int, error) {
 		return h, 0, err
 	}
 	return h, port, nil
+}
+
+// clampRate sanitizes anacrolix's float64 per-peer rate counters before
+// they reach our int64 DTO. NaN ((0 piece-data bytes)/(0 ns) for peers
+// we're not actually exchanging data with), +Inf (writeDuration sub-
+// nanosecond), and negative values all get pinned to safe ranges.
+//
+// Pre-fix the int64() cast on NaN produced math.MinInt64
+// (-9223372036854775808) and the SPA rendered "-922337203685477600 B/s"
+// for "majority of peers" because that's the resting state of
+// LastWriteUploadRate on conns we never piece-uploaded to.
+func clampRate(f float64) int64 {
+	if math.IsNaN(f) || f < 0 {
+		return 0
+	}
+	if math.IsInf(f, 1) || f > float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(f)
 }
 
 // peerFlagsFor returns the BitTorrent peer flag string. anacrolix v1.61 keeps
@@ -1064,10 +1100,29 @@ func (a *AnacrolixBackend) SetForceStart(id TorrentID, force bool) {
 // user's manual Pause. It uses the same SetMaxEstablishedConns(0/80) trick
 // the manual Pause uses, but writes only the scheduledPause map flag so
 // snapshots can distinguish "user-paused" from "queue-held".
+//
+// CRITICAL: ScheduledPause(id, false) MUST refuse to re-enable a
+// user-paused torrent. The scheduler reads a List() snapshot once per
+// tick; if the user clicks Pause between the List() read and the
+// per-id apply loop, the scheduler will try to ScheduledPause(false)
+// the now-paused torrent. Without this guard, SetMaxEstablishedConns(80)
+// fires and peers reconnect to a "paused" torrent. Pause's
+// DisallowDataDownload prevents new piece requests but uploads + half-
+// open conns can still leak through — and the UX bug ("paused torrent
+// is still downloading") is exactly this race.
 func (a *AnacrolixBackend) ScheduledPause(id TorrentID, paused bool) {
 	t, ok := a.find(id)
 	if !ok {
 		return
+	}
+	if !paused {
+		// Re-enable path — refuse if the user has paused this torrent.
+		a.pausedMu.RLock()
+		userPaused := a.paused[id]
+		a.pausedMu.RUnlock()
+		if userPaused {
+			return
+		}
 	}
 	if paused {
 		t.SetMaxEstablishedConns(0)

@@ -59,7 +59,11 @@ export function TorrentCard(props: Props) {
       </div>
 
       <div class="mt-2.5">
-        <ProgressBar value={t().progress} active={!t().paused && !t().completed} />
+        <ProgressBar
+          value={t().progress}
+          active={!t().paused && !t().completed}
+          status={t().files_missing ? 'error' : t().paused ? 'paused' : t().completed ? 'completed' : 'downloading'}
+        />
       </div>
 
       <div class="mt-2 flex items-center justify-between text-xs text-zinc-400">
