@@ -16,8 +16,9 @@ import (
 type InstallSource string
 
 const (
-	// InstallSourceAPT: dpkg owns the running binary. The /var/lib/dpkg
-	// .list file for the mosaic package enumerates our exe path.
+	// InstallSourceAPT: dpkg owns the running binary. Detected via the
+	// sentinel file written by our .deb postinst (see scripts/
+	// linux-postinstall.sh) with a fallback to globbing dpkg's bookkeeping.
 	InstallSourceAPT InstallSource = "apt"
 	// InstallSourceAppImage: the AppImage runtime is wrapping us. The
 	// AppImage env var is set by the runtime before exec'ing the
@@ -30,10 +31,34 @@ const (
 	InstallSourceManual InstallSource = "manual"
 )
 
+// sentinelPathAPT is the canonical apt-managed marker file. The .deb
+// postinst writes it on `configure`; the postremove deletes it on `purge`.
+// We own both ends, so this is the authoritative signal — no parsing,
+// no path-matching, just a stat call.
+//
+// Mirrored as a literal in scripts/linux-postinstall.sh and
+// scripts/linux-postremove.sh — keep all three in sync.
+const sentinelPathAPT = "/usr/share/mosaic/installed-by-apt"
+
+// sentinelPaths lets tests inject alternative marker paths via t.TempDir
+// without touching the real /usr/share/mosaic. Production code reads
+// the package-level default; tests override and restore.
+var sentinelPaths = []string{sentinelPathAPT}
+
+// dpkgListGlob is the legacy fallback for users who installed mosaic from
+// a .deb that predates the sentinel-writing postinst (≤ v0.4.3). Once the
+// install base has rolled past that release we can drop this. Exposed as
+// a var (not const) so tests can point it elsewhere.
+var dpkgListGlob = "/var/lib/dpkg/info/mosaic*.list"
+
 // DetectInstallSource inspects the runtime to classify how the binary
 // was installed. Cheap (one env lookup + at most two stat calls); safe
 // to call at startup before anything else binds resources.
 func DetectInstallSource() InstallSource {
+	// AppImage check MUST come first: an AppImage payload running on a
+	// host that previously had a .deb installed (and never purged it)
+	// would otherwise mis-detect as apt-managed and disable in-app
+	// updates that the AppImage actually needs.
 	if os.Getenv("APPIMAGE") != "" {
 		return InstallSourceAppImage
 	}
@@ -43,13 +68,42 @@ func DetectInstallSource() InstallSource {
 	return InstallSourceManual
 }
 
-// isAPTInstalled reports whether dpkg believes the running binary
-// belongs to the mosaic package. This is the authoritative check —
-// /var/lib/dpkg/info/<pkg>.list enumerates every file dpkg installed
-// for a package, so the running exe path appearing in there means we
-// ARE the apt-managed binary (and updating ourselves out of band would
-// desync from dpkg).
+// isAPTInstalled reports whether the running binary is managed by apt.
+//
+// Primary signal: a sentinel file written by our postinst. We own both
+// ends of that contract so there's nothing to misinterpret — file
+// present = apt managed.
+//
+// Fallback signal: the legacy dpkg .list glob. Retained for backward
+// compatibility with users upgrading from ≤ v0.4.3 whose installed .deb
+// never ran the new postinst. Safe to delete in a future release once
+// the install base has rolled forward (and the cleaner, sentinel-only
+// path is what every new install has been on for several versions).
 func isAPTInstalled() bool {
+	for _, p := range sentinelPaths {
+		if sentinelExists(p) {
+			return true
+		}
+	}
+	return aptListMatch()
+}
+
+// sentinelExists reports whether path exists and is a regular file.
+// Symlinks, directories, and other types are intentionally rejected:
+// the sentinel is a small text file we wrote ourselves, anything else
+// at that path is suspicious and we'd rather not trust it.
+func sentinelExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular()
+}
+
+// aptListMatch is the legacy detection path: search /var/lib/dpkg/info/
+// mosaic*.list for a line equal to the running exe path. Kept for users
+// on pre-sentinel installs; remove once those have rolled forward.
+func aptListMatch() bool {
 	exe, err := os.Executable()
 	if err != nil {
 		return false
@@ -66,7 +120,7 @@ func isAPTInstalled() bool {
 	// Search all .list files matching mosaic*.list — covers both the
 	// plain `mosaic.list` (native package) and `mosaic:amd64.list`
 	// (multiarch convention) without us having to know which we are.
-	matches, err := filepath.Glob("/var/lib/dpkg/info/mosaic*.list")
+	matches, err := filepath.Glob(dpkgListGlob)
 	if err != nil || len(matches) == 0 {
 		return false
 	}

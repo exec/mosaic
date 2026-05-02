@@ -18,6 +18,7 @@ contents:
     dst: /usr/share/icons/hicolor/512x512/apps/mosaic.png
 scripts:
   postinstall: scripts/linux-postinstall.sh
+  postremove: scripts/linux-postremove.sh
 overrides:
   deb:
     # Built with -tags webkit2_41 — runtime dep is the 4.1 ABI which is

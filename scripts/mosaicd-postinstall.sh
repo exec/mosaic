@@ -5,6 +5,21 @@
 # behavior: a daemon you installed should run.
 set -e
 
+# apt-managed sentinel for the headless daemon. mosaicd doesn't currently
+# run the in-app updater (auto-update is intentionally disabled — see the
+# package comment in cmd/mosaicd/main.go), but we write the sentinel so
+# any future tooling shares the same detection seam as the GUI.
+# Gated on configure (dpkg) / 1|2 (rpm), skipped on abort-* rollbacks.
+case "${1:-}" in
+    configure|1|2|"")
+        mkdir -p /usr/share/mosaic 2>/dev/null || true
+        {
+            printf 'mosaicd %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
+                > /usr/share/mosaic/installed-by-apt-mosaicd
+        } 2>/dev/null || true
+        ;;
+esac
+
 if command -v systemctl >/dev/null 2>&1; then
     # daemon-reload errors are surfaced (not silenced) so a broken unit file
     # is visible to the operator instead of getting swept under the rug.
