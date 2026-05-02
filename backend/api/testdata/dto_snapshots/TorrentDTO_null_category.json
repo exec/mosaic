@@ -1,0 +1,29 @@
+{
+  "id": "deadbeef00112233445566778899aabbccddeeff",
+  "name": "Example.Release.1080p",
+  "magnet": "magnet:?xt=urn:btih:deadbeef",
+  "save_path": "/home/user/Downloads",
+  "total_bytes": 2147483648,
+  "bytes_done": 1073741824,
+  "progress": 0.5,
+  "download_rate": 524288,
+  "upload_rate": 65536,
+  "peers": 15,
+  "seeds": 5,
+  "paused": false,
+  "completed": false,
+  "added_at": 1735689600,
+  "category_id": null,
+  "tags": [
+    {
+      "id": 7,
+      "name": "linux",
+      "color": "#3366ff"
+    }
+  ],
+  "queue_position": 1,
+  "force_start": false,
+  "queued": false,
+  "verifying": false,
+  "files_missing": false
+}

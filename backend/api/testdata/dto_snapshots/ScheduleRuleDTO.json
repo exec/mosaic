@@ -1,0 +1,10 @@
+{
+  "id": 1,
+  "days_mask": 124,
+  "start_min": 540,
+  "end_min": 1080,
+  "down_kbps": 2000,
+  "up_kbps": 500,
+  "alt_only": false,
+  "enabled": true
+}

@@ -1,0 +1,8 @@
+{
+  "index": 0,
+  "path": "dir/file.bin",
+  "size": 1024,
+  "bytes_done": 512,
+  "progress": 0.5,
+  "priority": "high"
+}

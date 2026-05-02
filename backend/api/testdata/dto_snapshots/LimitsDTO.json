@@ -1,0 +1,7 @@
+{
+  "down_kbps": 5000,
+  "up_kbps": 1000,
+  "alt_down_kbps": 1000,
+  "alt_up_kbps": 200,
+  "alt_active": false
+}

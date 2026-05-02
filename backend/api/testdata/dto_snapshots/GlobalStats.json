@@ -1,0 +1,8 @@
+{
+  "total_torrents": 10,
+  "active_torrents": 3,
+  "seeding_torrents": 2,
+  "total_download_rate": 1024000,
+  "total_upload_rate": 256000,
+  "total_peers": 42
+}

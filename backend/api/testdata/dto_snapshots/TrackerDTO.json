@@ -1,0 +1,9 @@
+{
+  "url": "udp://tracker.example.com:1337",
+  "status": "ok",
+  "seeds": 10,
+  "peers": 20,
+  "downloaded": 100,
+  "last_announce": 1735689600,
+  "next_announce": 1735690200
+}

@@ -1,0 +1,6 @@
+{
+  "url": "https://example.com/blocklist.gz",
+  "enabled": true,
+  "last_loaded_at": 1735689600,
+  "entries": 12345
+}

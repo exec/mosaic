@@ -1,0 +1,9 @@
+{
+  "id": 1,
+  "url": "https://example.com/feed.xml",
+  "name": "Example Feed",
+  "interval_min": 60,
+  "last_polled": 1735689600,
+  "etag": "W/\"abc123\"",
+  "enabled": true
+}

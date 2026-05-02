@@ -1,0 +1,8 @@
+{
+  "id": 3,
+  "feed_id": 7,
+  "regex": "1080p\\.x265",
+  "category_id": 42,
+  "save_path": "/home/user/Downloads/Shows",
+  "enabled": true
+}
