@@ -33,6 +33,52 @@ func TestScheduler_PausesOverflow(t *testing.T) {
 	}, 2*time.Second, 100*time.Millisecond)
 }
 
+// Regression: when multiple torrents share the same QueuePosition (the
+// state right after a fresh RestoreOnStartup before the user has reordered
+// anything — or any time queue positions tie), sort.Slice's UNSTABLE
+// ordering used to rotate which torrent got ScheduledPaused each tick.
+// With 2s ticks and SetMaxEstablishedConns(0/80) firing on each rotation,
+// peers churned and downloads/seeds never progressed. Tie-breaking on ID
+// makes the chosen victim deterministic per process — same torrent stays
+// queued, the rest stay running, peers don't churn.
+func TestScheduler_TieBreaksDeterministicallyOnEqualQueuePosition(t *testing.T) {
+	fb := NewFakeBackend()
+	eng := NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	// Three torrents, all at QueuePosition 0 (the default). With cap=2,
+	// exactly one must be queued — and it must be the same one across
+	// many ticks.
+	ids := make([]TorrentID, 3)
+	for i := 0; i < 3; i++ {
+		id, _ := eng.AddMagnet(context.Background(), fmt.Sprintf("magnet:?xt=urn:btih:t%d", i), "/tmp")
+		ids[i] = id
+		// Leave QueuePosition at default 0 — the tie-break is what's under test.
+	}
+
+	s := NewScheduler(eng, 2, 0, 25*time.Millisecond)
+	t.Cleanup(s.Close)
+
+	queuedVictim := func() TorrentID {
+		for _, snap := range eng.List() {
+			if snap.Queued {
+				return snap.ID
+			}
+		}
+		return ""
+	}
+
+	// Wait for the first stable selection.
+	require.Eventually(t, func() bool { return queuedVictim() != "" }, time.Second, 25*time.Millisecond)
+	first := queuedVictim()
+
+	// Run for 30 ticks (~750ms with 25ms tick). Victim must not change.
+	for i := 0; i < 30; i++ {
+		time.Sleep(25 * time.Millisecond)
+		require.Equal(t, first, queuedVictim(), "scheduler victim must be stable across ticks")
+	}
+}
+
 func TestScheduler_ForceStartBypassesLimit(t *testing.T) {
 	fb := NewFakeBackend()
 	eng := NewEngine(fb, 50*time.Millisecond)

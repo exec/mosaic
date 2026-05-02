@@ -279,6 +279,20 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 // either kicks DownloadAll OR — if Service marked this torrent as previously
 // complete and verify finds <100% — flags FilesMissing and pauses so the
 // app doesn't silently redownload bytes the user just deleted.
+//
+// The caller's ctx is honored ONLY for the pre-GotInfo wait (so a Wails
+// shutdown / HTTP-handler return / RSS-poll-cycle end cancels DHT lookup
+// promptly). Past GotInfo we switch to context.Background() — verify and
+// priority-lift must complete regardless of who originated the Add, or
+// the torrent silently never downloads. Pre-fix: every Add path threaded
+// the caller's request-scoped ctx all the way through; HTTP handlers,
+// RSS PollNow, and any second-instance IPC dispatch returned before
+// verify finished, the cancelled-ctx check before setAllFilesPriority
+// bailed, file priorities stayed at PiecePriorityNone, and peers
+// connected but no pieces were ever requested. The Wails GUI happened
+// to dodge it because app.go threads the long-lived a.ctx.
+// Anacrolix's own goroutines are cancelled on Client.Close (which
+// Engine.Close calls), so Background ctx is shutdown-safe.
 func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *torrent.Torrent) {
 	// Wait for metainfo. AddFile already has it (channel is pre-closed);
 	// AddMagnet has to fetch it via DHT/PEX before we can hash anything.
@@ -287,6 +301,8 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	case <-ctx.Done():
 		return
 	}
+	// Past GotInfo — decouple from caller. See doc comment.
+	ctx = context.Background()
 
 	a.setVerifying(id, true)
 	defer a.setVerifying(id, false)
@@ -333,10 +349,6 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 		a.paused[id] = true
 		a.pausedMu.Unlock()
 		t.SetMaxEstablishedConns(0)
-		return
-	}
-
-	if ctx.Err() != nil {
 		return
 	}
 

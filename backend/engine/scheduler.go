@@ -75,11 +75,21 @@ func (s *Scheduler) tick() {
 
 	apply := func(group []Snapshot, max int) {
 		sort.Slice(group, func(i, j int) bool {
-			// Force-started first, then by queue_position ascending
+			// Force-started first, then by queue_position ascending,
+			// finally tie-break on ID. The ID tie-break is what keeps
+			// the chosen victim stable across ticks when multiple
+			// torrents share QueuePosition (e.g. all 0 right after a
+			// fresh restore-on-startup). Without it sort.Slice's
+			// unstable ordering rotates which torrent gets paused
+			// each 2s tick, which presents to the user as "completed
+			// torrents go to 0 peers and stay there".
 			if group[i].ForceStart != group[j].ForceStart {
 				return group[i].ForceStart
 			}
-			return group[i].QueuePosition < group[j].QueuePosition
+			if group[i].QueuePosition != group[j].QueuePosition {
+				return group[i].QueuePosition < group[j].QueuePosition
+			}
+			return group[i].ID < group[j].ID
 		})
 		// Active count includes force-starts; max=0 means unlimited
 		active := 0

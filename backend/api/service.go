@@ -1509,6 +1509,22 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 		if r.CompletedAt != nil {
 			s.engine.MarkExpectedComplete(id)
 		}
+		// Propagate persisted queue ordering so the scheduler's tie-breaks
+		// are stable across launches. Without this every restored torrent
+		// has QueuePosition=0 and ForceStart=false in the engine, and any
+		// non-zero MaxActiveSeeds / MaxActiveDownloads picks arbitrary
+		// victims via sort.Slice's unstable ordering — a completed torrent
+		// that was seeding fine yesterday can come back paused-by-queue
+		// today with no peers attached.
+		s.engine.SetQueuePosition(id, r.QueuePosition)
+		s.engine.SetForceStart(id, r.ForceStart)
+		// Surface persisted user-pause too, otherwise a torrent the user
+		// paused last session resumes silently.
+		if r.Paused {
+			if err := s.engine.Pause(id); err != nil {
+				log.Warn().Err(err).Str("infohash", r.InfoHash).Msg("restore: re-pause failed")
+			}
+		}
 	}
 	if failed > 0 || orphaned > 0 {
 		log.Warn().Int("failed", failed).Int("orphaned", orphaned).Int("total", len(records)).Msg("restore: not all torrents could be re-added")
