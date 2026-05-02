@@ -101,3 +101,31 @@ func (t *Tags) ForTorrent(ctx context.Context, infohash string) ([]Tag, error) {
 	}
 	return out, rows.Err()
 }
+
+// ForAllTorrents returns the full tag-assignment table joined with the
+// tag rows, grouped by infohash. Used by Service.ListTorrents to avoid
+// the N+1 it would otherwise pay calling ForTorrent once per row on
+// every tick. The returned map only contains infohashes that have at
+// least one tag; callers expecting an empty slice for tagless torrents
+// should default-construct on miss.
+func (t *Tags) ForAllTorrents(ctx context.Context) (map[string][]Tag, error) {
+	rows, err := t.db.SQL().QueryContext(ctx, `
+		SELECT tt.infohash, t.id, t.name, t.color
+		FROM torrent_tags tt
+		JOIN tags t ON t.id = tt.tag_id
+		ORDER BY tt.infohash, t.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string][]Tag)
+	for rows.Next() {
+		var infohash string
+		var tag Tag
+		if err := rows.Scan(&infohash, &tag.ID, &tag.Name, &tag.Color); err != nil {
+			return nil, err
+		}
+		out[infohash] = append(out[infohash], tag)
+	}
+	return out, rows.Err()
+}
