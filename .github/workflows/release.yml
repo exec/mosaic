@@ -249,12 +249,16 @@ jobs:
         run: pwsh scripts/build-windows.ps1
 
       - uses: actions/upload-artifact@v4
-        # if: always() — ship whatever the build step did manage to produce
-        # before failing. Without this a late-stage error (e.g. AppImage but
-        # nfpm already wrote .deb+.rpm) means we lose all earlier artifacts.
-        # if-no-files-found: warn — don't fail the upload step itself if the
-        # entire build crashed before any artifact was created.
-        if: always()
+        # always() — ship whatever the build step did manage to produce
+        # before failing. Without this a late-stage error (e.g. AppImage
+        # but nfpm already wrote .deb+.rpm) means we lose all earlier
+        # artifacts.
+        # Tag-only — main pushes are here to populate caches and catch
+        # build breaks; the resulting binaries don't get released and
+        # aren't worth the storage / upload time on every commit.
+        # if-no-files-found: warn — don't fail the upload step itself
+        # if the entire build crashed before any artifact was created.
+        if: always() && startsWith(github.ref, 'refs/tags/')
         with:
           name: mosaic-${{ matrix.platform }}
           path: ${{ matrix.artifact-glob }}
