@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	g "github.com/anacrolix/generics"
@@ -317,7 +318,29 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	ipBlock := &ipBlocklistProxy{}
 	tcfg.IPBlocklist = ipBlock
 
+	// Listen-port bind with fallback. anacrolix's listenAll does NOT retry
+	// a static port on EADDRINUSE — it just returns the bind error, which
+	// pre-fix bubbled up to main.go's log.Fatal and killed the process.
+	// On a system where another BitTorrent client (qBittorrent, Deluge,
+	// Transmission, …) already holds our configured port, that meant
+	// Mosaic refused to start at all and the user's torrents never seeded.
+	// (See main.go's second-instance comment — same failure mode, only
+	// that one was handled for "another Mosaic instance" but never for
+	// "any other torrent client".)
+	//
+	// Behavior: if the configured port is non-zero AND fails with an
+	// address-in-use error, retry with port 0 so the OS picks a free
+	// ephemeral. The caller is expected to read ListenPort() afterwards
+	// and persist it back to settings (see main.go) so the next launch
+	// gets a stable port instead of a fresh random one each time. We do
+	// NOT fall back on other errors — privilege denied, permission, or a
+	// genuine config bug should still surface.
 	c, err := torrent.NewClient(tcfg)
+	if err != nil && cfg.ListenPort != 0 && isAddrInUseErr(err) {
+		log.Printf("anacrolix: port %d unavailable (%v) — falling back to OS-picked port; persist it to keep it stable across launches", cfg.ListenPort, err)
+		tcfg.ListenPort = 0
+		c, err = torrent.NewClient(tcfg)
+	}
 	if err != nil {
 		_ = pieceCompletion.Close()
 		return nil, fmt.Errorf("anacrolix client: %w", err)
@@ -347,6 +370,34 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		preallocateFullFiles: cfg.PreallocateFullFiles,
 	}, nil
 }
+
+// isAddrInUseErr reports whether err comes from a bind() that lost the
+// race to another listener on the same port. Matches the Linux/macOS
+// EADDRINUSE syscall errno AND the Windows WSAEADDRINUSE-translated
+// error string ("Only one usage of each socket address...") that Go's
+// net package surfaces. anacrolix wraps the underlying *net.OpError /
+// *os.SyscallError before returning, so errors.Is on the wrapped chain
+// catches the unix path; the string contains-check covers Windows where
+// the syscall numeric value isn't the same constant.
+func isAddrInUseErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "address already in use") ||
+		strings.Contains(s, "Only one usage of each socket address")
+}
+
+// ListenPort returns the port the underlying anacrolix client actually
+// bound. After a NewAnacrolixBackend that fell back from the configured
+// port (because the OS reported EADDRINUSE), this is the OS-picked
+// ephemeral; otherwise it's the configured port. Callers (main.go)
+// persist this back to the settings DAO so the next launch starts with
+// a port that's already known-good for this machine.
+func (a *AnacrolixBackend) ListenPort() int { return a.client.LocalPort() }
 
 // newFileStorage builds anacrolix's file storage with our shared bolt
 // piece-completion store, honoring the preallocateFullFiles toggle.
