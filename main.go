@@ -123,6 +123,21 @@ func main() {
 	}
 	defer backend.Close()
 
+	// Persist the actual listening port if the engine had to fall back to
+	// an OS-picked ephemeral (because the configured port collided with
+	// another BitTorrent client on the same machine — Deluge / qBittorrent
+	// both default into 6881-6889). Without this the next launch would
+	// race for 6881 again, lose, and pick a *different* random port —
+	// which means the user's router port-forward never matches and they
+	// stay invisible to inbound peers across restarts. Writing back makes
+	// the chosen port sticky.
+	if actual := backend.ListenPort(); actual > 0 && actual != listenPort {
+		log.Info().Int("configured", listenPort).Int("actual", actual).Msg("listen port fell back to OS-picked; persisting")
+		if err := settingsDAO.Set(ctx, "peer_listen_port", strconv.Itoa(actual)); err != nil {
+			log.Warn().Err(err).Msg("persist fallback listen port failed")
+		}
+	}
+
 	eng := engine.NewEngine(backend, 500*time.Millisecond)
 	defer eng.Close()
 
