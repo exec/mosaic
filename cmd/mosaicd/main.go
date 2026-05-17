@@ -117,7 +117,8 @@ func main() {
 		log.Fatal().Err(err).Msg("load config")
 	}
 
-	ctx := context.Background()
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
 	db, err := persistence.Open(ctx, filepath.Join(paths.DataDir, "mosaic.db"))
 	if err != nil {
 		log.Fatal().Err(err).Msg("open db")
@@ -280,7 +281,7 @@ func main() {
 	if web.BindAll {
 		host = "0.0.0.0"
 	}
-	go hub.Run(ctx)
+	go streamTicks(ctx, svc, hub)
 
 	log.Info().Str("url", fmt.Sprintf("%s://%s:%d", scheme, host, web.Port)).Str("version", version).Msg("mosaicd: ready")
 
@@ -291,6 +292,7 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-stop
+	cancelCtx()
 	log.Info().Str("signal", sig.String()).Msg("mosaicd: shutting down")
 }
 
@@ -373,6 +375,42 @@ func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web ap
 	fmt.Fprintln(os.Stdout, "===========================================================================")
 	fmt.Fprintln(os.Stdout, "")
 	return nil
+}
+
+// streamTicks polls the service at regular intervals and broadcasts state
+// snapshots to all connected WebSocket clients via the hub. Mirrors the ticker
+// goroutine in app.go but without the Wails EventsEmit calls.
+func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
+	torrents := time.NewTicker(500 * time.Millisecond)
+	stats := time.NewTicker(1 * time.Second)
+	inspector := time.NewTicker(1 * time.Second)
+	defer torrents.Stop()
+	defer stats.Stop()
+	defer inspector.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-torrents.C:
+			rows, err := svc.ListTorrents(ctx)
+			if err != nil {
+				continue
+			}
+			hub.PublishTorrents(rows)
+		case <-stats.C:
+			s, err := svc.GlobalStats(ctx)
+			if err != nil {
+				continue
+			}
+			hub.PublishStats(s)
+		case <-inspector.C:
+			detail, err := svc.DetailForFocus(ctx)
+			if err != nil || detail == nil {
+				continue
+			}
+			hub.PublishInspector(*detail)
+		}
+	}
 }
 
 // randomPassword returns a 32-byte URL-safe random password (~256 bits of
