@@ -280,6 +280,8 @@ func main() {
 	if web.BindAll {
 		host = "0.0.0.0"
 	}
+	go hub.Run(ctx)
+
 	log.Info().Str("url", fmt.Sprintf("%s://%s:%d", scheme, host, web.Port)).Str("version", version).Msg("mosaicd: ready")
 
 	// Block until SIGINT / SIGTERM. systemd sends SIGTERM on `systemctl stop`;
