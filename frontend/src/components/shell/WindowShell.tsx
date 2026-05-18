@@ -20,6 +20,7 @@ type Props = {
   onNavigateRSS: () => void;
   onNavigateSchedule: () => void;
   onNavigateAbout: () => void;
+  onLogout?: () => void;
   torrents: Torrent[];
   filteredTorrents: Torrent[];
   stats: GlobalStatsT;
@@ -90,6 +91,7 @@ export function WindowShell(props: Props) {
           onNavigateRSS={props.onNavigateRSS}
           onNavigateSchedule={props.onNavigateSchedule}
           onNavigateAbout={props.onNavigateAbout}
+          onLogout={props.onLogout}
         />
         <div class="flex flex-1 min-w-0 flex-col">
           <div class="flex flex-1 min-h-0">

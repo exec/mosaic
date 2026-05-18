@@ -1,5 +1,5 @@
-import {For, type Component} from 'solid-js';
-import {Activity, Calendar, Rss, Settings, Info} from 'lucide-solid';
+import {For, Show, type Component} from 'solid-js';
+import {Activity, Calendar, Rss, Settings, Info, LogOut} from 'lucide-solid';
 import {Tooltip} from '../ui/Tooltip';
 import type {AppView} from '../../lib/store';
 import type {SettingsPane} from '../settings/SettingsSidebar';
@@ -23,6 +23,9 @@ type Props = {
   onNavigateRSS: () => void;
   onNavigateSchedule: () => void;
   onNavigateAbout: () => void;
+  // Present only for an authenticated web session (mosaicd); absent on the
+  // Wails desktop build, which has no login.
+  onLogout?: () => void;
 };
 
 export function IconRail(props: Props) {
@@ -69,6 +72,17 @@ export function IconRail(props: Props) {
       </div>
       <div class="flex flex-col gap-1" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <For each={bottom}>{(it) => <Btn item={it} />}</For>
+        <Show when={props.onLogout}>
+          <Tooltip label="Sign out" placement="right">
+            <button
+              type="button"
+              onClick={() => props.onLogout?.()}
+              class="grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-colors duration-150 hover:text-zinc-200"
+            >
+              <LogOut class="h-4 w-4" />
+            </button>
+          </Tooltip>
+        </Show>
       </div>
     </nav>
   );

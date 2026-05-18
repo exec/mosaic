@@ -227,6 +227,18 @@ function AuthenticatedApp() {
           store.setView('settings');
           store.setSettingsPane('about');
         }}
+        onLogout={
+          store.state.currentUser
+            ? async () => {
+                try {
+                  await api.logout();
+                } catch {
+                  // Reloading drops the session client-side regardless.
+                }
+                window.location.reload();
+              }
+            : undefined
+        }
         torrents={store.state.torrents}
         filteredTorrents={filtered()}
         stats={store.state.stats}
