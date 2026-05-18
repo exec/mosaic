@@ -228,7 +228,7 @@ func main() {
 	// Ephemeral password (qBittorrent-nox pattern). If the operator has
 	// never set a password via the web UI, mint a fresh one on every boot
 	// and dump it to stdout so journald captures it. Once the operator
-	// logs in and changes the password from Settings → Web Interface, the
+	// logs in and changes the password from Settings → Users, the
 	// service flips a "user set" flag and we stop rotating.
 	if err := mintEphemeralPasswordIfNeeded(ctx, svc, web); err != nil {
 		log.Fatal().Err(err).Msg("mint ephemeral password")
@@ -368,7 +368,7 @@ func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web ap
 	log.Warn().
 		Str("username", web.Username).
 		Int("port", web.Port).
-		Msg("mosaicd: minted temporary web-interface password — see stdout banner / journalctl for the cleartext (regenerated every restart until you change it from Settings → Web Interface)")
+		Msg("mosaicd: minted temporary web-interface password — see stdout banner / journalctl for the cleartext (regenerated every restart until you change it from Settings → Users)")
 
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "================ mosaicd: temporary web-interface password ================")
@@ -377,7 +377,7 @@ func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web ap
 	fmt.Fprintf(os.Stdout, "  Password: %s\n", pwd)
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "  This password is REGENERATED on every restart.")
-	fmt.Fprintln(os.Stdout, "  Log in and change it via Settings → Web Interface to make it persist.")
+	fmt.Fprintln(os.Stdout, "  Log in and change it via Settings → Users to make it persist.")
 	fmt.Fprintln(os.Stdout, "===========================================================================")
 	fmt.Fprintln(os.Stdout, "")
 	return nil
