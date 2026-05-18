@@ -85,6 +85,55 @@ func (h *Hub) PublishUpdate(info api.UpdateInfoDTO) {
 	h.bus.Publish(Envelope{Type: "update:available", Payload: info})
 }
 
+// sendToUser pushes an envelope to every connected client owned by userID.
+// Used by mosaicd's per-user tick fan-out so one user never receives another
+// user's torrents/stats/inspector data.
+func (h *Hub) sendToUser(userID int, env Envelope) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.caller.UserID != userID {
+			continue
+		}
+		select {
+		case c.send <- env:
+		default: // slow client: drop
+		}
+	}
+}
+
+// PublishTorrentsTo emits a torrents:tick frame to one user's clients only.
+func (h *Hub) PublishTorrentsTo(userID int, rows []api.TorrentDTO) {
+	h.sendToUser(userID, Envelope{Type: "torrents:tick", Payload: rows})
+}
+
+// PublishStatsTo emits a stats:tick frame to one user's clients only.
+func (h *Hub) PublishStatsTo(userID int, s api.GlobalStats) {
+	h.sendToUser(userID, Envelope{Type: "stats:tick", Payload: s})
+}
+
+// PublishInspectorTo emits an inspector:tick frame to one user's clients only.
+func (h *Hub) PublishInspectorTo(userID int, d api.DetailDTO) {
+	h.sendToUser(userID, Envelope{Type: "inspector:tick", Payload: d})
+}
+
+// ConnectedUserIDs returns the distinct user ids with at least one live
+// WebSocket client. mosaicd's streamTicks iterates these to compute and push
+// each user's filtered view.
+func (h *Hub) ConnectedUserIDs() []int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	seen := make(map[int]struct{}, len(h.clients))
+	for c := range h.clients {
+		seen[c.caller.UserID] = struct{}{}
+	}
+	out := make([]int, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	return out
+}
+
 // Close detaches all clients and shuts down the internal bus.
 func (h *Hub) Close() {
 	h.bus.Close()
@@ -104,11 +153,12 @@ func (h *Hub) ClientCount() int {
 }
 
 type hubClient struct {
-	send chan Envelope
+	send   chan Envelope
+	caller api.Caller
 }
 
-func (h *Hub) addClient() *hubClient {
-	c := &hubClient{send: make(chan Envelope, 64)}
+func (h *Hub) addClient(caller api.Caller) *hubClient {
+	c := &hubClient{send: make(chan Envelope, 64), caller: caller}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.clients == nil {
@@ -135,14 +185,12 @@ func (h *Hub) removeClient(c *hubClient) {
 // WebSocket and pumps frames from the per-client buffered channel until either
 // side disconnects. Auth is checked inline (cookie OR bearer) so the upgrade
 // response is correct.
-func (h *Hub) HandleUpgrade(sessions *SessionStore, creds CredentialChecker) http.HandlerFunc {
+func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !sessions.Valid(SessionTokenFromRequest(r)) {
-			key := BearerTokenFromRequest(r)
-			if key == "" || !creds.VerifyAPIKey(r.Context(), key) {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		caller, ok := resolveCaller(r, sessions, res)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
 		}
 
 		// Pin the Origin to the request Host to prevent Cross-Site WebSocket
@@ -161,7 +209,7 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, creds CredentialChecker) htt
 		}
 		defer conn.Close(websocket.StatusInternalError, "closing")
 
-		client := h.addClient()
+		client := h.addClient(caller)
 		defer h.removeClient(client)
 
 		ctx := r.Context()

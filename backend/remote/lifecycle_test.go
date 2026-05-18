@@ -39,6 +39,8 @@ func newServerFixture(t *testing.T) (*api.Service, *Server) {
 		persistence.NewScheduleRules(db),
 		persistence.NewFeeds(db),
 		persistence.NewFilters(db),
+		persistence.NewUsers(db),
+		persistence.NewTorrentAccess(db),
 		nil, "/tmp/dl",
 	)
 
@@ -46,7 +48,7 @@ func newServerFixture(t *testing.T) (*api.Service, *Server) {
 	t.Cleanup(hub.Close)
 
 	dataDir := t.TempDir()
-	srv := NewServer(svc, hub, NewSessionStore(), nil, dataDir)
+	srv := NewServer(svc, hub, NewSessionStore(), nil, dataDir, FlavorDaemon)
 	t.Cleanup(srv.Stop)
 	return svc, srv
 }
@@ -190,7 +192,7 @@ func TestServer_StaticFSServedAtRoot(t *testing.T) {
 	hub := NewHub()
 	t.Cleanup(hub.Close)
 	staticFS := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("hello world")}}
-	srv := NewServer(svc, hub, NewSessionStore(), staticFS, t.TempDir())
+	srv := NewServer(svc, hub, NewSessionStore(), staticFS, t.TempDir(), FlavorDaemon)
 	t.Cleanup(srv.Stop)
 
 	port := freePort(t)

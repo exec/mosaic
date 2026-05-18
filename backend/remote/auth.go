@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"mosaic/backend/api"
 	"mosaic/backend/remote/cred"
 )
 
@@ -30,21 +31,29 @@ const (
 	maxSessions = 100
 )
 
+// sessionEntry binds a session token to the user it authenticates and its
+// expiry. Sessions are user-scoped so a password/role change for one user can
+// revoke just their sessions (RevokeUser) without logging everyone out.
+type sessionEntry struct {
+	userID  int
+	expires time.Time
+}
+
 // SessionStore holds active session tokens in memory. Tokens reset on process
-// restart; v1 has no persistence requirement.
+// restart; there is no persistence requirement.
 type SessionStore struct {
 	mu       sync.RWMutex
-	sessions map[string]time.Time // token → expires-at
+	sessions map[string]sessionEntry // token → entry
 }
 
 func NewSessionStore() *SessionStore {
-	return &SessionStore{sessions: make(map[string]time.Time)}
+	return &SessionStore{sessions: make(map[string]sessionEntry)}
 }
 
-// Create issues a new session token. If the store is full, the oldest entry
-// (earliest expiry) is evicted before insertion. Returns ("", err) if the
-// underlying rand source fails — callers should surface a 500.
-func (s *SessionStore) Create() (string, error) {
+// Create issues a new session token bound to userID. If the store is full, the
+// oldest entry (earliest expiry) is evicted before insertion. Returns ("", err)
+// if the underlying rand source fails — callers should surface a 500.
+func (s *SessionStore) Create(userID int) (string, error) {
 	tok, err := RandomToken()
 	if err != nil {
 		return "", err
@@ -53,7 +62,7 @@ func (s *SessionStore) Create() (string, error) {
 	if len(s.sessions) >= maxSessions {
 		s.evictOldestLocked()
 	}
-	s.sessions[tok] = time.Now().Add(sessionTTL)
+	s.sessions[tok] = sessionEntry{userID: userID, expires: time.Now().Add(sessionTTL)}
 	s.mu.Unlock()
 	return tok, nil
 }
@@ -64,10 +73,10 @@ func (s *SessionStore) evictOldestLocked() {
 	var oldestTok string
 	var oldestExp time.Time
 	first := true
-	for tok, exp := range s.sessions {
-		if first || exp.Before(oldestExp) {
+	for tok, e := range s.sessions {
+		if first || e.expires.Before(oldestExp) {
 			oldestTok = tok
-			oldestExp = exp
+			oldestExp = e.expires
 			first = false
 		}
 	}
@@ -76,23 +85,25 @@ func (s *SessionStore) evictOldestLocked() {
 	}
 }
 
-func (s *SessionStore) Valid(token string) bool {
+// Valid returns the user id the token authenticates, and ok=false if the token
+// is unknown or expired (expired tokens are pruned in passing).
+func (s *SessionStore) Valid(token string) (int, bool) {
 	if token == "" {
-		return false
+		return 0, false
 	}
 	s.mu.RLock()
-	exp, ok := s.sessions[token]
+	e, ok := s.sessions[token]
 	s.mu.RUnlock()
 	if !ok {
-		return false
+		return 0, false
 	}
-	if time.Now().After(exp) {
+	if time.Now().After(e.expires) {
 		s.mu.Lock()
 		delete(s.sessions, token)
 		s.mu.Unlock()
-		return false
+		return 0, false
 	}
-	return true
+	return e.userID, true
 }
 
 func (s *SessionStore) Delete(token string) {
@@ -101,12 +112,22 @@ func (s *SessionStore) Delete(token string) {
 	s.mu.Unlock()
 }
 
-// RevokeAll drops every session. Called from api.Service when the web
-// password or username changes so any browser still holding a pre-change
-// cookie is forced to log in again.
+// RevokeAll drops every session.
 func (s *SessionStore) RevokeAll() {
 	s.mu.Lock()
-	s.sessions = make(map[string]time.Time)
+	s.sessions = make(map[string]sessionEntry)
+	s.mu.Unlock()
+}
+
+// RevokeUser drops every session belonging to one user. Called from
+// api.Service when that user's password, username, role or permissions change.
+func (s *SessionStore) RevokeUser(userID int) {
+	s.mu.Lock()
+	for tok, e := range s.sessions {
+		if e.userID == userID {
+			delete(s.sessions, tok)
+		}
+	}
 	s.mu.Unlock()
 }
 
@@ -117,11 +138,12 @@ func (s *SessionStore) Count() int {
 	return len(s.sessions)
 }
 
-// CredentialChecker is the subset of api.Service that the auth layer needs.
-// Defining it here lets tests inject fakes without importing api.
-type CredentialChecker interface {
-	VerifyWebCredentials(ctx context.Context, username, plain string) bool
-	VerifyAPIKey(ctx context.Context, key string) bool
+// CallerResolver is the subset of *api.Service the auth layer needs to turn a
+// session's user id or a bearer API key into an authenticated caller identity.
+// Defining it as an interface keeps the seam testable.
+type CallerResolver interface {
+	CallerForUserID(ctx context.Context, id int) (api.Caller, error)
+	AuthenticateAPIKey(ctx context.Context, key string) (api.Caller, error)
 }
 
 func SetSessionCookie(w http.ResponseWriter, token string, secure bool) {
@@ -169,20 +191,35 @@ func BearerTokenFromRequest(r *http.Request) string {
 	return r.URL.Query().Get("key")
 }
 
-// AuthGate is the auth middleware. Allows the request through if the session
-// cookie is valid OR a bearer API key matches; otherwise returns 401 JSON.
-func AuthGate(sessions *SessionStore, creds CredentialChecker) func(http.Handler) http.Handler {
+// resolveCaller authenticates a request via its session cookie or bearer API
+// key and returns the caller identity. ok=false means unauthenticated.
+func resolveCaller(r *http.Request, sessions *SessionStore, res CallerResolver) (api.Caller, bool) {
+	if uid, valid := sessions.Valid(SessionTokenFromRequest(r)); valid {
+		if c, err := res.CallerForUserID(r.Context(), uid); err == nil {
+			return c, true
+		}
+	}
+	if key := BearerTokenFromRequest(r); key != "" {
+		if c, err := res.AuthenticateAPIKey(r.Context(), key); err == nil {
+			return c, true
+		}
+	}
+	return api.Caller{}, false
+}
+
+// AuthGate is the auth middleware. It authenticates the request (session
+// cookie OR bearer API key), installs the resolved caller on the request
+// context for downstream handlers + the Service, and returns 401 JSON if the
+// request is unauthenticated.
+func AuthGate(sessions *SessionStore, res CallerResolver) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if sessions.Valid(SessionTokenFromRequest(r)) {
-				next.ServeHTTP(w, r)
+			caller, ok := resolveCaller(r, sessions, res)
+			if !ok {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
-			if key := BearerTokenFromRequest(r); key != "" && creds.VerifyAPIKey(r.Context(), key) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			next.ServeHTTP(w, r.WithContext(api.WithCaller(r.Context(), caller)))
 		})
 	}
 }

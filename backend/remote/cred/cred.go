@@ -6,8 +6,10 @@ package cred
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -133,4 +135,24 @@ func RandomToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// HashAPIKey returns the hex-encoded SHA-256 of an API key. API keys are
+// high-entropy random tokens (see RandomToken), so a plain fast hash — no
+// salt, no stretching — is enough to store them at rest: there is no
+// dictionary to attack. We only ever compare a presented key's digest against
+// the stored one, never reverse it.
+func HashAPIKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+// APIKeyHint returns a short, non-secret suffix of an API key ("ab12") for
+// display in the UI, so an operator can recognise which key is active without
+// the key itself being recoverable. Returns the whole string if it is short.
+func APIKeyHint(key string) string {
+	if len(key) <= 4 {
+		return key
+	}
+	return key[len(key)-4:]
 }

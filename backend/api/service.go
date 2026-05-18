@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -34,12 +33,15 @@ type Service struct {
 	scheduleRules   *persistence.ScheduleRules
 	feeds           *persistence.Feeds
 	filters         *persistence.Filters
+	users           *persistence.Users
+	access          *persistence.TorrentAccess
 	scheduler       *engine.Scheduler
 	defaultSavePath string
 
-	focusMu    sync.RWMutex
-	focusID    engine.TorrentID
-	focusScope engine.DetailScope
+	// focus tracks which torrent each user's inspector is open on. Keyed by
+	// Caller.UserID so multi-user mosaicd sessions don't clobber each other.
+	focusMu sync.RWMutex
+	focus   map[int]focusState
 
 	blocklistMu sync.RWMutex
 	blocklist   blocklistState
@@ -72,6 +74,7 @@ type Service struct {
 // keeps the api package free of a remote-package import.
 type SessionRevoker interface {
 	RevokeAll()
+	RevokeUser(userID int)
 }
 
 // AttachSessionRevoker wires the remote SessionStore into the Service so that
@@ -99,6 +102,8 @@ func NewService(
 	scheduleRules *persistence.ScheduleRules,
 	feeds *persistence.Feeds,
 	filters *persistence.Filters,
+	users *persistence.Users,
+	access *persistence.TorrentAccess,
 	scheduler *engine.Scheduler,
 	defaultSavePath string,
 ) *Service {
@@ -111,9 +116,18 @@ func NewService(
 		scheduleRules:   scheduleRules,
 		feeds:           feeds,
 		filters:         filters,
+		users:           users,
+		access:          access,
 		scheduler:       scheduler,
 		defaultSavePath: defaultSavePath,
+		focus:           make(map[int]focusState),
 	}
+}
+
+// focusState is the inspector focus for a single user.
+type focusState struct {
+	id    engine.TorrentID
+	scope engine.DetailScope
 }
 
 const (
@@ -172,27 +186,32 @@ type WebConfigDTO struct {
 	APIKey   string `json:"api_key"`
 }
 
+// adminUserID is the id of the admin account seeded by migration 0009. The
+// desktop "Web Interface" pane and mosaicd's ephemeral-password bootstrap both
+// operate on this user — it is the single login for the desktop build and the
+// initial administrator on a fresh mosaicd install.
+const adminUserID = 1
+
 func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
 	port := s.intSetting(ctx, settingWebPort)
 	if port == 0 {
 		port = 8080
 	}
-	user, _ := s.settings.Get(ctx, settingWebUsername)
-	if user == "" {
-		user = "admin"
-	}
-	key, _ := s.settings.Get(ctx, settingWebAPIKey)
-	return WebConfigDTO{
+	dto := WebConfigDTO{
 		Enabled:  s.boolSetting(ctx, settingWebEnabled),
 		Port:     port,
 		BindAll:  s.boolSetting(ctx, settingWebBindAll),
-		Username: user,
-		APIKey:   key,
+		Username: "admin",
 	}
+	// Username + api-key hint live on the admin user row, not in settings.
+	if u, err := s.users.Get(ctx, adminUserID); err == nil {
+		dto.Username = u.Username
+		dto.APIKey = u.APIKeyHint
+	}
+	return dto
 }
 
 func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
-	prevUser, _ := s.settings.Get(ctx, settingWebUsername)
 	if err := s.setBoolSetting(ctx, settingWebEnabled, c.Enabled); err != nil {
 		return err
 	}
@@ -202,13 +221,19 @@ func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
 	if err := s.setBoolSetting(ctx, settingWebBindAll, c.BindAll); err != nil {
 		return err
 	}
-	if err := s.settings.Set(ctx, settingWebUsername, c.Username); err != nil {
-		return err
-	}
-	// Force re-login if the username actually changed — otherwise an
-	// already-authenticated tab would keep working under the old identity.
-	if prevUser != c.Username && s.sessions != nil {
-		s.sessions.RevokeAll()
+	// The desktop "Web Interface" pane edits the admin user's username here.
+	// A username change forces that user's sessions to re-authenticate.
+	if c.Username != "" {
+		u, err := s.users.Get(ctx, adminUserID)
+		if err == nil && u.Username != c.Username {
+			u.Username = c.Username
+			if err := s.users.Update(ctx, u); err != nil {
+				return err
+			}
+			if s.sessions != nil {
+				s.sessions.RevokeUser(adminUserID)
+			}
+		}
 	}
 	s.fireWebConfigChanged(s.GetWebConfig(ctx))
 	return nil
@@ -233,97 +258,69 @@ func (s *Service) fireWebConfigChanged(c WebConfigDTO) {
 	}
 }
 
+// SetWebPassword sets the admin user's password (UI / REST "change password"
+// path) and marks it operator-set so mosaicd stops minting ephemeral ones.
+// Every active session for that user is revoked. The hash + password_set flag
+// are written by a single atomic UPDATE, so there is no partial-failure window.
 func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
-	// Write the "user set" flag BEFORE the hash so a partial failure cannot
-	// silently downgrade the operator back to ephemeral-password mode on the
-	// next mosaicd restart. If the flag write fails, we return early — the
-	// operator's old password keeps working AND the flag is still false,
-	// which is a safe state. If the hash write fails *after* we set the
-	// flag, the operator's old password also keeps working (we never wrote
-	// the new hash); the flag claims "user set" but the existing hash is
-	// either the previous user-set hash or the most recent ephemeral hash
-	// the operator already authenticated against — so the daemon won't
-	// rotate it on next boot, which matches the operator's intent.
-	if err := s.settings.Set(ctx, settingWebPassUserSet, "true"); err != nil {
-		return fmt.Errorf("persist web_password_user_set flag: %w", err)
-	}
-	if err := s.setWebPasswordHash(ctx, plain); err != nil {
+	if err := s.setUserPasswordHash(ctx, adminUserID, plain, true); err != nil {
 		return err
 	}
-	// Invalidate every active session — the old password is no longer valid,
-	// any browser still holding a pre-change cookie must re-authenticate.
 	if s.sessions != nil {
-		s.sessions.RevokeAll()
+		s.sessions.RevokeUser(adminUserID)
 	}
 	return nil
 }
 
-// SetWebPasswordEphemeral persists a password hash without flipping the
-// "user set" flag and without touching active sessions. Intended only for
-// the mosaicd daemon's first-launch / per-restart auto-generated password
-// flow (qBittorrent-nox style). Calling this leaves the daemon in a state
-// where the next restart will replace this password again — until the
-// operator logs in and calls SetWebPassword from the UI.
+// SetWebPasswordEphemeral sets the admin user's password without flipping the
+// "user set" flag and without touching active sessions. Used only by mosaicd's
+// per-restart auto-generated password flow (qBittorrent-nox style).
 func (s *Service) SetWebPasswordEphemeral(ctx context.Context, plain string) error {
-	return s.setWebPasswordHash(ctx, plain)
+	return s.setUserPasswordHash(ctx, adminUserID, plain, false)
 }
 
-// IsWebPasswordUserSet reports whether the operator has explicitly set a
-// password via SetWebPassword (UI / REST). Used by mosaicd to decide
-// whether to mint a fresh ephemeral password on each boot.
+// IsWebPasswordUserSet reports whether the admin user's password was set
+// explicitly by the operator. mosaicd consults it to decide whether to mint a
+// fresh ephemeral password on each boot.
 func (s *Service) IsWebPasswordUserSet(ctx context.Context) bool {
-	v, _ := s.settings.Get(ctx, settingWebPassUserSet)
-	return v == "true"
+	u, err := s.users.Get(ctx, adminUserID)
+	return err == nil && u.PasswordSet
 }
 
-func (s *Service) setWebPasswordHash(ctx context.Context, plain string) error {
+func (s *Service) setUserPasswordHash(ctx context.Context, userID int, plain string, userSet bool) error {
 	hash, err := cred.HashPassword(plain)
 	if err != nil {
 		return err
 	}
-	return s.settings.Set(ctx, settingWebPassHash, hash)
+	return s.users.SetPasswordHash(ctx, userID, hash, userSet)
 }
 
+// RotateAPIKey mints a fresh API key for the admin user (desktop "Web
+// Interface" pane). The cleartext is returned once — only its hash is stored.
 func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
-	key, err := cred.RandomToken()
+	return s.RotateUserAPIKey(ctx, adminUserID)
+}
+
+// ReconcileLegacyAPIKey migrates a pre-0009 plaintext web_api_key setting into
+// the admin user's hashed key column, then clears the setting. Idempotent and
+// safe to call on every startup: it no-ops once the legacy key is gone or the
+// admin already has a key.
+func (s *Service) ReconcileLegacyAPIKey(ctx context.Context) error {
+	legacy, _ := s.settings.Get(ctx, settingWebAPIKey)
+	if legacy == "" {
+		return nil
+	}
+	u, err := s.users.Get(ctx, adminUserID)
 	if err != nil {
-		return "", err
+		return err
 	}
-	if err := s.settings.Set(ctx, settingWebAPIKey, key); err != nil {
-		return "", err
+	if u.APIKeyHash == "" {
+		if err := s.users.SetAPIKey(ctx, adminUserID,
+			cred.HashAPIKey(legacy), cred.APIKeyHint(legacy)); err != nil {
+			return err
+		}
 	}
-	return key, nil
-}
-
-// VerifyWebCredentials returns true if username + password match the stored
-// hash; used by the auth middleware on login.
-func (s *Service) VerifyWebCredentials(ctx context.Context, username, plain string) bool {
-	user, _ := s.settings.Get(ctx, settingWebUsername)
-	hash, _ := s.settings.Get(ctx, settingWebPassHash)
-	// Match GetWebConfig's default. Fresh installs (especially mosaicd's
-	// minted-password path) never populate settingWebUsername explicitly,
-	// so the stored value is "" — but the banner / Settings → Web Interface
-	// shows "admin" because that's what GetWebConfig reports. Without this
-	// fallback, logging in with the displayed username silently fails
-	// here ("" != "admin"), surfacing as an unhelpful "invalid credentials".
-	if user == "" {
-		user = "admin"
-	}
-	if hash == "" {
-		return false
-	}
-	if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 {
-		return false
-	}
-	return cred.VerifyPassword(plain, hash)
-}
-
-func (s *Service) VerifyAPIKey(ctx context.Context, key string) bool {
-	stored, _ := s.settings.Get(ctx, settingWebAPIKey)
-	if stored == "" || key == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(key), []byte(stored)) == 1
+	return s.settings.Set(ctx, settingWebAPIKey, "")
 }
 
 // UpdaterConfigDTO is the persisted updater preferences shape (channel +
@@ -378,6 +375,9 @@ func (s *Service) AttachRSSPoller(p *RSSPoller) {
 // an error if the poller hasn't been attached or the feed lookup /
 // HTTP fetch fails.
 func (s *Service) PollFeedNow(ctx context.Context, feedID int) error {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return ErrForbidden
+	}
 	if s.rssPoller == nil {
 		return fmt.Errorf("rss poller not attached")
 	}
@@ -605,6 +605,9 @@ func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {
 }
 
 func (s *Service) SetDefaultSavePath(ctx context.Context, path string) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	return s.settings.Set(ctx, settingDefaultSavePath, path)
 }
 
@@ -638,6 +641,10 @@ type TorrentDTO struct {
 	Queued        bool     `json:"queued"`
 	Verifying     bool     `json:"verifying"`
 	FilesMissing  bool     `json:"files_missing"`
+	// Access is the requesting caller's access level on this torrent
+	// ("owner" | "editor" | "viewer"). Admins always see "owner". The SPA
+	// uses it to gate per-row controls.
+	Access string `json:"access"`
 }
 
 func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
@@ -669,6 +676,10 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 }
 
 func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engine.TorrentID, error) {
+	caller := CallerFrom(ctx)
+	if !caller.CanAddTorrents() {
+		return "", ErrForbidden
+	}
 	if savePath == "" {
 		savePath = s.defaultPath(ctx)
 	}
@@ -689,10 +700,41 @@ func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engin
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
 	}
+	if err := s.grantOwner(ctx, string(id), caller); err != nil {
+		return "", fmt.Errorf("grant owner: %w", err)
+	}
 	return id, nil
 }
 
+// grantOwner records that the caller owns a torrent. Adding an infohash that
+// another user already added makes the caller a co-owner (Grant upserts).
+func (s *Service) grantOwner(ctx context.Context, infohash string, caller Caller) error {
+	uid := caller.UserID
+	return s.access.Grant(ctx, infohash, uid, persistence.AccessOwner, &uid)
+}
+
+// requireTorrentAccess returns ErrForbidden unless the caller holds at least
+// minLevel access on the torrent. Admins and the system caller always pass.
+func (s *Service) requireTorrentAccess(ctx context.Context, infohash, minLevel string) error {
+	caller := CallerFrom(ctx)
+	if caller.SeesAllTorrents() {
+		return nil
+	}
+	lvl, err := s.access.AccessFor(ctx, infohash, caller.UserID)
+	if err != nil {
+		return err
+	}
+	if persistence.AccessRank(lvl) < persistence.AccessRank(minLevel) {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string) (engine.TorrentID, error) {
+	caller := CallerFrom(ctx)
+	if !caller.CanAddTorrents() {
+		return "", ErrForbidden
+	}
 	if savePath == "" {
 		savePath = s.defaultPath(ctx)
 	}
@@ -717,10 +759,17 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string)
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
 	}
+	if err := s.grantOwner(ctx, string(id), caller); err != nil {
+		return "", fmt.Errorf("grant owner: %w", err)
+	}
 	return id, nil
 }
 
 func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath string) (engine.TorrentID, error) {
+	caller := CallerFrom(ctx)
+	if !caller.CanAddTorrents() {
+		return "", ErrForbidden
+	}
 	if savePath == "" {
 		savePath = s.defaultPath(ctx)
 	}
@@ -741,12 +790,33 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 	}); err != nil {
 		return "", fmt.Errorf("persist: %w", err)
 	}
+	if err := s.grantOwner(ctx, string(id), caller); err != nil {
+		return "", fmt.Errorf("grant owner: %w", err)
+	}
 	return id, nil
 }
 
-func (s *Service) Pause(id engine.TorrentID) error   { return s.engine.Pause(id) }
-func (s *Service) Resume(id engine.TorrentID) error  { return s.engine.Resume(id) }
-func (s *Service) Recheck(id engine.TorrentID) error { return s.engine.Recheck(id) }
+// Pause/Resume/Recheck require editor-or-higher access on the torrent.
+func (s *Service) Pause(ctx context.Context, id engine.TorrentID) error {
+	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
+		return err
+	}
+	return s.engine.Pause(id)
+}
+
+func (s *Service) Resume(ctx context.Context, id engine.TorrentID) error {
+	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
+		return err
+	}
+	return s.engine.Resume(id)
+}
+
+func (s *Service) Recheck(ctx context.Context, id engine.TorrentID) error {
+	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
+		return err
+	}
+	return s.engine.Recheck(id)
+}
 
 // PauseAll pauses every torrent currently known to the engine. Errors on
 // individual torrents are logged but don't abort the loop — best-effort
@@ -790,14 +860,41 @@ func (s *Service) AttachUpdateInstalledNotifier(n UpdateInstalledNotifier) {
 	s.updateInstalledNotifier = n
 }
 
+// Remove tears a torrent down or detaches it from the caller's view. An admin
+// (or the last remaining owner) fully removes it from the engine + database;
+// any other user with access just loses their own grant — the torrent keeps
+// running for everyone else. A caller with no access gets ErrForbidden.
 func (s *Service) Remove(ctx context.Context, id engine.TorrentID, deleteFiles bool) error {
+	caller := CallerFrom(ctx)
+	hash := string(id)
+	if !caller.SeesAllTorrents() {
+		lvl, err := s.access.AccessFor(ctx, hash, caller.UserID)
+		if err != nil {
+			return err
+		}
+		if lvl == "" {
+			return ErrForbidden
+		}
+		if lvl != persistence.AccessOwner {
+			return s.access.Revoke(ctx, hash, caller.UserID)
+		}
+		owners, err := s.access.OwnerCount(ctx, hash)
+		if err != nil {
+			return err
+		}
+		if owners > 1 {
+			return s.access.Revoke(ctx, hash, caller.UserID)
+		}
+	}
 	if err := s.engine.Remove(id, deleteFiles); err != nil {
 		return err
 	}
-	return s.torrents.Remove(ctx, string(id))
+	// torrent_access rows cascade-delete with the torrents row.
+	return s.torrents.Remove(ctx, hash)
 }
 
 func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
+	caller := CallerFrom(ctx)
 	records, err := s.torrents.List(ctx)
 	if err != nil {
 		return nil, err
@@ -805,6 +902,14 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 	byHash := make(map[string]persistence.TorrentRecord, len(records))
 	for _, r := range records {
 		byHash[r.InfoHash] = r
+	}
+	// Non-admin callers see only torrents they hold an access grant for.
+	var accessByHash map[string]string
+	if !caller.SeesAllTorrents() {
+		accessByHash, err = s.access.InfohashesForUser(ctx, caller.UserID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Pre-v0.4.3 we called s.tags.ForTorrent(ctx, infohash) inside the
 	// loop below — N+1 SELECTs every tick (~500ms cadence). One bulk
@@ -816,7 +921,16 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 	snaps := s.engine.List()
 	out := make([]TorrentDTO, 0, len(snaps))
 	for _, snap := range snaps {
-		rec, ok := byHash[string(snap.ID)]
+		hash := string(snap.ID)
+		access := persistence.AccessOwner
+		if !caller.SeesAllTorrents() {
+			lvl, visible := accessByHash[hash]
+			if !visible {
+				continue
+			}
+			access = lvl
+		}
+		rec, ok := byHash[hash]
 		addedAt := time.Now()
 		if ok {
 			snap.SavePath = rec.SavePath
@@ -826,6 +940,7 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 			addedAt = rec.AddedAt
 		}
 		dto := toDTO(snap, addedAt)
+		dto.Access = access
 		if ok {
 			dto.CategoryID = rec.CategoryID
 		}
@@ -859,10 +974,26 @@ type GlobalStats struct {
 }
 
 func (s *Service) GlobalStats(ctx context.Context) (GlobalStats, error) {
+	caller := CallerFrom(ctx)
 	snaps := s.engine.List()
+	// Non-admin callers get an aggregate scoped to their own torrents only —
+	// the status bar must not leak the existence/bandwidth of other users'.
+	var visible map[string]string
+	if !caller.SeesAllTorrents() {
+		var err error
+		visible, err = s.access.InfohashesForUser(ctx, caller.UserID)
+		if err != nil {
+			return GlobalStats{}, err
+		}
+	}
 	var st GlobalStats
-	st.TotalTorrents = len(snaps)
 	for _, snap := range snaps {
+		if visible != nil {
+			if _, ok := visible[string(snap.ID)]; !ok {
+				continue
+			}
+		}
+		st.TotalTorrents++
 		if !snap.Paused && !snap.Completed {
 			st.ActiveTorrents++
 		}
@@ -935,45 +1066,56 @@ type TrackerDTO struct {
 	NextAnnounce int64  `json:"next_announce"`
 }
 
-// SetInspectorFocus tells the service which torrent + tabs the UI is looking
-// at. Subsequent DetailForFocus calls (and the inspector:tick event in app.go)
-// will return the appropriately-scoped Detail. tabs is a subset of:
+// SetInspectorFocus tells the service which torrent + tabs the caller's UI is
+// looking at. Focus is tracked per user, so concurrent mosaicd sessions don't
+// clobber each other. Subsequent DetailForFocus calls (and the inspector:tick
+// event) return the appropriately-scoped Detail. tabs is a subset of:
 // "overview", "files", "peers", "trackers", "speed".
-func (s *Service) SetInspectorFocus(id string, tabs []string) error {
+func (s *Service) SetInspectorFocus(ctx context.Context, id string, tabs []string) error {
+	uid := CallerFrom(ctx).UserID
 	if id == "" {
-		s.ClearInspectorFocus()
+		s.ClearInspectorFocus(ctx)
 		return nil
 	}
 	scope := scopeForTabs(tabs)
 	s.focusMu.Lock()
-	s.focusID = engine.TorrentID(id)
-	s.focusScope = scope
+	s.focus[uid] = focusState{id: engine.TorrentID(id), scope: scope}
 	s.focusMu.Unlock()
 	return nil
 }
 
-func (s *Service) ClearInspectorFocus() {
+// ClearInspectorFocus drops the caller's inspector focus.
+func (s *Service) ClearInspectorFocus(ctx context.Context) {
+	uid := CallerFrom(ctx).UserID
 	s.focusMu.Lock()
-	s.focusID = ""
-	s.focusScope = engine.DetailScope{}
+	delete(s.focus, uid)
 	s.focusMu.Unlock()
 }
 
-// DetailForFocus returns the current focused torrent's detail, or nil if no
-// inspector focus is set.
+// DetailForFocus returns the caller's focused torrent detail, or nil if no
+// focus is set or the caller no longer has access to that torrent.
 func (s *Service) DetailForFocus(ctx context.Context) (*DetailDTO, error) {
+	caller := CallerFrom(ctx)
 	s.focusMu.RLock()
-	id := s.focusID
-	scope := s.focusScope
+	f, ok := s.focus[caller.UserID]
 	s.focusMu.RUnlock()
-	if id == "" {
+	if !ok || f.id == "" {
 		return nil, nil
 	}
-	d, err := s.engine.DetailedSnapshot(id, scope)
+	if !caller.SeesAllTorrents() {
+		lvl, err := s.access.AccessFor(ctx, string(f.id), caller.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if lvl == "" {
+			return nil, nil
+		}
+	}
+	d, err := s.engine.DetailedSnapshot(f.id, f.scope)
 	if err != nil {
 		return nil, err
 	}
-	dto := detailToDTO(d, s.lookupAddedAt(ctx, id))
+	dto := detailToDTO(d, s.lookupAddedAt(ctx, f.id))
 	return &dto, nil
 }
 
@@ -1082,6 +1224,9 @@ type TagDTO struct {
 }
 
 func (s *Service) CreateCategory(ctx context.Context, name, defaultPath, color string) (int, error) {
+	if !CallerFrom(ctx).CanManageCatTags() {
+		return 0, ErrForbidden
+	}
 	return s.categories.Create(ctx, persistence.Category{Name: name, DefaultSavePath: defaultPath, Color: color})
 }
 
@@ -1098,14 +1243,23 @@ func (s *Service) ListCategories(ctx context.Context) ([]CategoryDTO, error) {
 }
 
 func (s *Service) UpdateCategory(ctx context.Context, id int, name, defaultPath, color string) error {
+	if !CallerFrom(ctx).CanManageCatTags() {
+		return ErrForbidden
+	}
 	return s.categories.Update(ctx, persistence.Category{ID: id, Name: name, DefaultSavePath: defaultPath, Color: color})
 }
 
 func (s *Service) DeleteCategory(ctx context.Context, id int) error {
+	if !CallerFrom(ctx).CanManageCatTags() {
+		return ErrForbidden
+	}
 	return s.categories.Delete(ctx, id)
 }
 
 func (s *Service) CreateTag(ctx context.Context, name, color string) (int, error) {
+	if !CallerFrom(ctx).CanManageCatTags() {
+		return 0, ErrForbidden
+	}
 	return s.tags.Create(ctx, persistence.Tag{Name: name, Color: color})
 }
 
@@ -1122,14 +1276,27 @@ func (s *Service) ListTags(ctx context.Context) ([]TagDTO, error) {
 }
 
 func (s *Service) DeleteTag(ctx context.Context, id int) error {
+	if !CallerFrom(ctx).CanManageCatTags() {
+		return ErrForbidden
+	}
 	return s.tags.Delete(ctx, id)
 }
 
+// AssignTag/UnassignTag attach an existing tag to a torrent — that is per-
+// torrent organisation, so editor access on the torrent is sufficient (you
+// don't need the global manage-cat-tags permission, which gates the tag set
+// itself).
 func (s *Service) AssignTag(ctx context.Context, infohash string, tagID int) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
 	return s.tags.Assign(ctx, infohash, tagID)
 }
 
 func (s *Service) UnassignTag(ctx context.Context, infohash string, tagID int) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
 	return s.tags.Unassign(ctx, infohash, tagID)
 }
 
@@ -1146,10 +1313,16 @@ func (s *Service) ListTagsFor(ctx context.Context, infohash string) ([]TagDTO, e
 }
 
 func (s *Service) SetTorrentCategory(ctx context.Context, infohash string, categoryID *int) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
 	return s.torrents.SetCategory(ctx, infohash, categoryID)
 }
 
 func (s *Service) SetFilePriorities(ctx context.Context, infohash string, prios map[int]string) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
 	mapped := make(map[int]engine.Priority, len(prios))
 	for idx, p := range prios {
 		switch p {
@@ -1192,6 +1365,9 @@ func (s *Service) GetLimits(ctx context.Context) (LimitsDTO, error) {
 }
 
 func (s *Service) SetLimits(ctx context.Context, l LimitsDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	if err := s.setIntSetting(ctx, settingDownKbps, l.DownKbps); err != nil {
 		return err
 	}
@@ -1213,6 +1389,9 @@ func (s *Service) SetLimits(ctx context.Context, l LimitsDTO) error {
 // ToggleAltSpeed flips the alt-speed flag and reapplies engine limits. Returns
 // the new alt_active state.
 func (s *Service) ToggleAltSpeed(ctx context.Context) (bool, error) {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return s.boolSetting(ctx, settingAltActive), ErrForbidden
+	}
 	cur := s.boolSetting(ctx, settingAltActive)
 	next := !cur
 	if err := s.setBoolSetting(ctx, settingAltActive, next); err != nil {
@@ -1258,6 +1437,9 @@ func (s *Service) GetPeerLimits(ctx context.Context) PeerLimitsDTO {
 }
 
 func (s *Service) SetPeerLimits(ctx context.Context, p PeerLimitsDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	if p.ListenPort < 0 || p.ListenPort > 65535 {
 		return fmt.Errorf("listen port must be 0..65535")
 	}
@@ -1292,6 +1474,9 @@ func (s *Service) GetQueueLimits(ctx context.Context) QueueLimitsDTO {
 }
 
 func (s *Service) SetQueueLimits(ctx context.Context, q QueueLimitsDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	if err := s.setIntSetting(ctx, settingMaxActiveDL, q.MaxActiveDownloads); err != nil {
 		return err
 	}
@@ -1305,6 +1490,9 @@ func (s *Service) SetQueueLimits(ctx context.Context, q QueueLimitsDTO) error {
 }
 
 func (s *Service) SetQueuePosition(ctx context.Context, infohash string, pos int) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
 	if err := s.torrents.SetQueuePosition(ctx, infohash, pos); err != nil {
 		return err
 	}
@@ -1313,6 +1501,9 @@ func (s *Service) SetQueuePosition(ctx context.Context, infohash string, pos int
 }
 
 func (s *Service) SetForceStart(ctx context.Context, infohash string, force bool) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
 	if err := s.torrents.SetForceStart(ctx, infohash, force); err != nil {
 		return err
 	}
@@ -1355,6 +1546,9 @@ func (s *Service) ListScheduleRules(ctx context.Context) ([]ScheduleRuleDTO, err
 }
 
 func (s *Service) CreateScheduleRule(ctx context.Context, r ScheduleRuleDTO) (int, error) {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return 0, ErrForbidden
+	}
 	return s.scheduleRules.Create(ctx, persistence.ScheduleRule{
 		DaysMask: r.DaysMask, StartMin: r.StartMin, EndMin: r.EndMin,
 		DownKbps: r.DownKbps, UpKbps: r.UpKbps, AltOnly: r.AltOnly, Enabled: r.Enabled,
@@ -1362,6 +1556,9 @@ func (s *Service) CreateScheduleRule(ctx context.Context, r ScheduleRuleDTO) (in
 }
 
 func (s *Service) UpdateScheduleRule(ctx context.Context, r ScheduleRuleDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	return s.scheduleRules.Update(ctx, persistence.ScheduleRule{
 		ID: r.ID, DaysMask: r.DaysMask, StartMin: r.StartMin, EndMin: r.EndMin,
 		DownKbps: r.DownKbps, UpKbps: r.UpKbps, AltOnly: r.AltOnly, Enabled: r.Enabled,
@@ -1369,6 +1566,9 @@ func (s *Service) UpdateScheduleRule(ctx context.Context, r ScheduleRuleDTO) err
 }
 
 func (s *Service) DeleteScheduleRule(ctx context.Context, id int) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	return s.scheduleRules.Delete(ctx, id)
 }
 
@@ -1394,6 +1594,9 @@ func (s *Service) GetBlocklist(ctx context.Context) BlocklistDTO {
 }
 
 func (s *Service) SetBlocklistURL(ctx context.Context, url string, enabled bool) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	// Reject obviously dangerous URLs at write time. The dialer in
 	// safeHTTPClient is the second layer that catches DNS-rebind tricks.
 	if enabled && url != "" {
@@ -1418,6 +1621,9 @@ func (s *Service) SetBlocklistURL(ctx context.Context, url string, enabled bool)
 }
 
 func (s *Service) RefreshBlocklist(ctx context.Context) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	url, _ := s.settings.Get(ctx, settingBlocklistURL)
 	if url == "" {
 		return errors.New("no blocklist URL configured")
@@ -1621,6 +1827,9 @@ func (s *Service) ListFeeds(ctx context.Context) ([]FeedDTO, error) {
 }
 
 func (s *Service) CreateFeed(ctx context.Context, dto FeedDTO) (int, error) {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return 0, ErrForbidden
+	}
 	if _, err := validateFetchURL(dto.URL); err != nil {
 		return 0, fmt.Errorf("feed URL must be http or https and not point at a private/loopback address: %w", err)
 	}
@@ -1631,6 +1840,9 @@ func (s *Service) CreateFeed(ctx context.Context, dto FeedDTO) (int, error) {
 }
 
 func (s *Service) UpdateFeed(ctx context.Context, dto FeedDTO) error {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return ErrForbidden
+	}
 	if _, err := validateFetchURL(dto.URL); err != nil {
 		return fmt.Errorf("feed URL must be http or https and not point at a private/loopback address: %w", err)
 	}
@@ -1641,6 +1853,9 @@ func (s *Service) UpdateFeed(ctx context.Context, dto FeedDTO) error {
 }
 
 func (s *Service) DeleteFeed(ctx context.Context, id int) error {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return ErrForbidden
+	}
 	return s.feeds.Delete(ctx, id)
 }
 
@@ -1660,6 +1875,9 @@ func (s *Service) ListFiltersByFeed(ctx context.Context, feedID int) ([]FilterDT
 }
 
 func (s *Service) CreateFilter(ctx context.Context, dto FilterDTO) (int, error) {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return 0, ErrForbidden
+	}
 	return s.filters.Create(ctx, persistence.Filter{
 		FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,
 		SavePath: dto.SavePath, Enabled: dto.Enabled,
@@ -1667,6 +1885,9 @@ func (s *Service) CreateFilter(ctx context.Context, dto FilterDTO) (int, error) 
 }
 
 func (s *Service) UpdateFilter(ctx context.Context, dto FilterDTO) error {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return ErrForbidden
+	}
 	return s.filters.Update(ctx, persistence.Filter{
 		ID: dto.ID, FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,
 		SavePath: dto.SavePath, Enabled: dto.Enabled,
@@ -1674,5 +1895,8 @@ func (s *Service) UpdateFilter(ctx context.Context, dto FilterDTO) error {
 }
 
 func (s *Service) DeleteFilter(ctx context.Context, id int) error {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return ErrForbidden
+	}
 	return s.filters.Delete(ctx, id)
 }

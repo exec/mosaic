@@ -35,6 +35,8 @@ func newWSFixture(t *testing.T) (*api.Service, *SessionStore, *Hub, *httptest.Se
 		persistence.NewScheduleRules(db),
 		persistence.NewFeeds(db),
 		persistence.NewFilters(db),
+		persistence.NewUsers(db),
+		persistence.NewTorrentAccess(db),
 		nil, "/tmp/dl",
 	)
 
@@ -42,7 +44,7 @@ func newWSFixture(t *testing.T) (*api.Service, *SessionStore, *Hub, *httptest.Se
 	hub := NewHub()
 	t.Cleanup(hub.Close)
 
-	router := Mount(svc, sessions, hub, nil, false)
+	router := Mount(svc, sessions, hub, nil, false, FlavorDaemon)
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
@@ -101,7 +103,9 @@ func TestWS_AcceptsCookieAuth(t *testing.T) {
 	svc, sessions, hub, srv := newWSFixture(t)
 	require.NoError(t, svc.SetWebConfig(context.Background(), api.WebConfigDTO{Username: "alice"}))
 	require.NoError(t, svc.SetWebPassword(context.Background(), "p4ss"))
-	tok, err := sessions.Create()
+	// The session must reference a real user — SetWebConfig renamed the
+	// seeded admin (id 1) to "alice".
+	tok, err := sessions.Create(1)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

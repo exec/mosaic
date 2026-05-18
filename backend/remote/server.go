@@ -11,26 +11,50 @@ import (
 	"mosaic/backend/api"
 )
 
-// Mount wires all REST routes onto a chi.Router. The /api/login route and the
-// optional static SPA tree skip the auth middleware; everything else under
-// /api/* is gated.
+// Server flavor identifiers, reported by /api/bootstrap. "daemon" is the
+// headless multi-user mosaicd; "desktop" is the Wails app's optional single-
+// user web server.
+const (
+	FlavorDaemon  = "daemon"
+	FlavorDesktop = "desktop"
+)
+
+// Mount wires all REST routes onto a chi.Router. The /api/login and
+// /api/bootstrap routes and the optional static SPA tree skip the auth
+// middleware; everything else under /api/* is gated.
 //
 // hub, if non-nil, exposes a WebSocket upgrade at /api/ws.
 // staticFS, if non-nil, is served at "/". Pass nil during tests.
-func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, secure bool) chi.Router {
+// flavor is FlavorDaemon or FlavorDesktop.
+func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, secure bool, flavor string) chi.Router {
 	r := chi.NewRouter()
-	h := NewHandlers(svc, sessions, secure)
+	h := NewHandlers(svc, sessions, secure, flavor)
 	gate := AuthGate(sessions, svc)
 	csrf := OriginGuard()
 
 	r.Route("/api", func(api chi.Router) {
 		// public
 		api.Post("/login", h.Login)
+		api.Get("/bootstrap", h.Bootstrap)
 		// gated
 		api.Group(func(g chi.Router) {
 			g.Use(gate)
 			g.Use(csrf)
 			g.Post("/logout", h.Logout)
+
+			g.Get("/me", h.Me)
+			g.Post("/me/password", h.ChangeMyPassword)
+			g.Post("/me/api_key/rotate", h.RotateMyAPIKey)
+
+			g.Get("/users", h.ListUsers)
+			g.Post("/users", h.CreateUser)
+			g.Put("/users/{id}", h.UpdateUser)
+			g.Delete("/users/{id}", h.DeleteUser)
+			g.Post("/users/{id}/password", h.ResetUserPassword)
+
+			g.Get("/torrents/{id}/shares", h.ListTorrentShares)
+			g.Post("/torrents/{id}/shares", h.ShareTorrent)
+			g.Delete("/torrents/{id}/shares/{userID}", h.UnshareTorrent)
 
 			g.Get("/torrents", h.ListTorrents)
 			g.Post("/torrents/magnet", h.AddMagnet)

@@ -31,6 +31,8 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 		persistence.NewScheduleRules(db),
 		persistence.NewFeeds(db),
 		persistence.NewFilters(db),
+		persistence.NewUsers(db),
+		persistence.NewTorrentAccess(db),
 		nil, // no scheduler in unit tests
 		"/tmp/dl")
 	return svc, fb
@@ -111,7 +113,7 @@ func TestService_InspectorFocus_StoresAndReturnsDetail(t *testing.T) {
 	require.Nil(t, got)
 
 	// Set focus to this torrent with all tabs
-	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview", "files", "peers", "trackers"}))
+	require.NoError(t, svc.SetInspectorFocus(ctx, string(id), []string{"overview", "files", "peers", "trackers"}))
 
 	got, err = svc.DetailForFocus(ctx)
 	require.NoError(t, err)
@@ -126,8 +128,8 @@ func TestService_ClearInspectorFocus(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:cf", "")
-	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview"}))
-	svc.ClearInspectorFocus()
+	require.NoError(t, svc.SetInspectorFocus(ctx, string(id), []string{"overview"}))
+	svc.ClearInspectorFocus(ctx)
 
 	got, err := svc.DetailForFocus(ctx)
 	require.NoError(t, err)
@@ -140,7 +142,7 @@ func TestService_InspectorFocus_ScopesByVisibleTabs(t *testing.T) {
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:scope2", "")
 
 	// Only Overview tab visible — files/peers/trackers should be empty
-	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview"}))
+	require.NoError(t, svc.SetInspectorFocus(ctx, string(id), []string{"overview"}))
 	got, _ := svc.DetailForFocus(ctx)
 	require.NotNil(t, got)
 	require.Empty(t, got.Files)
@@ -148,7 +150,7 @@ func TestService_InspectorFocus_ScopesByVisibleTabs(t *testing.T) {
 	require.Empty(t, got.Trackers)
 
 	// Switch to peers tab
-	require.NoError(t, svc.SetInspectorFocus(string(id), []string{"overview", "peers"}))
+	require.NoError(t, svc.SetInspectorFocus(ctx, string(id), []string{"overview", "peers"}))
 	got, _ = svc.DetailForFocus(ctx)
 	require.Empty(t, got.Files)
 	require.Len(t, got.PeersList, 1)
@@ -275,7 +277,7 @@ func TestService_GlobalStats(t *testing.T) {
 	// Add two torrents, one paused
 	id1, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:abc", "")
 	_, _ = svc.AddMagnet(ctx, "magnet:?xt=urn:btih:def", "")
-	require.NoError(t, svc.Pause(id1))
+	require.NoError(t, svc.Pause(ctx, id1))
 
 	stats, err = svc.GlobalStats(ctx)
 	require.NoError(t, err)
@@ -384,17 +386,29 @@ func TestService_SetWebConfig_RoundTrip(t *testing.T) {
 	require.Equal(t, "remote", got.Username)
 }
 
+// authOK / apiKeyOK adapt the (Caller, error) authenticators to a bool so the
+// credential tests below read the way the old VerifyWebCredentials did.
+func authOK(svc *Service, ctx context.Context, user, pw string) bool {
+	_, err := svc.Authenticate(ctx, user, pw)
+	return err == nil
+}
+
+func apiKeyOK(svc *Service, ctx context.Context, key string) bool {
+	_, err := svc.AuthenticateAPIKey(ctx, key)
+	return err == nil
+}
+
 func TestService_SetWebPassword_VerifyCredentials(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{
 		Enabled: true, Port: 8080, Username: "alice",
 	}))
-	require.NoError(t, svc.SetWebPassword(ctx, "s3cret"))
+	require.NoError(t, svc.SetWebPassword(ctx, "s3cret-pw"))
 
-	require.True(t, svc.VerifyWebCredentials(ctx, "alice", "s3cret"))
-	require.False(t, svc.VerifyWebCredentials(ctx, "alice", "wrong"))
-	require.False(t, svc.VerifyWebCredentials(ctx, "bob", "s3cret"))
+	require.True(t, authOK(svc, ctx, "alice", "s3cret-pw"))
+	require.False(t, authOK(svc, ctx, "alice", "wrong"))
+	require.False(t, authOK(svc, ctx, "bob", "s3cret-pw"))
 }
 
 // TestService_SetWebPassword_FlipsUserSetFlag pins the contract that a
@@ -426,7 +440,7 @@ func TestService_VerifyWebCredentials_NoPasswordSet(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{Username: "alice"}))
-	require.False(t, svc.VerifyWebCredentials(ctx, "alice", "anything"))
+	require.False(t, authOK(svc, ctx, "alice", "anything"))
 }
 
 // TestService_VerifyWebCredentials_DefaultsToAdmin pins the mosaicd
@@ -443,40 +457,41 @@ func TestService_VerifyWebCredentials_DefaultsToAdmin_OnFreshDB(t *testing.T) {
 	// mimic mosaicd's first-boot state. The ephemeral-password path
 	// only writes the password hash, not the username.
 	require.NoError(t, svc.SetWebPasswordEphemeral(ctx, "auto-generated-pw"))
-	require.True(t, svc.VerifyWebCredentials(ctx, "admin", "auto-generated-pw"),
+	require.True(t, authOK(svc, ctx, "admin", "auto-generated-pw"),
 		"login with the displayed default username must succeed")
-	require.False(t, svc.VerifyWebCredentials(ctx, "admin", "wrong"))
-	require.False(t, svc.VerifyWebCredentials(ctx, "someone-else", "auto-generated-pw"))
+	require.False(t, authOK(svc, ctx, "admin", "wrong"))
+	require.False(t, authOK(svc, ctx, "someone-else", "auto-generated-pw"))
 }
 
 func TestService_RotateAPIKey_AndVerify(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	require.False(t, svc.VerifyAPIKey(ctx, "anything"))
+	require.False(t, apiKeyOK(svc, ctx, "anything"))
 
 	key, err := svc.RotateAPIKey(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 
-	require.True(t, svc.VerifyAPIKey(ctx, key))
-	require.False(t, svc.VerifyAPIKey(ctx, "not-the-key"))
-	require.False(t, svc.VerifyAPIKey(ctx, ""))
+	require.True(t, apiKeyOK(svc, ctx, key))
+	require.False(t, apiKeyOK(svc, ctx, "not-the-key"))
+	require.False(t, apiKeyOK(svc, ctx, ""))
 
 	// Rotate replaces; old key should no longer verify.
 	newKey, err := svc.RotateAPIKey(ctx)
 	require.NoError(t, err)
 	require.NotEqual(t, key, newKey)
-	require.False(t, svc.VerifyAPIKey(ctx, key))
-	require.True(t, svc.VerifyAPIKey(ctx, newKey))
+	require.False(t, apiKeyOK(svc, ctx, key))
+	require.True(t, apiKeyOK(svc, ctx, newKey))
 }
 
-func TestService_GetWebConfig_ReturnsStoredAPIKey(t *testing.T) {
+func TestService_GetWebConfig_ReturnsAPIKeyHint(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 	key, err := svc.RotateAPIKey(ctx)
 	require.NoError(t, err)
-	require.Equal(t, key, svc.GetWebConfig(ctx).APIKey)
+	// API keys are stored hashed; GetWebConfig only exposes the last-4 hint.
+	require.Equal(t, key[len(key)-4:], svc.GetWebConfig(ctx).APIKey)
 }
 
 func TestUpdaterConfig_DefaultsAndRoundTrip(t *testing.T) {
@@ -534,6 +549,8 @@ func serviceWithDB(t *testing.T, dbPath string) (*Service, *engine.FakeBackend) 
 		persistence.NewScheduleRules(db),
 		persistence.NewFeeds(db),
 		persistence.NewFilters(db),
+		persistence.NewUsers(db),
+		persistence.NewTorrentAccess(db),
 		nil,
 		"/tmp/dl"), fb
 }

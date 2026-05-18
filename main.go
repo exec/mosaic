@@ -155,10 +155,16 @@ func main() {
 		scheduleRules,
 		feeds,
 		filters,
+		persistence.NewUsers(db),
+		persistence.NewTorrentAccess(db),
 		sched,
 		cfg.DefaultSavePath)
 	if err := svc.RestoreOnStartup(ctx); err != nil {
 		log.Warn().Err(err).Msg("restore on startup")
+	}
+	// Migrate any pre-0009 plaintext API key into the admin user's hashed key.
+	if err := svc.ReconcileLegacyAPIKey(ctx); err != nil {
+		log.Warn().Err(err).Msg("reconcile legacy api key")
 	}
 	scheduleEngine := api.NewScheduleEngine(svc, scheduleRules, time.Local)
 	defer scheduleEngine.Close()
@@ -176,7 +182,7 @@ func main() {
 	defer hub.Close()
 	sessions := remote.NewSessionStore()
 	svc.AttachSessionRevoker(sessions)
-	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir)
+	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir, remote.FlavorDesktop)
 	defer remoteSrv.Stop()
 	// The remote interface is optional in the GUI — the user has the
 	// native window even if the web surface fails to bind. Log loudly

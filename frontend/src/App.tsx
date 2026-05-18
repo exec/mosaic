@@ -9,8 +9,10 @@ import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
 import {WindowShell} from './components/shell/WindowShell';
 import {GnomeTrayPrompt} from './components/shell/GnomeTrayPrompt';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
+import {ShareTorrentModal} from './components/shell/ShareTorrentModal';
 import {UpdateToast} from './components/shell/UpdateToast';
 import {TorrentList} from './components/list/TorrentList';
+import {canShare} from './lib/permissions';
 import {Inspector} from './components/inspector/Inspector';
 import {SettingsRoute} from './components/settings/SettingsRoute';
 import './index.css';
@@ -43,6 +45,8 @@ function AuthenticatedApp() {
   const [addModalOpen, setAddModalOpen] = createSignal(false);
   const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
   const [platform, setPlatform] = createSignal('');
+  // shareId holds the torrent currently open in the Share dialog (null = closed).
+  const [shareId, setShareId] = createSignal<string | null>(null);
   onCleanup(() => store.dispose());
 
   // Decide whether to render Win11-style custom controls. Browser mode and
@@ -259,6 +263,8 @@ function AuthenticatedApp() {
           <SettingsRoute
             pane={store.state.settingsPane}
             onPaneChange={store.setSettingsPane}
+            serverFlavor={store.state.serverFlavor}
+            currentUser={store.state.currentUser}
             defaultSavePath={store.state.defaultSavePath}
             categories={store.state.categories}
             tags={store.state.tags}
@@ -359,6 +365,7 @@ function AuthenticatedApp() {
             try { await api.openFolder(savePath); }
             catch (err) { toast.error(`Couldn't open folder — ${userErr(err)}`); }
           }}
+          onShare={canShare(store.state.currentUser) ? (id) => setShareId(id) : undefined}
         />
       </WindowShell>
       <AddTorrentModal
@@ -384,6 +391,13 @@ function AuthenticatedApp() {
           await applyOrganization(id, categoryID, tagIDs);
           toast.success('Torrent added');
         }}
+      />
+      <ShareTorrentModal
+        open={shareId() !== null}
+        torrentID={shareId()}
+        torrentName={store.state.torrents.find((t) => t.id === shareId())?.name ?? ''}
+        currentUserID={store.state.currentUser?.id ?? 0}
+        onClose={() => setShareId(null)}
       />
       <UpdateToast
         info={store.state.updateInfo}

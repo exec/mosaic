@@ -35,7 +35,12 @@ export type Torrent = {
   queued: boolean;
   verifying: boolean;
   files_missing: boolean;
+  // The requesting user's access level on this torrent. Admins always see
+  // 'owner'. The SPA gates per-row controls off this.
+  access: TorrentAccess;
 };
+
+export type TorrentAccess = 'owner' | 'editor' | 'viewer';
 
 export type LimitsDTO = {
   down_kbps: number;
@@ -167,6 +172,57 @@ export type WebConfigDTO = {
   api_key: string;
 };
 
+export type UserRole = 'admin' | 'user';
+
+// UserDTO is an application-level account. Never carries the password hash or
+// the API key — only whether each is set, plus a non-secret key hint.
+export type UserDTO = {
+  id: number;
+  username: string;
+  role: UserRole;
+  perm_add_torrents: boolean;
+  perm_manage_rss: boolean;
+  perm_manage_cat_tags: boolean;
+  perm_change_settings: boolean;
+  perm_share: boolean;
+  has_api_key: boolean;
+  api_key_hint: string;
+  password_set: boolean;
+  disabled: boolean;
+  created_at: number;
+};
+
+// UserInput is the create/edit payload. password is required on create,
+// ignored on update (use resetUserPassword instead).
+export type UserInput = {
+  username: string;
+  password?: string;
+  role: UserRole;
+  perm_add_torrents: boolean;
+  perm_manage_rss: boolean;
+  perm_manage_cat_tags: boolean;
+  perm_change_settings: boolean;
+  perm_share: boolean;
+  disabled: boolean;
+};
+
+// ShareDTO is one access grant on a torrent, with the grantee resolved.
+export type ShareDTO = {
+  user_id: number;
+  username: string;
+  access: TorrentAccess;
+};
+
+// ServerFlavor distinguishes the headless multi-user daemon from the desktop
+// app's optional single-user web server.
+export type ServerFlavor = 'daemon' | 'desktop';
+
+export type BootstrapDTO = {
+  flavor: ServerFlavor;
+  version: string;
+  multi_user: boolean;
+};
+
 export type UpdaterConfigDTO = {
   enabled: boolean;
   channel: 'stable' | 'beta';
@@ -264,6 +320,24 @@ export const api = {
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
   login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
   logout: () => transport.invoke<void>('Logout'),
+  // Multi-user (mosaicd). The desktop build never calls these — it has no
+  // Users pane and runs as the implicit system user.
+  bootstrap: () => transport.invoke<BootstrapDTO>('Bootstrap'),
+  me: () => transport.invoke<UserDTO>('Me'),
+  changeMyPassword: (oldPassword: string, newPassword: string) =>
+    transport.invoke<void>('ChangeMyPassword', oldPassword, newPassword),
+  rotateMyAPIKey: () => transport.invoke<string>('RotateMyAPIKey'),
+  listUsers: () => transport.invoke<UserDTO[]>('ListUsers'),
+  createUser: (input: UserInput) => transport.invoke<UserDTO>('CreateUser', input),
+  updateUser: (id: number, input: UserInput) => transport.invoke<UserDTO>('UpdateUser', id, input),
+  deleteUser: (id: number) => transport.invoke<void>('DeleteUser', id),
+  resetUserPassword: (id: number, newPassword: string) =>
+    transport.invoke<void>('ResetUserPassword', id, newPassword),
+  listTorrentShares: (infohash: string) => transport.invoke<ShareDTO[]>('ListTorrentShares', infohash),
+  shareTorrent: (infohash: string, userID: number, access: TorrentAccess) =>
+    transport.invoke<void>('ShareTorrent', infohash, userID, access),
+  unshareTorrent: (infohash: string, userID: number) =>
+    transport.invoke<void>('UnshareTorrent', infohash, userID),
   platform: () => transport.invoke<string>('Platform'),
   windowMinimise: () => transport.invoke<void>('WindowMinimise'),
   windowMaximise: () => transport.invoke<void>('WindowMaximise'),

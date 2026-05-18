@@ -39,8 +39,12 @@ func NewApp(svc *api.Service, hub *remote.Hub) *App {
 }
 
 func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-	go a.streamTicks(ctx)
+	// The desktop app has no login — every Service call runs as the system
+	// caller (full access, sees all torrents). Carrying it on a.ctx means all
+	// the a.svc.* calls below inherit it without per-call plumbing; Wails
+	// runtime calls ignore the extra context value.
+	a.ctx = api.WithCaller(ctx, api.SystemCaller)
+	go a.streamTicks(a.ctx)
 	// macOS routes Finder-clicked .torrent files and browser-clicked magnet:
 	// URLs through Apple Events, not argv. Register NSAppleEventManager
 	// handlers that funnel both into HandleLaunchArgs. No-op on other OSes.
@@ -149,9 +153,9 @@ func (a *App) PickAndAddTorrent(savePath string) (string, error) {
 }
 
 // Pause/Resume/Remove operate by id.
-func (a *App) Pause(id string) error   { return a.svc.Pause(engine.TorrentID(id)) }
-func (a *App) Resume(id string) error  { return a.svc.Resume(engine.TorrentID(id)) }
-func (a *App) Recheck(id string) error { return a.svc.Recheck(engine.TorrentID(id)) }
+func (a *App) Pause(id string) error   { return a.svc.Pause(a.ctx, engine.TorrentID(id)) }
+func (a *App) Resume(id string) error  { return a.svc.Resume(a.ctx, engine.TorrentID(id)) }
+func (a *App) Recheck(id string) error { return a.svc.Recheck(a.ctx, engine.TorrentID(id)) }
 func (a *App) Remove(id string, deleteFiles bool) error {
 	return a.svc.Remove(a.ctx, engine.TorrentID(id), deleteFiles)
 }
@@ -164,12 +168,12 @@ func (a *App) GlobalStats() (api.GlobalStats, error) {
 // with `tabs` visible. The next inspector:tick (and subsequent ticks at 1Hz)
 // will include data scoped to those tabs.
 func (a *App) SetInspectorFocus(id string, tabs []string) error {
-	return a.svc.SetInspectorFocus(id, tabs)
+	return a.svc.SetInspectorFocus(a.ctx, id, tabs)
 }
 
 // ClearInspectorFocus stops inspector:tick emission until SetInspectorFocus is called again.
 func (a *App) ClearInspectorFocus() {
-	a.svc.ClearInspectorFocus()
+	a.svc.ClearInspectorFocus(a.ctx)
 }
 
 func (a *App) ListCategories() ([]api.CategoryDTO, error) {

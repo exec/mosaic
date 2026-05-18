@@ -1,9 +1,10 @@
 import {Match, Switch} from 'solid-js';
-import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, WebConfigDTO} from '../../lib/bindings';
+import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WebConfigDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
 import {ConnectionPane} from './ConnectionPane';
 import {WebInterfacePane} from './WebInterfacePane';
+import {UsersPane} from './UsersPane';
 import {UpdatesPane} from './UpdatesPane';
 import {DesktopPane} from './DesktopPane';
 import {SchedulePane} from './SchedulePane';
@@ -16,6 +17,8 @@ import {AboutPane} from './AboutPane';
 type Props = {
   pane: SettingsPane;
   onPaneChange: (p: SettingsPane) => void;
+  serverFlavor: ServerFlavor;
+  currentUser: UserDTO | null;
   defaultSavePath: string;
   categories: CategoryDTO[];
   tags: TagDTO[];
@@ -65,7 +68,12 @@ type Props = {
 export function SettingsRoute(props: Props) {
   return (
     <div class="flex h-full">
-      <SettingsSidebar active={props.pane} onSelect={props.onPaneChange} />
+      <SettingsSidebar
+        active={props.pane}
+        onSelect={props.onPaneChange}
+        flavor={props.serverFlavor}
+        currentUser={props.currentUser}
+      />
       <div class="flex-1 overflow-auto">
         <Switch>
           <Match when={props.pane === 'general'}>
@@ -88,6 +96,9 @@ export function SettingsRoute(props: Props) {
               onSetWebPassword={props.onSetWebPassword}
               onRotateAPIKey={props.onRotateAPIKey}
             />
+          </Match>
+          <Match when={props.pane === 'users'}>
+            <UsersPane currentUser={props.currentUser} />
           </Match>
           <Match when={props.pane === 'updates'}>
             <UpdatesPane

@@ -25,5 +25,6 @@
   "force_start": false,
   "queued": false,
   "verifying": false,
-  "files_missing": false
+  "files_missing": false,
+  "access": "owner"
 }

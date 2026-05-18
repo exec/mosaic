@@ -1,6 +1,7 @@
 # Wails build artifacts
 build/bin/
 mosaic
+mosaicd
 *.exe
 *.test
 *.out
