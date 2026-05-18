@@ -29,6 +29,42 @@ const ROUTES: Record<string, RouteSpec> = {
     unwrap: okEnvelope,
   },
   Logout: {method: 'POST', path: () => '/api/logout', unwrap: okEnvelope},
+  Bootstrap: {method: 'GET', path: () => '/api/bootstrap'},
+
+  // Multi-user
+  Me: {method: 'GET', path: () => '/api/me'},
+  ChangeMyPassword: {
+    method: 'POST',
+    path: () => '/api/me/password',
+    body: ([oldPassword, newPassword]) => ({old_password: oldPassword, new_password: newPassword}),
+    unwrap: okEnvelope,
+  },
+  RotateMyAPIKey: {method: 'POST', path: () => '/api/me/api_key/rotate', unwrap: (r) => r.api_key as string},
+  ListUsers: {method: 'GET', path: () => '/api/users'},
+  CreateUser: {method: 'POST', path: () => '/api/users', body: ([input]) => input},
+  UpdateUser: {method: 'PUT', path: ([id]) => `/api/users/${id}`, body: ([, input]) => input},
+  DeleteUser: {method: 'DELETE', path: ([id]) => `/api/users/${id}`, unwrap: okEnvelope},
+  ResetUserPassword: {
+    method: 'POST',
+    path: ([id]) => `/api/users/${id}/password`,
+    body: ([, newPassword]) => ({new_password: newPassword}),
+    unwrap: okEnvelope,
+  },
+  ListTorrentShares: {
+    method: 'GET',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/shares`,
+  },
+  ShareTorrent: {
+    method: 'POST',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/shares`,
+    body: ([, userID, access]) => ({user_id: userID, access}),
+    unwrap: okEnvelope,
+  },
+  UnshareTorrent: {
+    method: 'DELETE',
+    path: ([id, userID]) => `/api/torrents/${encodeURIComponent(id)}/shares/${userID}`,
+    unwrap: okEnvelope,
+  },
 
   // Torrents
   ListTorrents: {method: 'GET', path: () => '/api/torrents'},

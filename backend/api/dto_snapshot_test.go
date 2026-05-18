@@ -96,6 +96,7 @@ func dtoSnapshotCases() []snapshotCase {
 		Queued:        false,
 		Verifying:     false,
 		FilesMissing:  false,
+		Access:        "owner",
 	}
 	torrentWithCategory := torrentBase
 	torrentWithCategory.CategoryID = intPtr(42)

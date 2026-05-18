@@ -26,6 +26,7 @@ type Server struct {
 	sessions *SessionStore
 	staticFS fs.FS
 	dataDir  string
+	flavor   string
 
 	mu      sync.Mutex
 	srv     *http.Server
@@ -35,9 +36,10 @@ type Server struct {
 
 // NewServer constructs a Server bound to the given Service + Hub. dataDir is
 // the directory under which the self-signed TLS material is cached
-// (dataDir/web-tls/cert.pem + key.pem).
-func NewServer(svc *api.Service, hub *Hub, sessions *SessionStore, staticFS fs.FS, dataDir string) *Server {
-	return &Server{svc: svc, hub: hub, sessions: sessions, staticFS: staticFS, dataDir: dataDir}
+// (dataDir/web-tls/cert.pem + key.pem). flavor is FlavorDaemon (mosaicd) or
+// FlavorDesktop (the Wails app's optional web server).
+func NewServer(svc *api.Service, hub *Hub, sessions *SessionStore, staticFS fs.FS, dataDir, flavor string) *Server {
+	return &Server{svc: svc, hub: hub, sessions: sessions, staticFS: staticFS, dataDir: dataDir, flavor: flavor}
 }
 
 // Apply starts, stops, or restarts the server to match cfg. Returns the
@@ -96,7 +98,7 @@ func (s *Server) startLocked(cfg api.WebConfigDTO) error {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", cfg.Port))
 
 	useTLS := cfg.BindAll
-	router := Mount(s.svc, s.sessions, s.hub, s.staticFS, useTLS)
+	router := Mount(s.svc, s.sessions, s.hub, s.staticFS, useTLS, s.flavor)
 
 	srv := &http.Server{
 		Addr:              addr,

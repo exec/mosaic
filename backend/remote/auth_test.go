@@ -84,17 +84,44 @@ func TestVerifyPassword_NonDefaultArgon2Params(t *testing.T) {
 
 func TestSessionStore_RevokeAllClearsAllTokens(t *testing.T) {
 	s := NewSessionStore()
-	a, err := s.Create()
+	a, err := s.Create(1)
 	require.NoError(t, err)
-	b, err := s.Create()
+	b, err := s.Create(1)
 	require.NoError(t, err)
-	require.True(t, s.Valid(a))
-	require.True(t, s.Valid(b))
+	requireValid(t, s, a, 1)
+	requireValid(t, s, b, 1)
 	require.Equal(t, 2, s.Count())
 
 	s.RevokeAll()
 
-	require.False(t, s.Valid(a))
-	require.False(t, s.Valid(b))
+	requireInvalid(t, s, a)
+	requireInvalid(t, s, b)
 	require.Equal(t, 0, s.Count())
+}
+
+// TestSessionStore_RevokeUser drops only the targeted user's sessions.
+func TestSessionStore_RevokeUser(t *testing.T) {
+	s := NewSessionStore()
+	u1, err := s.Create(1)
+	require.NoError(t, err)
+	u2, err := s.Create(2)
+	require.NoError(t, err)
+
+	s.RevokeUser(1)
+
+	requireInvalid(t, s, u1)
+	requireValid(t, s, u2, 2)
+}
+
+func requireValid(t *testing.T, s *SessionStore, token string, wantUser int) {
+	t.Helper()
+	uid, ok := s.Valid(token)
+	require.True(t, ok)
+	require.Equal(t, wantUser, uid)
+}
+
+func requireInvalid(t *testing.T, s *SessionStore, token string) {
+	t.Helper()
+	_, ok := s.Valid(token)
+	require.False(t, ok)
 }

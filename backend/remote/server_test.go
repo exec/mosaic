@@ -44,11 +44,13 @@ func newFixture(t *testing.T) *fixture {
 		persistence.NewScheduleRules(db),
 		persistence.NewFeeds(db),
 		persistence.NewFilters(db),
+		persistence.NewUsers(db),
+		persistence.NewTorrentAccess(db),
 		nil, "/tmp/dl",
 	)
 
 	sessions := NewSessionStore()
-	router := Mount(svc, sessions, nil, nil, false)
+	router := Mount(svc, sessions, nil, nil, false, FlavorDaemon)
 	return &fixture{svc: svc, fb: fb, sessions: sessions, router: router}
 }
 
@@ -90,7 +92,7 @@ func TestServer_LoginAcceptsCorrectCredsAndIssuesCookie(t *testing.T) {
 
 	cookie := f.loginCookie(t, "alice", "s3cret")
 	require.NotEmpty(t, cookie.Value)
-	require.True(t, f.sessions.Valid(cookie.Value))
+	require.True(t, sessionOK(f.sessions, cookie.Value))
 }
 
 func TestServer_GatedRouteRejectsAnonymous(t *testing.T) {
@@ -134,14 +136,14 @@ func TestServer_LogoutClearsCookieAndInvalidatesSession(t *testing.T) {
 	f := newFixture(t)
 	f.seedCreds(t, "alice", "s3cret")
 	cookie := f.loginCookie(t, "alice", "s3cret")
-	require.True(t, f.sessions.Valid(cookie.Value))
+	require.True(t, sessionOK(f.sessions, cookie.Value))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.False(t, f.sessions.Valid(cookie.Value))
+	require.False(t, sessionOK(f.sessions, cookie.Value))
 }
 
 func TestServer_AddMagnetThenList(t *testing.T) {
@@ -243,3 +245,10 @@ func (m *multipartW) writeFile(name, filename string, body []byte) {
 }
 
 func (m *multipartW) close() { _, _ = m.c.Write([]byte("--" + m.b + "--\r\n")) }
+
+// sessionOK adapts SessionStore.Valid's (userID, ok) return to a bool for the
+// require.True/False assertions above.
+func sessionOK(s *SessionStore, token string) bool {
+	_, ok := s.Valid(token)
+	return ok
+}

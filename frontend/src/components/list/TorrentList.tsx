@@ -23,6 +23,8 @@ type Props = {
   onToggleTag: (id: string, tagID: number) => void;
   onMoveQueue: (id: string, direction: QueueDirection) => void;
   onToggleForceStart: (id: string, current: boolean) => void;
+  // onShare is provided only when the current user may share torrents.
+  onShare?: (id: string) => void;
 };
 
 export function TorrentList(props: Props) {
@@ -52,6 +54,7 @@ export function TorrentList(props: Props) {
                   onToggleTag={(tagID) => props.onToggleTag(t.id, tagID)}
                   onMoveQueue={(direction) => props.onMoveQueue(t.id, direction)}
                   onToggleForceStart={() => props.onToggleForceStart(t.id, t.force_start)}
+                  onShare={props.onShare ? () => props.onShare!(t.id) : undefined}
                 >
                   <TorrentCard
                     torrent={t}

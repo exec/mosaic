@@ -7,7 +7,7 @@ import {
   type GlobalStatsT, type InspectorTab,
   type LimitsDTO, type PeerLimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
   type UpdaterConfigDTO, type UpdateInfoDTO,
-  type WebConfigDTO,
+  type WebConfigDTO, type ServerFlavor, type UserDTO,
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
 import {isWailsRuntime} from './runtime';
@@ -67,6 +67,13 @@ export type AppState = {
 
   // Desktop integration (tray + notifications)
   desktopIntegration: DesktopIntegrationDTO;
+
+  // Multi-user. serverFlavor distinguishes the headless mosaicd daemon
+  // ('daemon') from the desktop app / its optional web server ('desktop').
+  // currentUser is the logged-in account on mosaicd; null on the desktop
+  // build, where there is no login and every action runs with full access.
+  serverFlavor: ServerFlavor;
+  currentUser: UserDTO | null;
 };
 
 const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
@@ -209,6 +216,9 @@ export function createTorrentsStore() {
     appVersion: 'dev',
 
     desktopIntegration: defaultDesktopIntegration,
+
+    serverFlavor: 'desktop',
+    currentUser: null,
   });
 
   // Boot fetches. Each failure is logged AND surfaces a single aggregated
@@ -248,6 +258,16 @@ export function createTorrentsStore() {
   // also hides the Desktop pane there.
   if (isWailsRuntime()) {
     api.getDesktopIntegration().then((d) => setState(produce((s) => { s.desktopIntegration = d; }))).catch(bootFailed('desktop integration'));
+  } else {
+    // Browser mode: learn whether we're talking to the multi-user mosaicd
+    // daemon or the desktop app's single-user web server, and load the
+    // logged-in account so the UI can gate per-permission controls.
+    api.bootstrap()
+      .then((b) => setState(produce((s) => { s.serverFlavor = b.flavor; })))
+      .catch((e) => console.error('bootstrap fetch failed:', e));
+    api.me()
+      .then((u) => setState(produce((s) => { s.currentUser = u; })))
+      .catch((e) => console.error('me fetch failed:', e));
   }
 
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));

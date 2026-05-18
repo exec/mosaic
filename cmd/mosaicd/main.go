@@ -162,7 +162,7 @@ func main() {
 		EnableEncryption:     enableEnc,
 		MaxPeersPerTorrent:   maxPeersPerTorrent,
 		SnapshotStore:        &verifySnapshotAdapter{store: verifySnaps},
-		ClientVersion:        "Mosaicd/" + strings.TrimPrefix(version, "v"),
+		ClientVersion:        "Mosaic/" + strings.TrimPrefix(version, "v"),
 		PreallocateFullFiles: preallocateFullFiles,
 	})
 	if err != nil {
@@ -187,10 +187,16 @@ func main() {
 		scheduleRules,
 		feeds,
 		filters,
+		persistence.NewUsers(db),
+		persistence.NewTorrentAccess(db),
 		sched,
 		cfg.DefaultSavePath)
 	if err := svc.RestoreOnStartup(ctx); err != nil {
 		log.Warn().Err(err).Msg("restore on startup")
+	}
+	// Migrate any pre-0009 plaintext API key into the admin user's hashed key.
+	if err := svc.ReconcileLegacyAPIKey(ctx); err != nil {
+		log.Warn().Err(err).Msg("reconcile legacy api key")
 	}
 	scheduleEngine := api.NewScheduleEngine(svc, scheduleRules, time.Local)
 	defer scheduleEngine.Close()
@@ -244,7 +250,7 @@ func main() {
 	defer hub.Close()
 	sessions := remote.NewSessionStore()
 	svc.AttachSessionRevoker(sessions)
-	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir)
+	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir, remote.FlavorDaemon)
 	defer remoteSrv.Stop()
 	// Runtime web-config changes (operator flips port via Settings) are
 	// logged but non-fatal — the daemon stays alive on the previous
@@ -377,9 +383,10 @@ func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web ap
 	return nil
 }
 
-// streamTicks polls the service at regular intervals and broadcasts state
-// snapshots to all connected WebSocket clients via the hub. Mirrors the ticker
-// goroutine in app.go but without the Wails EventsEmit calls.
+// streamTicks polls the service at regular intervals and pushes state
+// snapshots to connected WebSocket clients. Unlike the desktop app's ticker,
+// mosaicd is multi-user: each tick is computed and published *per connected
+// user* so one user never receives another's torrents/stats/inspector data.
 func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
@@ -392,25 +399,47 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 		case <-ctx.Done():
 			return
 		case <-torrents.C:
-			rows, err := svc.ListTorrents(ctx)
-			if err != nil {
-				continue
+			for _, uid := range hub.ConnectedUserIDs() {
+				uctx, err := userCtx(ctx, svc, uid)
+				if err != nil {
+					continue
+				}
+				if rows, err := svc.ListTorrents(uctx); err == nil {
+					hub.PublishTorrentsTo(uid, rows)
+				}
 			}
-			hub.PublishTorrents(rows)
 		case <-stats.C:
-			s, err := svc.GlobalStats(ctx)
-			if err != nil {
-				continue
+			for _, uid := range hub.ConnectedUserIDs() {
+				uctx, err := userCtx(ctx, svc, uid)
+				if err != nil {
+					continue
+				}
+				if s, err := svc.GlobalStats(uctx); err == nil {
+					hub.PublishStatsTo(uid, s)
+				}
 			}
-			hub.PublishStats(s)
 		case <-inspector.C:
-			detail, err := svc.DetailForFocus(ctx)
-			if err != nil || detail == nil {
-				continue
+			for _, uid := range hub.ConnectedUserIDs() {
+				uctx, err := userCtx(ctx, svc, uid)
+				if err != nil {
+					continue
+				}
+				if detail, err := svc.DetailForFocus(uctx); err == nil && detail != nil {
+					hub.PublishInspectorTo(uid, *detail)
+				}
 			}
-			hub.PublishInspector(*detail)
 		}
 	}
+}
+
+// userCtx builds a caller-scoped context for a connected user, so per-user
+// tick computations are filtered to what that user is allowed to see.
+func userCtx(ctx context.Context, svc *api.Service, userID int) (context.Context, error) {
+	caller, err := svc.CallerForUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return api.WithCaller(ctx, caller), nil
 }
 
 // randomPassword returns a 32-byte URL-safe random password (~256 bits of
