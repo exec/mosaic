@@ -1,11 +1,11 @@
 import {For, createMemo} from 'solid-js';
-import {Sliders, Wifi, Globe, Users, Download, MonitorSmartphone, Calendar, Shield, Rss, Folder, Tag, Info} from 'lucide-solid';
+import {Sliders, Palette, Wifi, Globe, Users, Download, MonitorSmartphone, Calendar, Shield, Rss, Folder, Tag, Info} from 'lucide-solid';
 import {isWailsRuntime} from '../../lib/runtime';
 import type {ServerFlavor, UserDTO} from '../../lib/bindings';
 import {canChangeSettings, canManageRSS, canManageCatTags} from '../../lib/permissions';
 
 export type SettingsPane =
-  | 'general' | 'connection' | 'web' | 'users' | 'updates' | 'desktop'
+  | 'general' | 'appearance' | 'connection' | 'web' | 'users' | 'updates' | 'desktop'
   | 'schedule' | 'blocklist' | 'rss' | 'categories' | 'tags' | 'about';
 
 type VisibilityCtx = {flavor: ServerFlavor; user: UserDTO | null};
@@ -20,6 +20,7 @@ type Item = {
 
 const allItems: Item[] = [
   {value: 'general', label: 'General', icon: Sliders},
+  {value: 'appearance', label: 'Appearance', icon: Palette},
   {value: 'connection', label: 'Connection', icon: Wifi, visible: ({user}) => canChangeSettings(user)},
   // The "Web Interface" pane configures the optional embedded server. That
   // only makes sense on the desktop build — mosaicd *is* the web interface

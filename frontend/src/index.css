@@ -37,6 +37,10 @@ html, body, #app {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
+  /* Accent ramp (default: Amethyst — purple). Each `html[data-theme="X"]`
+     block below overrides these for the other 5 themes; everything else
+     (selection, focus ring, the chart's download series) reads through them
+     so a theme switch reskins the whole app from one place. */
   --color-accent-50:   oklch(0.97 0.02 290);
   --color-accent-200:  oklch(0.85 0.10 290);
   --color-accent-400:  oklch(0.75 0.18 290);
@@ -44,12 +48,90 @@ html, body, #app {
   --color-accent-600:  oklch(0.55 0.25 290);
   --color-accent-700:  oklch(0.45 0.22 290);
 
+  /* The download series in BandwidthChart pulls its colours from these three
+     vars at runtime, so a theme switch repaints the chart without rebuilding
+     the data. The raw/fill variants are pre-derived per-theme so the chart
+     doesn't have to do any colour maths in JS. */
+  --color-down:      oklch(0.65 0.25 290);
+  --color-down-raw:  oklch(0.82 0.11 290);
+  --color-down-fill: oklch(0.65 0.25 290 / 0.12);
+
+  /* Semantic status colours — meaning-bearing, kept constant across themes. */
   --color-seed:    oklch(0.78 0.18 155);
-  --color-down:    oklch(0.65 0.25 290);
   --color-paused:  oklch(0.78 0.16 75);
   --color-fail:    oklch(0.65 0.24 25);
 
   --ease-app: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* === Per-theme overrides ================================================
+   The default Amethyst values live in `@theme` above and apply when no
+   `data-theme` attribute is set (or when it's "amethyst"). Each block here
+   overrides just the accent + download ramp; everything else (selection
+   colour, focus ring, scrollbar accent, the chart's download line) reads
+   through those variables and reskins automatically. */
+
+html[data-theme="cobalt"] {
+  --color-accent-50:   oklch(0.97 0.02 250);
+  --color-accent-200:  oklch(0.85 0.10 250);
+  --color-accent-400:  oklch(0.75 0.18 250);
+  --color-accent-500:  oklch(0.65 0.25 250);
+  --color-accent-600:  oklch(0.55 0.25 250);
+  --color-accent-700:  oklch(0.45 0.22 250);
+  --color-down:        oklch(0.65 0.25 250);
+  --color-down-raw:    oklch(0.82 0.11 250);
+  --color-down-fill:   oklch(0.65 0.25 250 / 0.12);
+}
+
+html[data-theme="verdant"] {
+  --color-accent-50:   oklch(0.97 0.02 155);
+  --color-accent-200:  oklch(0.86 0.10 155);
+  --color-accent-400:  oklch(0.78 0.16 155);
+  --color-accent-500:  oklch(0.70 0.20 155);
+  --color-accent-600:  oklch(0.60 0.20 155);
+  --color-accent-700:  oklch(0.50 0.18 155);
+  --color-down:        oklch(0.70 0.20 155);
+  --color-down-raw:    oklch(0.86 0.10 155);
+  --color-down-fill:   oklch(0.70 0.20 155 / 0.12);
+}
+
+html[data-theme="ember"] {
+  --color-accent-50:   oklch(0.97 0.02 45);
+  --color-accent-200:  oklch(0.87 0.09 45);
+  --color-accent-400:  oklch(0.80 0.14 45);
+  --color-accent-500:  oklch(0.72 0.18 45);
+  --color-accent-600:  oklch(0.62 0.18 45);
+  --color-accent-700:  oklch(0.52 0.16 45);
+  --color-down:        oklch(0.72 0.18 45);
+  --color-down-raw:    oklch(0.87 0.09 45);
+  --color-down-fill:   oklch(0.72 0.18 45 / 0.12);
+}
+
+html[data-theme="rose"] {
+  --color-accent-50:   oklch(0.97 0.02 0);
+  --color-accent-200:  oklch(0.86 0.10 0);
+  --color-accent-400:  oklch(0.77 0.17 0);
+  --color-accent-500:  oklch(0.68 0.22 0);
+  --color-accent-600:  oklch(0.58 0.22 0);
+  --color-accent-700:  oklch(0.48 0.20 0);
+  --color-down:        oklch(0.68 0.22 0);
+  --color-down-raw:    oklch(0.86 0.10 0);
+  --color-down-fill:   oklch(0.68 0.22 0 / 0.12);
+}
+
+html[data-theme="mono"] {
+  /* Cool slate. Lower chroma everywhere — the accent reads as a pale, cool
+     tint rather than a colour. Focus rings/selection still need to be
+     visible, so chroma can't go all the way to zero. */
+  --color-accent-50:   oklch(0.97 0.005 240);
+  --color-accent-200:  oklch(0.88 0.020 240);
+  --color-accent-400:  oklch(0.82 0.040 240);
+  --color-accent-500:  oklch(0.78 0.050 240);
+  --color-accent-600:  oklch(0.68 0.050 240);
+  --color-accent-700:  oklch(0.58 0.045 240);
+  --color-down:        oklch(0.78 0.050 240);
+  --color-down-raw:    oklch(0.90 0.030 240);
+  --color-down-fill:   oklch(0.78 0.050 240 / 0.12);
 }
 
 @keyframes shimmer {
@@ -63,11 +145,19 @@ html, body, #app {
 *::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); border: 2px solid transparent; background-clip: padding-box; }
 
-/* Selection — accent tint */
-::selection { background: oklch(0.65 0.25 290 / 0.35); color: #fff; }
+/* Selection + focus ring derive from the live accent so they reskin with
+   the theme. color-mix is supported in every webview Wails targets and
+   every modern browser the web build runs in. */
+::selection {
+  background: color-mix(in oklab, var(--color-accent-500) 35%, transparent);
+  color: #fff;
+}
 
-/* Focus-visible default for everything we don't ring explicitly */
-:focus-visible { outline: 2px solid oklch(0.65 0.25 290 / 0.6); outline-offset: 2px; border-radius: 4px; }
+:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent-500) 60%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 
 /* Disable spurious focus rings on click */
 :focus:not(:focus-visible) { outline: none; }

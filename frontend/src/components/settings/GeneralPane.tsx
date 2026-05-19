@@ -1,6 +1,5 @@
 import {createEffect, createSignal} from 'solid-js';
 import {toast} from 'solid-sonner';
-import {ThemeToggle} from '../theme/ThemeToggle';
 import {Button} from '../ui/Button';
 
 type Props = {
@@ -47,10 +46,7 @@ export function GeneralPane(props: Props) {
 
   return (
     <div class="mx-auto max-w-2xl px-6 py-6">
-      <PaneHeader title="General" subtitle="App-wide preferences for theme and default save target." />
-      <Field label="Theme" help="Mosaic follows system by default.">
-        <ThemeToggle />
-      </Field>
+      <PaneHeader title="General" subtitle="App-wide preferences." />
       <Field label="Default save path" help="New torrents land here unless you override per-add in the modal.">
         <div class="flex items-center gap-2">
           <input
