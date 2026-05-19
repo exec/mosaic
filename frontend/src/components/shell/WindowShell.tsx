@@ -1,5 +1,5 @@
 import {Match, Show, Switch, type JSX} from 'solid-js';
-import type {AppView, Density, StatusFilter} from '../../lib/store';
+import type {AppView, Density, StatusFilter, TorrentCounts} from '../../lib/store';
 import type {CategoryDTO, GlobalStatsT, TagDTO, Torrent, WebConfigDTO} from '../../lib/bindings';
 import type {SettingsPane} from '../settings/SettingsSidebar';
 import {IconRail} from './IconRail';
@@ -21,7 +21,6 @@ type Props = {
   onNavigateSchedule: () => void;
   onNavigateAbout: () => void;
   onLogout?: () => void;
-  torrents: Torrent[];
   filteredTorrents: Torrent[];
   stats: GlobalStatsT;
   density: Density;
@@ -42,7 +41,8 @@ type Props = {
   onTorrentBytesDropped: (bytes: Uint8Array) => Promise<void>;
   altSpeedActive: boolean;
   onToggleAltSpeed: () => void;
-  queuedCount: number;
+  // All torrent badge tallies, computed once per tick in App.tsx.
+  counts: TorrentCounts;
   webConfig: WebConfigDTO;
   onNavigateWebSettings: () => void;
   children: JSX.Element; // the main pane (TorrentList)
@@ -97,7 +97,7 @@ export function WindowShell(props: Props) {
           <div class="flex flex-1 min-h-0">
           <Show when={props.view === 'torrents'}>
             <FilterRail
-              torrents={props.torrents}
+              counts={props.counts}
               active={props.statusFilter}
               categories={props.categories}
               tags={props.tags}
@@ -136,7 +136,7 @@ export function WindowShell(props: Props) {
         </div>
         <StatusBar
           stats={props.stats}
-          queuedCount={props.queuedCount}
+          queuedCount={props.counts.queued}
           webConfig={props.webConfig}
           onClickWeb={props.onNavigateWebSettings}
         />

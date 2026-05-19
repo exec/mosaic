@@ -1,6 +1,6 @@
-import {createMemo, createSignal, onCleanup, onMount} from 'solid-js';
+import {createMemo, createSignal, lazy, onCleanup, onMount, Suspense} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
-import {createTorrentsStore, filterTorrents} from './lib/store';
+import {createTorrentsStore, filterTorrents, computeCounts} from './lib/store';
 import {api, onLaunchNotice} from './lib/bindings';
 import {transport} from './lib/transport';
 import {isWailsRuntime} from './lib/runtime';
@@ -14,8 +14,12 @@ import {UpdateToast} from './components/shell/UpdateToast';
 import {TorrentList} from './components/list/TorrentList';
 import {canShare} from './lib/permissions';
 import {Inspector} from './components/inspector/Inspector';
-import {SettingsRoute} from './components/settings/SettingsRoute';
 import './index.css';
+
+// The settings panes (RSS, schedule, users, blocklist, about, …) are only
+// reached when the user opens Settings — lazy-load the whole route so its
+// bundle stays off the initial torrents-view load.
+const SettingsRoute = lazy(() => import('./components/settings/SettingsRoute').then((m) => ({default: m.SettingsRoute})));
 
 export default function App() {
   if (isWailsRuntime()) {
@@ -106,7 +110,10 @@ function AuthenticatedApp() {
     )
   );
 
-  const queuedCount = createMemo(() => store.state.torrents.filter((t) => t.queued).length);
+  // All badge tallies (5 status + per-category + per-tag + queued) computed
+  // in one pass over the torrent list per tick, instead of one .filter()
+  // scan per badge in FilterRail / StatusBar.
+  const counts = createMemo(() => computeCounts(store.state.torrents));
 
   const onMoveQueue = async (id: string, direction: 'top' | 'up' | 'down' | 'bottom') => {
     const sorted = [...store.state.torrents].sort((a, b) => a.queue_position - b.queue_position);
@@ -239,7 +246,6 @@ function AuthenticatedApp() {
               }
             : undefined
         }
-        torrents={store.state.torrents}
         filteredTorrents={filtered()}
         stats={store.state.stats}
         density={store.state.density}
@@ -265,13 +271,14 @@ function AuthenticatedApp() {
         }}
         altSpeedActive={store.state.limits.alt_active}
         onToggleAltSpeed={() => store.toggleAltSpeed()}
-        queuedCount={queuedCount()}
+        counts={counts()}
         webConfig={store.state.webConfig}
         onNavigateWebSettings={() => {
           store.setView('settings');
           store.setSettingsPane('web');
         }}
         settings={
+          <Suspense fallback={<div class="p-6 text-sm text-zinc-500">Loading settings…</div>}>
           <SettingsRoute
             pane={store.state.settingsPane}
             onPaneChange={store.setSettingsPane}
@@ -322,13 +329,15 @@ function AuthenticatedApp() {
             onUpdateFilter={(f) => store.updateFilter(f)}
             onDeleteFilter={(feedID, id) => store.deleteFilter(feedID, id)}
           />
+          </Suspense>
         }
         inspector={
           <Inspector
             open={store.state.inspectorOpenId !== null}
             detail={store.state.inspectorDetail}
             tab={store.state.inspectorTab}
-            bandwidth={store.state.bandwidthRing}
+            bandwidthRing={store.bandwidthRing}
+            bandwidthTick={store.state.bandwidthTick}
             onTabChange={(t) => store.setInspectorTab(t)}
             onClose={() => store.closeInspector()}
             onSetFilePriority={async (index, priority) => {

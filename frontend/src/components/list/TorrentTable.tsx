@@ -1,6 +1,7 @@
 import {createMemo, For, Show} from 'solid-js';
 import {createSolidTable, getCoreRowModel, getSortedRowModel, flexRender, type ColumnDef, type SortingState} from '@tanstack/solid-table';
 import {createSignal} from 'solid-js';
+import {createVirtualizer} from '@tanstack/solid-virtual';
 import {ChevronDown, ChevronUp, Star} from 'lucide-solid';
 import type {Torrent} from '../../lib/bindings';
 import {fmtBytes, fmtETA, fmtPercent, fmtRate} from '../../lib/format';
@@ -10,6 +11,10 @@ type Props = {
   selection: Set<string>;
   onRowClick: (id: string, e: MouseEvent) => void;
 };
+
+// Fixed table row height (px). Rows are single-line with truncation so the
+// height is constant — a fixed estimate keeps the virtualizer exact.
+const ROW_HEIGHT = 37;
 
 export function TorrentTable(props: Props) {
   const [sorting, setSorting] = createSignal<SortingState>([{id: 'added_at', desc: true}]);
@@ -65,8 +70,30 @@ export function TorrentTable(props: Props) {
     getSortedRowModel: getSortedRowModel(),
   });
 
+  // The scroll container the virtualizer measures against. Set via ref below.
+  let scrollEl: HTMLDivElement | undefined;
+
+  // Virtualize the sorted rows: only the visible window renders into the
+  // tbody. Two spacer <tr>s (top/bottom) reserve the off-screen height so
+  // the scrollbar and the sticky header stay correct.
+  const rowVirtualizer = createVirtualizer({
+    get count() { return table.getRowModel().rows.length; },
+    getScrollElement: () => scrollEl ?? null,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 8,
+  });
+
+  // Height of the rows scrolled off below the viewport — reserved by the
+  // bottom spacer <tr> so the scrollbar matches the full list.
+  const bottomPad = createMemo(() => {
+    const items = rowVirtualizer.getVirtualItems();
+    if (items.length === 0) return 0;
+    const last = items[items.length - 1];
+    return rowVirtualizer.getTotalSize() - (last.start + last.size);
+  });
+
   return (
-    <div class="overflow-auto">
+    <div class="overflow-auto" ref={scrollEl}>
       <table class="w-full text-sm">
         <thead class="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-md text-xs font-medium uppercase tracking-wider text-zinc-500">
           <For each={table.getHeaderGroups()}>
@@ -92,23 +119,38 @@ export function TorrentTable(props: Props) {
           </For>
         </thead>
         <tbody>
-          <For each={table.getRowModel().rows}>
-            {(row) => (
-              <tr
-                class="cursor-pointer border-t border-white/[.04] hover:bg-white/[.02]"
-                classList={{'!bg-accent-500/[.06]': props.selection.has(row.original.id)}}
-                onClick={(e) => props.onRowClick(row.original.id, e)}
-              >
-                <For each={row.getVisibleCells()}>
-                  {(cell) => (
-                    <td class="px-3 py-2 truncate" style={{'max-width': `${cell.column.getSize()}px`}}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  )}
-                </For>
-              </tr>
-            )}
+          {/* Top spacer: reserves the height of rows scrolled off above. */}
+          <Show when={(rowVirtualizer.getVirtualItems()[0]?.start ?? 0) > 0}>
+            <tr aria-hidden="true">
+              <td style={{height: `${rowVirtualizer.getVirtualItems()[0]!.start}px`, padding: '0'}} />
+            </tr>
+          </Show>
+          <For each={rowVirtualizer.getVirtualItems()}>
+            {(vItem) => {
+              const row = () => table.getRowModel().rows[vItem.index];
+              return (
+                <Show when={row()}>
+                  <tr
+                    class="cursor-pointer border-t border-white/[.04] hover:bg-white/[.02]"
+                    classList={{'!bg-accent-500/[.06]': props.selection.has(row().original.id)}}
+                    onClick={(e) => props.onRowClick(row().original.id, e)}
+                  >
+                    <For each={row().getVisibleCells()}>
+                      {(cell) => (
+                        <td class="px-3 py-2 truncate" style={{'max-width': `${cell.column.getSize()}px`}}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      )}
+                    </For>
+                  </tr>
+                </Show>
+              );
+            }}
           </For>
+          {/* Bottom spacer: reserves the height of rows scrolled off below. */}
+          <Show when={bottomPad() > 0}>
+            <tr aria-hidden="true"><td style={{height: `${bottomPad()}px`, padding: '0'}} /></tr>
+          </Show>
         </tbody>
       </table>
     </div>
