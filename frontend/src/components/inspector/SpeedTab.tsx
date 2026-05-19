@@ -11,8 +11,42 @@ const ranges: {value: number; label: string}[] = [
 
 type Props = {samples: BandwidthSample[]};
 
+// LegendToggle is a clickable key entry that shows/hides one line variant.
+// The swatch is a short line whose thickness mirrors the chart (thin = raw,
+// thick = smoothed); the whole chip dims when its variant is hidden.
+function LegendToggle(props: {label: string; active: boolean; thick: boolean; onClick: () => void}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      aria-pressed={props.active}
+      class="inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors duration-100 hover:bg-white/[.05]"
+      classList={{'opacity-35': !props.active}}
+    >
+      <span
+        class="w-3.5 rounded-full bg-zinc-300"
+        style={{height: props.thick ? '2.5px' : '1px'}}
+      />
+      {props.label}
+    </button>
+  );
+}
+
 export function SpeedTab(props: Props) {
   const [range, setRange] = createSignal(5 * 60);
+  // Both line variants are shown by default. The guards below keep at least
+  // one visible — toggling the last remaining variant off is a no-op.
+  const [showRaw, setShowRaw] = createSignal(true);
+  const [showSmoothed, setShowSmoothed] = createSignal(true);
+
+  const toggleRaw = () => {
+    if (showRaw() && !showSmoothed()) return;
+    setShowRaw((v) => !v);
+  };
+  const toggleSmoothed = () => {
+    if (showSmoothed() && !showRaw()) return;
+    setShowSmoothed((v) => !v);
+  };
 
   return (
     <div class="flex h-full flex-col gap-3 p-4">
@@ -31,15 +65,26 @@ export function SpeedTab(props: Props) {
         ))}
       </ToggleGroup>
       <div class="flex-1 min-h-0">
-        <BandwidthChart samples={props.samples} rangeSeconds={range()} />
+        <BandwidthChart
+          samples={props.samples}
+          rangeSeconds={range()}
+          showRaw={showRaw()}
+          showSmoothed={showSmoothed()}
+        />
       </div>
       <div class="flex items-center justify-between text-[10px] text-zinc-500">
-        <span class="inline-flex items-center gap-1.5">
-          <span class="h-2 w-2 rounded-full bg-down" /> Download
-        </span>
-        <span class="inline-flex items-center gap-1.5">
-          <span class="h-2 w-2 rounded-full bg-zinc-500" /> Upload
-        </span>
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center gap-1.5">
+            <span class="h-2 w-2 rounded-full bg-down" /> Download
+          </span>
+          <span class="inline-flex items-center gap-1.5">
+            <span class="h-2 w-2 rounded-full bg-zinc-500" /> Upload
+          </span>
+        </div>
+        <div class="flex items-center gap-0.5">
+          <LegendToggle label="Raw" active={showRaw()} thick={false} onClick={toggleRaw} />
+          <LegendToggle label="Smoothed" active={showSmoothed()} thick onClick={toggleSmoothed} />
+        </div>
       </div>
     </div>
   );
