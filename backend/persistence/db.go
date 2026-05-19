@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -27,6 +28,24 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+
+	// Bound the connection pool. This is a single-file embedded SQLite
+	// database in WAL mode: WAL allows many concurrent readers but still
+	// serializes writers, so an unbounded pool (database/sql's default) only
+	// invites "database is locked" contention and wasted file descriptors
+	// under load. A small fixed pool is the right shape here.
+	//   MaxOpenConns(8)  — enough parallelism for the readers (per-user WS
+	//                      ticks, HTTP handlers); writers still serialize and
+	//                      wait on busy_timeout rather than erroring out.
+	//   MaxIdleConns(8)  — keep the whole pool warm; opening a sqlite conn is
+	//                      cheap but pointless churn for a long-lived daemon.
+	//   ConnMaxLifetime(1h) — recycle connections occasionally so a leaked
+	//                      per-connection pragma or memory growth can't
+	//                      accumulate for the lifetime of the process.
+	sqlDB.SetMaxOpenConns(8)
+	sqlDB.SetMaxIdleConns(8)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
 	if err := sqlDB.PingContext(ctx); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
