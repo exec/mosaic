@@ -11,12 +11,13 @@ import {
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
 import {isWailsRuntime} from './runtime';
+import {BandwidthRing} from './ringbuffer';
 
 export type Density = 'cards' | 'table';
 export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'completed' | 'paused';
 export type AppView = 'torrents' | 'settings';
 
-export type BandwidthSample = {t: number; down: number; up: number};
+export type {BandwidthSample} from './ringbuffer';
 
 export type AppState = {
   torrents: Torrent[];
@@ -36,7 +37,12 @@ export type AppState = {
   inspectorOpenId: string | null;       // null = closed
   inspectorTab: InspectorTab;
   inspectorDetail: DetailDTO | null;    // latest tick payload
-  bandwidthRing: BandwidthSample[];     // ring buffer for Speed-tab chart, ~1Hz, capped at 24h
+  // Monotonic counter bumped on every inspector tick and reset to 0 when the
+  // bandwidth history is cleared. The live history itself lives in a
+  // BandwidthRing held outside the reactive store (a 86k-element store array
+  // is needlessly expensive to track); this counter is the reactive handle
+  // the Speed-tab chart subscribes to so it knows when to pull a new sample.
+  bandwidthTick: number;
 
   // Organization
   categories: CategoryDTO[];
@@ -76,7 +82,9 @@ export type AppState = {
   currentUser: UserDTO | null;
 };
 
-const BANDWIDTH_RING_MAX = 60 * 60 * 24; // 24 hours at 1 Hz
+// 24 hours of ~1 Hz samples. The chart downsamples this on read, so the
+// working set it actually renders stays small regardless of the cap.
+const BANDWIDTH_RING_MAX = 60 * 60 * 24;
 
 // rowToDetail builds a partial DetailDTO from a Torrent row so the
 // inspector can render its overview/header immediately on torrent switch
@@ -176,6 +184,11 @@ const defaultDesktopIntegration: DesktopIntegrationDTO = {
 };
 
 export function createTorrentsStore() {
+  // Live bandwidth history. Held outside the reactive store so per-tick
+  // pushes stay O(1) and don't churn a tracked array; the chart reads it
+  // imperatively and re-runs off the reactive `bandwidthTick` counter.
+  const bandwidthRing = new BandwidthRing(BANDWIDTH_RING_MAX);
+
   const [state, setState] = createStore<AppState>({
     torrents: [],
     stats: emptyStats,
@@ -192,7 +205,7 @@ export function createTorrentsStore() {
     inspectorOpenId: null,
     inspectorTab: 'overview',
     inspectorDetail: null,
-    bandwidthRing: [],
+    bandwidthTick: 0,
 
     categories: [],
     tags: [],
@@ -273,20 +286,26 @@ export function createTorrentsStore() {
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
   const offI = onInspectorTick((detail) => {
+    // Append to the ring imperatively (O(1), no shift), then bump the
+    // reactive counter so the Speed-tab chart pulls the new sample.
+    bandwidthRing.push(
+      Date.now() / 1000,
+      state.stats.total_download_rate,
+      state.stats.total_upload_rate,
+    );
     setState(produce((s) => {
       s.inspectorDetail = detail;
-      s.bandwidthRing.push({
-        t: Date.now() / 1000,
-        down: s.stats.total_download_rate,
-        up: s.stats.total_upload_rate,
-      });
-      if (s.bandwidthRing.length > BANDWIDTH_RING_MAX) s.bandwidthRing.shift();
+      s.bandwidthTick = s.bandwidthTick + 1;
     }));
   });
   const offU = onUpdateAvailable((info) => setState(produce((s) => { s.updateInfo = info; })));
 
   return {
     state,
+    // The live bandwidth history backing the Speed-tab chart. Read it
+    // alongside state.bandwidthTick — the counter is the reactive trigger,
+    // this ring holds the actual samples.
+    bandwidthRing,
     addMagnet: (m: string, savePath = '') => api.addMagnet(m, savePath),
     pickAndAddTorrent: (savePath = '') => api.pickAndAddTorrent(savePath),
     addTorrentBytes: (bytes: Uint8Array, savePath: string) => api.addTorrentBytes(bytes, savePath),
@@ -305,7 +324,8 @@ export function createTorrentsStore() {
         if (s.inspectorOpenId === id) {
           s.inspectorOpenId = null;
           s.inspectorDetail = null;
-          s.bandwidthRing = [];
+          bandwidthRing.clear();
+          s.bandwidthTick = 0;
         }
         if (s.selection.has(id)) {
           const next = new Set(s.selection);
@@ -357,7 +377,8 @@ export function createTorrentsStore() {
         // torrent reset to 0% then "shot back up" on each torrent switch.
         const row = s.torrents.find((t) => t.id === id);
         s.inspectorDetail = row ? rowToDetail(row) : null;
-        s.bandwidthRing = [];
+        bandwidthRing.clear();
+        s.bandwidthTick = 0;
       }));
       await api.setInspectorFocus(id, tabsForActive(tab));
     },
@@ -593,6 +614,49 @@ export function createTorrentsStore() {
   };
 }
 
+// TorrentCounts holds every badge tally the shell needs: the five status
+// filters, per-category, per-tag, and the queued count. Computed in one
+// pass by computeCounts so the FilterRail doesn't re-scan the full list
+// once per badge on every tick.
+export type TorrentCounts = {
+  all: number;
+  downloading: number;
+  seeding: number;
+  completed: number;
+  paused: number;
+  queued: number;
+  byCategory: Record<number, number>;
+  byTag: Record<number, number>;
+};
+
+// computeCounts tallies all torrent badge counts in a single scan.
+export function computeCounts(rows: Torrent[]): TorrentCounts {
+  const counts: TorrentCounts = {
+    all: rows.length,
+    downloading: 0,
+    seeding: 0,
+    completed: 0,
+    paused: 0,
+    queued: 0,
+    byCategory: {},
+    byTag: {},
+  };
+  for (const t of rows) {
+    if (t.paused) counts.paused++;
+    if (t.completed) counts.completed++;
+    if (t.completed && !t.paused) counts.seeding++;
+    if (!t.paused && !t.completed) counts.downloading++;
+    if (t.queued) counts.queued++;
+    if (t.category_id !== null) {
+      counts.byCategory[t.category_id] = (counts.byCategory[t.category_id] ?? 0) + 1;
+    }
+    for (const tg of t.tags) {
+      counts.byTag[tg.id] = (counts.byTag[tg.id] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
 export function filterTorrents(
   rows: Torrent[],
   status: StatusFilter,
@@ -600,26 +664,20 @@ export function filterTorrents(
   categoryID: number | null = null,
   tagID: number | null = null,
 ): Torrent[] {
-  let out = rows;
-  if (status !== 'all') {
-    out = out.filter((t) => {
-      switch (status) {
-        case 'downloading': return !t.paused && !t.completed;
-        case 'seeding':     return t.completed && !t.paused;
-        case 'completed':   return t.completed;
-        case 'paused':      return t.paused;
-      }
-    });
-  }
-  if (categoryID !== null) {
-    out = out.filter((t) => t.category_id === categoryID);
-  }
-  if (tagID !== null) {
-    out = out.filter((t) => t.tags.some((tg) => tg.id === tagID));
-  }
-  if (query.trim()) {
-    const q = query.toLowerCase();
-    out = out.filter((t) => t.name.toLowerCase().includes(q));
-  }
-  return out;
+  // Single pass: lowercase the query once outside the loop, then test
+  // every criterion in one predicate instead of chaining .filter() calls.
+  const q = query.trim() ? query.toLowerCase() : null;
+  return rows.filter((t) => {
+    switch (status) {
+      case 'downloading': if (t.paused || t.completed) return false; break;
+      case 'seeding':     if (!t.completed || t.paused) return false; break;
+      case 'completed':   if (!t.completed) return false; break;
+      case 'paused':      if (!t.paused) return false; break;
+      // 'all' — no status constraint.
+    }
+    if (categoryID !== null && t.category_id !== categoryID) return false;
+    if (tagID !== null && !t.tags.some((tg) => tg.id === tagID)) return false;
+    if (q !== null && !t.name.toLowerCase().includes(q)) return false;
+    return true;
+  });
 }

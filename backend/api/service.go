@@ -67,6 +67,12 @@ type Service struct {
 	// with backend/remote. SetWebPassword and a username-changing SetWebConfig
 	// call RevokeAll() to force every existing browser session to re-auth.
 	sessions SessionRevoker
+
+	// callers memoizes the Caller resolved for each user id so authenticated
+	// HTTP requests and per-user WS ticks don't re-SELECT the users table on
+	// every call. Invalidated alongside session revocation — see
+	// invalidateCaller.
+	callers *callerCache
 }
 
 // SessionRevoker is the subset of *remote.SessionStore that api.Service needs
@@ -121,6 +127,20 @@ func NewService(
 		scheduler:       scheduler,
 		defaultSavePath: defaultSavePath,
 		focus:           make(map[int]focusState),
+		callers:         newCallerCache(),
+	}
+}
+
+// invalidateCaller revokes a user's live sessions and drops their cached
+// Caller. Every credential/authority mutation must funnel through here so the
+// session store and the caller cache can never disagree about a user — a stale
+// cached Caller surviving a disable/demote would be a privilege-escalation bug.
+func (s *Service) invalidateCaller(userID int) {
+	if s.sessions != nil {
+		s.sessions.RevokeUser(userID)
+	}
+	if s.callers != nil {
+		s.callers.evict(userID)
 	}
 }
 
@@ -230,9 +250,7 @@ func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
 			if err := s.users.Update(ctx, u); err != nil {
 				return err
 			}
-			if s.sessions != nil {
-				s.sessions.RevokeUser(adminUserID)
-			}
+			s.invalidateCaller(adminUserID)
 		}
 	}
 	s.fireWebConfigChanged(s.GetWebConfig(ctx))
@@ -266,9 +284,7 @@ func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
 	if err := s.setUserPasswordHash(ctx, adminUserID, plain, true); err != nil {
 		return err
 	}
-	if s.sessions != nil {
-		s.sessions.RevokeUser(adminUserID)
-	}
+	s.invalidateCaller(adminUserID)
 	return nil
 }
 
@@ -893,34 +909,71 @@ func (s *Service) Remove(ctx context.Context, id engine.TorrentID, deleteFiles b
 	return s.torrents.Remove(ctx, hash)
 }
 
-func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
-	caller := CallerFrom(ctx)
+// TorrentTickSnapshot is the per-tick state shared across every connected
+// user: the engine's torrent snapshots, the persistence records keyed by
+// infohash, and the tags map. None of it is caller-dependent, so mosaicd's
+// streamTicks builds it ONCE per tick (see BuildTorrentTickSnapshot) and then
+// fans it out — instead of re-running torrents.List + tags.ForAllTorrents +
+// the full engine walk once per connected user.
+type TorrentTickSnapshot struct {
+	snaps      []engine.Snapshot
+	byHash     map[string]persistence.TorrentRecord
+	tagsByHash map[string][]persistence.Tag
+}
+
+// BuildTorrentTickSnapshot gathers the caller-independent torrent state for
+// one tick. Call it once, then pass the result to ListTorrentsFromSnapshot /
+// GlobalStatsFromSnapshot for each connected user.
+func (s *Service) BuildTorrentTickSnapshot(ctx context.Context) (TorrentTickSnapshot, error) {
 	records, err := s.torrents.List(ctx)
 	if err != nil {
-		return nil, err
+		return TorrentTickSnapshot{}, err
 	}
 	byHash := make(map[string]persistence.TorrentRecord, len(records))
 	for _, r := range records {
 		byHash[r.InfoHash] = r
 	}
+	// Pre-v0.4.3 we called s.tags.ForTorrent(ctx, infohash) inside the DTO
+	// loop — N+1 SELECTs every tick (~500ms cadence). One bulk fetch instead,
+	// hashed by infohash so assembly is an O(1) lookup.
+	tagsByHash, err := s.tags.ForAllTorrents(ctx)
+	if err != nil {
+		return TorrentTickSnapshot{}, err
+	}
+	return TorrentTickSnapshot{
+		snaps:      s.engine.List(),
+		byHash:     byHash,
+		tagsByHash: tagsByHash,
+	}, nil
+}
+
+func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
+	tick, err := s.BuildTorrentTickSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.ListTorrentsFromSnapshot(ctx, tick)
+}
+
+// ListTorrentsFromSnapshot assembles a caller's torrent DTO list from an
+// already-built TorrentTickSnapshot. The shared snapshot is byte-identical
+// across users; only the access filter, per-user Access level, sort, and DTO
+// assembly happen here — so streamTicks pays the DB/engine cost once per tick
+// rather than once per connected user. Output matches the old per-user
+// ListTorrents exactly.
+func (s *Service) ListTorrentsFromSnapshot(ctx context.Context, tick TorrentTickSnapshot) ([]TorrentDTO, error) {
+	caller := CallerFrom(ctx)
 	// Non-admin callers see only torrents they hold an access grant for.
 	var accessByHash map[string]string
 	if !caller.SeesAllTorrents() {
+		var err error
 		accessByHash, err = s.access.InfohashesForUser(ctx, caller.UserID)
 		if err != nil {
 			return nil, err
 		}
 	}
-	// Pre-v0.4.3 we called s.tags.ForTorrent(ctx, infohash) inside the
-	// loop below — N+1 SELECTs every tick (~500ms cadence). One bulk
-	// fetch instead, hashed by infohash so the loop is an O(1) lookup.
-	tagsByHash, err := s.tags.ForAllTorrents(ctx)
-	if err != nil {
-		return nil, err
-	}
-	snaps := s.engine.List()
-	out := make([]TorrentDTO, 0, len(snaps))
-	for _, snap := range snaps {
+	out := make([]TorrentDTO, 0, len(tick.snaps))
+	for _, snap := range tick.snaps {
 		hash := string(snap.ID)
 		access := persistence.AccessOwner
 		if !caller.SeesAllTorrents() {
@@ -930,7 +983,7 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 			}
 			access = lvl
 		}
-		rec, ok := byHash[hash]
+		rec, ok := tick.byHash[hash]
 		addedAt := time.Now()
 		if ok {
 			snap.SavePath = rec.SavePath
@@ -944,7 +997,7 @@ func (s *Service) ListTorrents(ctx context.Context) ([]TorrentDTO, error) {
 		if ok {
 			dto.CategoryID = rec.CategoryID
 		}
-		tags := tagsByHash[string(snap.ID)]
+		tags := tick.tagsByHash[hash]
 		dto.Tags = make([]TagDTO, 0, len(tags))
 		for _, tg := range tags {
 			dto.Tags = append(dto.Tags, TagDTO{ID: tg.ID, Name: tg.Name, Color: tg.Color})
@@ -973,9 +1026,24 @@ type GlobalStats struct {
 	TotalPeers         int   `json:"total_peers"`
 }
 
+// EngineSnapshots returns the engine's current per-torrent snapshot slice.
+// It is caller-independent: streamTicks walks the engine once per tick and
+// passes the result to GlobalStatsFromSnapshot for each connected user.
+func (s *Service) EngineSnapshots() []engine.Snapshot {
+	return s.engine.List()
+}
+
 func (s *Service) GlobalStats(ctx context.Context) (GlobalStats, error) {
+	return s.GlobalStatsFromSnapshot(ctx, s.engine.List())
+}
+
+// GlobalStatsFromSnapshot computes a caller's status-bar aggregate from an
+// already-fetched engine snapshot slice. The snapshot is identical across
+// users; per-user stats are just a filtered reduction of it, so streamTicks
+// can walk the engine once per tick and reuse the slice for every connected
+// user. Output matches the old per-user GlobalStats exactly.
+func (s *Service) GlobalStatsFromSnapshot(ctx context.Context, snaps []engine.Snapshot) (GlobalStats, error) {
 	caller := CallerFrom(ctx)
-	snaps := s.engine.List()
 	// Non-admin callers get an aggregate scoped to their own torrents only —
 	// the status bar must not leak the existence/bandwidth of other users'.
 	var visible map[string]string

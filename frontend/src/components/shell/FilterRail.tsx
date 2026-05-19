@@ -1,20 +1,21 @@
 import {For, Show, type Component} from 'solid-js';
 import {ChevronDown, ListFilter, Folder, Tag} from 'lucide-solid';
-import type {StatusFilter} from '../../lib/store';
-import type {CategoryDTO, TagDTO, Torrent} from '../../lib/bindings';
+import type {StatusFilter, TorrentCounts} from '../../lib/store';
+import type {CategoryDTO, TagDTO} from '../../lib/bindings';
 
-type StatusItem = {id: StatusFilter; label: string; count: (t: Torrent[]) => number};
+type StatusItem = {id: Exclude<StatusFilter, never>; label: string; key: keyof TorrentCounts};
 
 const statusItems: StatusItem[] = [
-  {id: 'all',         label: 'All',         count: (t) => t.length},
-  {id: 'downloading', label: 'Downloading', count: (t) => t.filter((x) => !x.paused && !x.completed).length},
-  {id: 'seeding',     label: 'Seeding',     count: (t) => t.filter((x) => x.completed && !x.paused).length},
-  {id: 'completed',   label: 'Completed',   count: (t) => t.filter((x) => x.completed).length},
-  {id: 'paused',      label: 'Paused',      count: (t) => t.filter((x) => x.paused).length},
+  {id: 'all',         label: 'All',         key: 'all'},
+  {id: 'downloading', label: 'Downloading', key: 'downloading'},
+  {id: 'seeding',     label: 'Seeding',     key: 'seeding'},
+  {id: 'completed',   label: 'Completed',   key: 'completed'},
+  {id: 'paused',      label: 'Paused',      key: 'paused'},
 ];
 
 type Props = {
-  torrents: Torrent[];
+  // All badge tallies, computed once per tick in App.tsx (see computeCounts).
+  counts: TorrentCounts;
   active: StatusFilter;
   categories: CategoryDTO[];
   tags: TagDTO[];
@@ -45,7 +46,7 @@ export function FilterRail(props: Props) {
         <ul class="flex flex-col gap-px">
           <For each={statusItems}>
             {(it) => {
-              const c = () => it.count(props.torrents);
+              const c = () => props.counts[it.key] as number;
               return (
                 <li>
                   <button
@@ -74,7 +75,7 @@ export function FilterRail(props: Props) {
           <ul class="flex flex-col gap-px">
             <For each={props.categories}>
               {(cat) => {
-                const count = () => props.torrents.filter((t) => t.category_id === cat.id).length;
+                const count = () => props.counts.byCategory[cat.id] ?? 0;
                 return (
                   <li>
                     <button
@@ -107,7 +108,7 @@ export function FilterRail(props: Props) {
           <ul class="flex flex-col gap-px">
             <For each={props.tags}>
               {(tg) => {
-                const count = () => props.torrents.filter((t) => t.tags.some((x) => x.id === tg.id)).length;
+                const count = () => props.counts.byTag[tg.id] ?? 0;
                 return (
                   <li>
                     <button

@@ -108,8 +108,22 @@ type AnacrolixBackend struct {
 	// turned that into measurable idle CPU. byID makes find() O(1).
 	// Same mutex (a.mu) as bySaveTo so the two stay consistent.
 
+	// Rate sampling is centralized on ONE goroutine (sampleRates, started in
+	// NewAnacrolixBackend). Pre-v0.7.x every caller of List/Snapshot/
+	// DetailedSnapshot computed rate as (bytesNow − prevRates[id]) / dt where
+	// dt was wall-clock since whichever goroutine last touched prevRates —
+	// and prevRates was mutated by the engine ticker, the scheduler, AND
+	// streamTicks calling List() once per connected user back-to-back. Calls
+	// 2..N saw dt≈microseconds → wildly inflated rates, then near-zero next
+	// tick; users saw flickering speeds. Now:
+	//   - prevRates is owned EXCLUSIVELY by the sampler goroutine. rateMu only
+	//     guards Remove() pruning the map between sampler ticks.
+	//   - the sampler publishes an immutable map[TorrentID]rateValue via an
+	//     atomic pointer swap (rateCache). List/Snapshot/DetailedSnapshot load
+	//     that map and read it; they never compute or store rate samples.
 	rateMu    sync.Mutex
 	prevRates map[TorrentID]rateSample
+	rateCache atomic.Pointer[map[TorrentID]rateValue]
 
 	// prevPeerRates is the per-peer equivalent: anacrolix's
 	// Peer.DownloadRate() is a cumulative average over the whole
@@ -118,8 +132,7 @@ type AnacrolixBackend struct {
 	// medium-rate average forever. We snapshot per-peer cumulative
 	// BytesReadUsefulData on each DetailedSnapshot tick and divide the
 	// delta by the elapsed time to surface a current speed.
-	// Keyed (TorrentID, "ip:port"); same lock as prevRates since
-	// DetailedSnapshot already holds it.
+	// Keyed (TorrentID, "ip:port"); guarded by rateMu.
 	prevPeerRates map[TorrentID]map[string]peerRateSample
 
 	// pausedMu guards paused, queuePos, forceStart, scheduledPause. We extend
@@ -208,6 +221,16 @@ type AnacrolixBackend struct {
 
 type rateSample struct {
 	at   time.Time
+	down int64
+	up   int64
+}
+
+// rateValue is the published per-torrent rate after one sampler tick. The
+// sampler swaps an immutable map[TorrentID]rateValue into rateCache; readers
+// (List/Snapshot/DetailedSnapshot) load it and pass the values straight into
+// snapshotFor. A torrent absent from the map (just-added, not yet sampled)
+// reads as the zero value — 0 B/s — which is correct for a fresh torrent.
+type rateValue struct {
 	down int64
 	up   int64
 }
@@ -346,7 +369,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		return nil, fmt.Errorf("anacrolix client: %w", err)
 	}
 	engineCtx, engineCancel := context.WithCancel(context.Background())
-	return &AnacrolixBackend{
+	b := &AnacrolixBackend{
 		client:           c,
 		pieceCompletion:  pieceCompletion,
 		bySaveTo:         make(map[TorrentID]string),
@@ -368,7 +391,84 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		engineCtx:            engineCtx,
 		engineCancel:         engineCancel,
 		preallocateFullFiles: cfg.PreallocateFullFiles,
-	}, nil
+	}
+	// Publish an empty cache up front so the first List() before the sampler's
+	// first tick reads a non-nil map (every torrent → 0 B/s) instead of
+	// nil-dereferencing.
+	empty := make(map[TorrentID]rateValue)
+	b.rateCache.Store(&empty)
+	b.verifyWg.Add(1)
+	go b.sampleRates(rateSampleInterval)
+	return b, nil
+}
+
+// rateSampleInterval is the fixed cadence of the single rate sampler. 500ms
+// matches the pre-v0.7.x engine ticker that used to (racily) drive sampling,
+// so observed rate granularity is unchanged.
+const rateSampleInterval = 500 * time.Millisecond
+
+// sampleRates is the ONE goroutine that owns prevRates. Every tick it walks
+// the live torrents, computes each torrent's down/up rate from the delta
+// since its previous sample, and publishes an immutable snapshot map into
+// rateCache via an atomic pointer swap. Readers never compute rates — they
+// load this map. Started by NewAnacrolixBackend, stopped when engineCtx is
+// cancelled by Close(); registered on verifyWg so Close() drains it.
+func (a *AnacrolixBackend) sampleRates(interval time.Duration) {
+	defer a.verifyWg.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.engineCtx.Done():
+			return
+		case <-t.C:
+			ts := a.client.Torrents()
+			now := time.Now()
+			next := make(map[TorrentID]rateValue, len(ts))
+			a.rateMu.Lock()
+			for _, tor := range ts {
+				id := TorrentID(tor.InfoHash().HexString())
+				stats := tor.Stats()
+				down := stats.BytesReadData.Int64()
+				up := stats.BytesWrittenData.Int64()
+				prev := a.prevRates[id]
+				var rateDown, rateUp int64
+				if !prev.at.IsZero() {
+					if dt := now.Sub(prev.at).Seconds(); dt > 0 {
+						rateDown = int64(float64(down-prev.down) / dt)
+						rateUp = int64(float64(up-prev.up) / dt)
+					}
+				}
+				a.prevRates[id] = rateSample{at: now, down: down, up: up}
+				next[id] = rateValue{down: rateDown, up: rateUp}
+			}
+			// Prune prevRates entries for torrents that vanished between
+			// ticks (removed without going through Remove, e.g. a Drop
+			// elsewhere) so the map can't grow unbounded.
+			if len(a.prevRates) > len(ts) {
+				live := make(map[TorrentID]struct{}, len(ts))
+				for _, tor := range ts {
+					live[TorrentID(tor.InfoHash().HexString())] = struct{}{}
+				}
+				for id := range a.prevRates {
+					if _, ok := live[id]; !ok {
+						delete(a.prevRates, id)
+					}
+				}
+			}
+			a.rateMu.Unlock()
+			a.rateCache.Store(&next)
+		}
+	}
+}
+
+// rateFor returns the most recently sampled down/up rate for a torrent. A
+// torrent the sampler hasn't observed yet (just added) reads as 0 B/s.
+func (a *AnacrolixBackend) rateFor(id TorrentID) rateValue {
+	if m := a.rateCache.Load(); m != nil {
+		return (*m)[id]
+	}
+	return rateValue{}
 }
 
 // isAddrInUseErr reports whether err comes from a bind() that lost the
@@ -1093,13 +1193,19 @@ func (a *AnacrolixBackend) List() []Snapshot {
 	// against snapshotSaved, so subsequent ticks observe completion as a
 	// no-op until Recheck or Remove clears the flag.
 	var completed []completedFor
-	a.rateMu.Lock()
+	// Rates come from the centralized sampler's immutable cache — this loop
+	// only reads, never mutates prevRates, so concurrent List() calls (one
+	// per connected user, back-to-back, every tick) all see identical rates.
+	rates := a.rateCache.Load()
 	a.pausedMu.RLock()
 	a.verifyMu.RLock()
 	for _, t := range ts {
 		id := TorrentID(t.InfoHash().HexString())
-		snap, next := snapshotFor(t, a.prevRates[id], a.paused[id], a.queuePos[id], a.forceStart[id], a.scheduledPause[id], a.verifying[id], a.filesMissing[id])
-		a.prevRates[id] = next
+		var rate rateValue
+		if rates != nil {
+			rate = (*rates)[id]
+		}
+		snap := snapshotFor(t, rate, a.paused[id], a.queuePos[id], a.forceStart[id], a.scheduledPause[id], a.verifying[id], a.filesMissing[id])
 		out = append(out, snap)
 		if snap.Completed {
 			completed = append(completed, completedFor{id: id, t: t})
@@ -1107,7 +1213,6 @@ func (a *AnacrolixBackend) List() []Snapshot {
 	}
 	a.verifyMu.RUnlock()
 	a.pausedMu.RUnlock()
-	a.rateMu.Unlock()
 	for _, c := range completed {
 		go a.saveSnapshotIfComplete(c.id, c.t)
 	}
@@ -1124,8 +1229,6 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	if !ok {
 		return Snapshot{}, errors.New("not found")
 	}
-	a.rateMu.Lock()
-	prev := a.prevRates[id]
 	a.pausedMu.RLock()
 	paused := a.paused[id]
 	queuePos := a.queuePos[id]
@@ -1136,9 +1239,7 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	verifying := a.verifying[id]
 	filesMissing := a.filesMissing[id]
 	a.verifyMu.RUnlock()
-	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued, verifying, filesMissing)
-	a.prevRates[id] = next
-	a.rateMu.Unlock()
+	snap := snapshotFor(t, a.rateFor(id), paused, queuePos, forceStart, queued, verifying, filesMissing)
 	return snap, nil
 }
 
@@ -1261,8 +1362,6 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	if !ok {
 		return Detail{}, errors.New("not found")
 	}
-	a.rateMu.Lock()
-	prev := a.prevRates[id]
 	a.pausedMu.RLock()
 	paused := a.paused[id]
 	queuePos := a.queuePos[id]
@@ -1273,9 +1372,7 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	verifying := a.verifying[id]
 	filesMissing := a.filesMissing[id]
 	a.verifyMu.RUnlock()
-	snap, next := snapshotFor(t, prev, paused, queuePos, forceStart, queued, verifying, filesMissing)
-	a.prevRates[id] = next
-	a.rateMu.Unlock()
+	snap := snapshotFor(t, a.rateFor(id), paused, queuePos, forceStart, queued, verifying, filesMissing)
 	d := Detail{Snapshot: snap}
 
 	if scope.Files {
@@ -1295,8 +1392,8 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 		// BytesReadUsefulData per peer, divide the next tick's delta by
 		// the elapsed time. Falls back to 0 on the first tick (no prior
 		// sample) and on completion (we wouldn't be requesting chunks
-		// anyway). rateMu was already taken above for the per-torrent
-		// rate; reuse it for the per-peer map.
+		// anyway). The per-peer map is still guarded by rateMu, shared
+		// with the rate sampler's prune of prevRates.
 		complete := t.BytesMissing() == 0
 		now := time.Now()
 		a.rateMu.Lock()
@@ -1489,7 +1586,11 @@ func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
 	return float64(pp.GetCardinality()) / float64(n)
 }
 
-func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool, queuePos int, forceStart, queued, verifying, filesMissing bool) (Snapshot, rateSample) {
+// snapshotFor builds a Snapshot for a torrent. The down/up rate is supplied
+// by the caller from the centralized rate cache (see sampleRates) — this
+// function no longer computes or stores rate samples, so it is a pure read
+// of the torrent and is safe to call concurrently from any number of readers.
+func snapshotFor(t *torrent.Torrent, rate rateValue, paused bool, queuePos int, forceStart, queued, verifying, filesMissing bool) Snapshot {
 	stats := t.Stats()
 	name := t.Name()
 	if name == "" {
@@ -1501,15 +1602,7 @@ func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool, queuePos int,
 	}
 	bytesDown := stats.BytesReadData.Int64()
 	bytesUp := stats.BytesWrittenData.Int64()
-	now := time.Now()
-	var rateDown, rateUp int64
-	if !prev.at.IsZero() {
-		dt := now.Sub(prev.at).Seconds()
-		if dt > 0 {
-			rateDown = int64(float64(bytesDown-prev.down) / dt)
-			rateUp = int64(float64(bytesUp-prev.up) / dt)
-		}
-	}
+	rateDown, rateUp := rate.down, rate.up
 	snap := Snapshot{
 		ID:            TorrentID(t.InfoHash().HexString()),
 		Name:          name,
@@ -1530,7 +1623,7 @@ func snapshotFor(t *torrent.Torrent, prev rateSample, paused bool, queuePos int,
 		Verifying:     verifying,
 		FilesMissing:  filesMissing,
 	}
-	return snap, rateSample{at: now, down: bytesDown, up: bytesUp}
+	return snap
 }
 
 // SetGlobalRateLimits mutates the existing limiter pointers in place. Passing

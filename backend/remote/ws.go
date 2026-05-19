@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"nhooyr.io/websocket"
 
 	"mosaic/backend/api"
@@ -22,8 +23,14 @@ type Envelope struct {
 // Hub fans out backend tick events to all connected WebSocket clients. Producers
 // (typically the main.go ticker goroutine) call Publish*; consumers connect via
 // HandleUpgrade.
+//
+// Frames are serialized to JSON *once* at the Publish boundary and the resulting
+// bytes are what travel through the bus and the per-client channels — every
+// connection then writes the same pre-encoded []byte rather than each running
+// its own json.Encode of an identical Envelope. With many connected clients
+// (mosaicd, multi-tab) that turns an O(clients) marshal per tick into O(1).
 type Hub struct {
-	bus *events.Bus[Envelope]
+	bus *events.Bus[[]byte]
 
 	mu      sync.Mutex
 	clients map[*hubClient]struct{}
@@ -32,63 +39,83 @@ type Hub struct {
 // NewHub returns an empty hub. Call Run(ctx) to start fan-out.
 func NewHub() *Hub {
 	return &Hub{
-		bus:     events.NewBus[Envelope](256),
+		bus:     events.NewBus[[]byte](256),
 		clients: make(map[*hubClient]struct{}),
 	}
 }
 
-// Run consumes the internal bus and pushes envelopes to every connected
-// client's send channel. Returns when ctx is done.
+// Run consumes the internal bus and pushes pre-encoded frames to every
+// connected client's send channel. Returns when ctx is done.
 func (h *Hub) Run(ctx context.Context) {
 	sub := h.bus.Subscribe()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case env, ok := <-sub:
+		case frame, ok := <-sub:
 			if !ok {
 				return
 			}
-			h.broadcast(env)
+			h.broadcast(frame)
 		}
 	}
 }
 
-func (h *Hub) broadcast(env Envelope) {
+func (h *Hub) broadcast(frame []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.clients {
 		select {
-		case c.send <- env:
+		case c.send <- frame:
 		default: // slow client: drop
 		}
 	}
 }
 
+// encodeFrame marshals an Envelope to its wire JSON. A marshal failure here
+// would mean a non-serializable payload (a programming error); we log and
+// return nil so callers can skip the publish rather than panic.
+func encodeFrame(typ string, payload any) []byte {
+	b, err := json.Marshal(Envelope{Type: typ, Payload: payload})
+	if err != nil {
+		log.Error().Err(err).Str("type", typ).Msg("ws: encode frame")
+		return nil
+	}
+	return b
+}
+
 // PublishTorrents emits a torrents:tick frame to all connected clients.
 func (h *Hub) PublishTorrents(rows []api.TorrentDTO) {
-	h.bus.Publish(Envelope{Type: "torrents:tick", Payload: rows})
+	if frame := encodeFrame("torrents:tick", rows); frame != nil {
+		h.bus.Publish(frame)
+	}
 }
 
 // PublishStats emits a stats:tick frame.
 func (h *Hub) PublishStats(s api.GlobalStats) {
-	h.bus.Publish(Envelope{Type: "stats:tick", Payload: s})
+	if frame := encodeFrame("stats:tick", s); frame != nil {
+		h.bus.Publish(frame)
+	}
 }
 
 // PublishInspector emits an inspector:tick frame.
 func (h *Hub) PublishInspector(d api.DetailDTO) {
-	h.bus.Publish(Envelope{Type: "inspector:tick", Payload: d})
+	if frame := encodeFrame("inspector:tick", d); frame != nil {
+		h.bus.Publish(frame)
+	}
 }
 
 // PublishUpdate emits an update:available frame to all connected clients.
 func (h *Hub) PublishUpdate(info api.UpdateInfoDTO) {
-	h.bus.Publish(Envelope{Type: "update:available", Payload: info})
+	if frame := encodeFrame("update:available", info); frame != nil {
+		h.bus.Publish(frame)
+	}
 }
 
-// sendToUser pushes an envelope to every connected client owned by userID.
-// Used by mosaicd's per-user tick fan-out so one user never receives another
-// user's torrents/stats/inspector data.
-func (h *Hub) sendToUser(userID int, env Envelope) {
+// sendFrameToUser pushes a pre-encoded frame to every connected client owned by
+// userID. Used by mosaicd's per-user tick fan-out so one user never receives
+// another user's torrents/stats/inspector data.
+func (h *Hub) sendFrameToUser(userID int, frame []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.clients {
@@ -96,7 +123,7 @@ func (h *Hub) sendToUser(userID int, env Envelope) {
 			continue
 		}
 		select {
-		case c.send <- env:
+		case c.send <- frame:
 		default: // slow client: drop
 		}
 	}
@@ -104,17 +131,39 @@ func (h *Hub) sendToUser(userID int, env Envelope) {
 
 // PublishTorrentsTo emits a torrents:tick frame to one user's clients only.
 func (h *Hub) PublishTorrentsTo(userID int, rows []api.TorrentDTO) {
-	h.sendToUser(userID, Envelope{Type: "torrents:tick", Payload: rows})
+	if frame := encodeFrame("torrents:tick", rows); frame != nil {
+		h.sendFrameToUser(userID, frame)
+	}
+}
+
+// PublishTorrentsRawTo sends an already-encoded torrents:tick frame to one
+// user's clients. mosaicd's streamTicks encodes the shared admin frame once and
+// fans the identical bytes out to every admin via this path.
+func (h *Hub) PublishTorrentsRawTo(userID int, frame []byte) {
+	if frame != nil {
+		h.sendFrameToUser(userID, frame)
+	}
+}
+
+// EncodeTorrentsFrame serializes a torrents:tick payload to its wire bytes so a
+// caller can encode once and fan the result out via PublishTorrentsRawTo.
+// Returns nil on a (programming-error) marshal failure.
+func EncodeTorrentsFrame(rows []api.TorrentDTO) []byte {
+	return encodeFrame("torrents:tick", rows)
 }
 
 // PublishStatsTo emits a stats:tick frame to one user's clients only.
 func (h *Hub) PublishStatsTo(userID int, s api.GlobalStats) {
-	h.sendToUser(userID, Envelope{Type: "stats:tick", Payload: s})
+	if frame := encodeFrame("stats:tick", s); frame != nil {
+		h.sendFrameToUser(userID, frame)
+	}
 }
 
 // PublishInspectorTo emits an inspector:tick frame to one user's clients only.
 func (h *Hub) PublishInspectorTo(userID int, d api.DetailDTO) {
-	h.sendToUser(userID, Envelope{Type: "inspector:tick", Payload: d})
+	if frame := encodeFrame("inspector:tick", d); frame != nil {
+		h.sendFrameToUser(userID, frame)
+	}
 }
 
 // ConnectedUserIDs returns the distinct user ids with at least one live
@@ -153,12 +202,12 @@ func (h *Hub) ClientCount() int {
 }
 
 type hubClient struct {
-	send   chan Envelope
+	send   chan []byte
 	caller api.Caller
 }
 
 func (h *Hub) addClient(caller api.Caller) *hubClient {
-	c := &hubClient{send: make(chan Envelope, 64), caller: caller}
+	c := &hubClient{send: make(chan []byte, 64), caller: caller}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.clients == nil {
@@ -230,12 +279,12 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.Han
 				return
 			case <-peerGone:
 				return
-			case env, ok := <-client.send:
+			case frame, ok := <-client.send:
 				if !ok {
 					return
 				}
 				writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				err := writeJSONFrame(writeCtx, conn, env)
+				err := writeRawFrame(writeCtx, conn, frame)
 				cancel()
 				if err != nil {
 					return
@@ -245,14 +294,9 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.Han
 	}
 }
 
-func writeJSONFrame(ctx context.Context, conn *websocket.Conn, v any) error {
-	w, err := conn.Writer(ctx, websocket.MessageText)
-	if err != nil {
-		return err
-	}
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		_ = w.Close()
-		return err
-	}
-	return w.Close()
+// writeRawFrame writes a pre-encoded JSON frame as a single text message. The
+// bytes were marshaled once at the Publish boundary (see encodeFrame); writing
+// them raw avoids a redundant per-connection json.Encode of identical content.
+func writeRawFrame(ctx context.Context, conn *websocket.Conn, frame []byte) error {
+	return conn.Write(ctx, websocket.MessageText, frame)
 }

@@ -1,6 +1,6 @@
 import {createSignal} from 'solid-js';
 import {ToggleGroup} from '@kobalte/core/toggle-group';
-import type {BandwidthSample} from '../../lib/store';
+import type {BandwidthRing} from '../../lib/ringbuffer';
 import {BandwidthChart} from './BandwidthChart';
 
 const ranges: {value: number; label: string}[] = [
@@ -9,7 +9,7 @@ const ranges: {value: number; label: string}[] = [
   {value: 24 * 60 * 60,  label: '24h'},
 ];
 
-type Props = {samples: BandwidthSample[]};
+type Props = {ring: BandwidthRing; tick: number};
 
 // LegendToggle is a clickable key entry that shows/hides one line variant.
 // The swatch is a short line whose thickness mirrors the chart (thin = raw,
@@ -66,7 +66,8 @@ export function SpeedTab(props: Props) {
       </ToggleGroup>
       <div class="flex-1 min-h-0">
         <BandwidthChart
-          samples={props.samples}
+          ring={props.ring}
+          tick={props.tick}
           rangeSeconds={range()}
           showRaw={showRaw()}
           showSmoothed={showSmoothed()}
