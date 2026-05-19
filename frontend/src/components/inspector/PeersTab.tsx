@@ -1,8 +1,13 @@
-import {For, Show} from 'solid-js';
+import {Index, Show} from 'solid-js';
 import type {DetailDTO} from '../../lib/bindings';
 import {fmtPercent, fmtRate} from '../../lib/format';
 
 type Props = {detail: DetailDTO | null};
+
+// <Index> instead of <For>: every WS tick replaces inspectorDetail with a
+// fresh DTO, so referentially-keyed <For> would unmount+remount every peer
+// row each second. <Index> is index-keyed — the row DOM survives and only
+// the bound fields update. Matches FilesTab's approach.
 
 export function PeersTab(props: Props) {
   return (
@@ -22,18 +27,18 @@ export function PeersTab(props: Props) {
           </tr>
         </thead>
         <tbody>
-          <For each={props.detail!.peers_list!}>
+          <Index each={props.detail!.peers_list!}>
             {(p) => (
               <tr class="border-b border-white/[.03] hover:bg-white/[.02]">
-                <td class="px-3 py-1.5 font-mono tabular-nums text-zinc-300">{p.ip}</td>
-                <td class="truncate px-2 py-1.5 text-zinc-400" style={{'max-width': '120px'}} title={p.client}>{p.client || '—'}</td>
-                <td class="px-2 py-1.5 font-mono text-zinc-500">{p.flags || '—'}</td>
-                <td class="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtPercent(p.progress)}</td>
-                <td class="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtRate(p.download_rate)}</td>
-                <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtRate(p.upload_rate)}</td>
+                <td class="px-3 py-1.5 font-mono tabular-nums text-zinc-300">{p().ip}</td>
+                <td class="truncate px-2 py-1.5 text-zinc-400" style={{'max-width': '120px'}} title={p().client}>{p().client || '—'}</td>
+                <td class="px-2 py-1.5 font-mono text-zinc-500">{p().flags || '—'}</td>
+                <td class="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtPercent(p().progress)}</td>
+                <td class="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtRate(p().download_rate)}</td>
+                <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtRate(p().upload_rate)}</td>
               </tr>
             )}
-          </For>
+          </Index>
         </tbody>
       </table>
     </Show>
