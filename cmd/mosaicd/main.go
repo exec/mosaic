@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -246,6 +247,10 @@ func main() {
 		log.Fatal().Err(err).Str("dir", *flagAssetsDir).Msg("open assets dir")
 	}
 
+	// The Hub's broadcast bus (Hub.Run) is started by remote.Server.Start for
+	// both flavors, so Hub.PublishUpdate fans out correctly in the daemon. The
+	// per-user tick path used by streamTicks (PublishTorrentsRawTo etc.) is
+	// separate from the bus and delivers straight to each user's connections.
 	hub := remote.NewHub()
 	defer hub.Close()
 	sessions := remote.NewSessionStore()
@@ -385,40 +390,136 @@ func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web ap
 
 // streamTicks polls the service at regular intervals and pushes state
 // snapshots to connected WebSocket clients. Unlike the desktop app's ticker,
-// mosaicd is multi-user: each tick is computed and published *per connected
-// user* so one user never receives another's torrents/stats/inspector data.
+// mosaicd is multi-user: each tick is published *per connected user* so one
+// user never receives another's torrents/stats/inspector data.
+//
+// The torrents and stats ticks build their caller-independent state ONCE per
+// tick (engine snapshot + torrents.List + tags join) and then fan it out:
+// admins all receive a byte-identical DTO list, so it is assembled — and JSON-
+// encoded — a single time; non-admins are an access-filtered reduction of the
+// same shared snapshot. Pre-v0.7.x every connected user triggered a full
+// independent torrents.List + tags join + engine walk + sort, N× redundant
+// work for output that was identical across all admins.
+//
+// torrents:tick fires every 1s (matching stats:tick) and a user's frame is
+// skipped entirely when its serialized payload is byte-identical to the one we
+// last sent that user — a paused, fully-seeding library produces no traffic.
+// The frontend reconciles by id and tolerates a missing frame; a newly
+// connected user has no prior fingerprint so always gets a first frame.
 func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
-	torrents := time.NewTicker(500 * time.Millisecond)
+	torrents := time.NewTicker(1 * time.Second)
 	stats := time.NewTicker(1 * time.Second)
 	inspector := time.NewTicker(1 * time.Second)
 	defer torrents.Stop()
 	defer stats.Stop()
 	defer inspector.Stop()
+
+	// lastTorrentsFrame fingerprints (sha256 of the encoded payload) the most
+	// recent torrents:tick we actually sent each user, so an unchanged frame
+	// can be skipped. Entries for users who disconnect are pruned each tick so
+	// a reconnecting client is treated as new and gets a fresh first frame.
+	lastTorrentsFrame := make(map[int][32]byte)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-torrents.C:
-			for _, uid := range hub.ConnectedUserIDs() {
-				uctx, err := userCtx(ctx, svc, uid)
+			uids := hub.ConnectedUserIDs()
+			if len(uids) == 0 {
+				// Nobody connected: drop all fingerprints so the next
+				// connection is unconditionally sent a first frame.
+				if len(lastTorrentsFrame) > 0 {
+					lastTorrentsFrame = make(map[int][32]byte)
+				}
+				continue
+			}
+			tick, err := svc.BuildTorrentTickSnapshot(ctx)
+			if err != nil {
+				continue
+			}
+			// Admins all see the same unfiltered list — compute and encode it
+			// once, lazily, the first time we encounter an admin, then reuse
+			// the identical bytes for every other admin.
+			var adminFrame []byte
+			adminComputed := false
+			seen := make(map[int]struct{}, len(uids))
+			for _, uid := range uids {
+				seen[uid] = struct{}{}
+				caller, err := svc.CallerForUserID(ctx, uid)
 				if err != nil {
 					continue
 				}
-				if rows, err := svc.ListTorrents(uctx); err == nil {
-					hub.PublishTorrentsTo(uid, rows)
+				var frame []byte
+				if caller.SeesAllTorrents() {
+					if !adminComputed {
+						rows, err := svc.ListTorrentsFromSnapshot(api.WithCaller(ctx, caller), tick)
+						if err != nil {
+							continue
+						}
+						adminFrame = remote.EncodeTorrentsFrame(rows)
+						adminComputed = true
+					}
+					frame = adminFrame
+				} else {
+					rows, err := svc.ListTorrentsFromSnapshot(api.WithCaller(ctx, caller), tick)
+					if err != nil {
+						continue
+					}
+					frame = remote.EncodeTorrentsFrame(rows)
+				}
+				if frame == nil {
+					continue
+				}
+				// Skip the send when this user's payload is unchanged since
+				// the last tick. A user with no fingerprint yet (just
+				// connected) always passes.
+				fp := sha256.Sum256(frame)
+				if prev, ok := lastTorrentsFrame[uid]; ok && prev == fp {
+					continue
+				}
+				lastTorrentsFrame[uid] = fp
+				hub.PublishTorrentsRawTo(uid, frame)
+			}
+			// Forget users who have since disconnected.
+			for uid := range lastTorrentsFrame {
+				if _, ok := seen[uid]; !ok {
+					delete(lastTorrentsFrame, uid)
 				}
 			}
 		case <-stats.C:
-			for _, uid := range hub.ConnectedUserIDs() {
-				uctx, err := userCtx(ctx, svc, uid)
+			uids := hub.ConnectedUserIDs()
+			if len(uids) == 0 {
+				continue
+			}
+			// One engine walk for the tick; per-user stats are a filtered
+			// reduction of this shared slice.
+			snaps := svc.EngineSnapshots()
+			var adminStats api.GlobalStats
+			adminComputed := false
+			for _, uid := range uids {
+				caller, err := svc.CallerForUserID(ctx, uid)
 				if err != nil {
 					continue
 				}
-				if s, err := svc.GlobalStats(uctx); err == nil {
-					hub.PublishStatsTo(uid, s)
+				if caller.SeesAllTorrents() {
+					if !adminComputed {
+						adminStats, err = svc.GlobalStatsFromSnapshot(api.WithCaller(ctx, caller), snaps)
+						if err != nil {
+							continue
+						}
+						adminComputed = true
+					}
+					hub.PublishStatsTo(uid, adminStats)
+					continue
+				}
+				if st, err := svc.GlobalStatsFromSnapshot(api.WithCaller(ctx, caller), snaps); err == nil {
+					hub.PublishStatsTo(uid, st)
 				}
 			}
 		case <-inspector.C:
+			// Inspector detail is genuinely per-user — each user's focused
+			// torrent differs — so this path stays per-user.
 			for _, uid := range hub.ConnectedUserIDs() {
 				uctx, err := userCtx(ctx, svc, uid)
 				if err != nil {

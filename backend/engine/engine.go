@@ -16,6 +16,16 @@ type Engine struct {
 	subs   []chan EngineEvent
 	stop   chan struct{}
 	closed bool
+
+	// tickRun gates the per-tick poll loop. The loop emits EventTick/
+	// EventComplete to subscribers; with zero subscribers (the mosaicd
+	// daemon, which never calls Subscribe — it streams via streamTicks
+	// instead) it produces nothing but a 500ms backend.List() that nobody
+	// reads. tickOnce starts run() lazily on the FIRST Subscribe() so the
+	// desktop app (which subscribes via notifications.Subscriber) still
+	// gets its event stream, while mosaicd pays nothing. Rate sampling no
+	// longer depends on this loop — the backend owns its own sampler.
+	tickOnce sync.Once
 }
 
 // NewEngine returns an Engine that polls Backend.List() every tickRate and
@@ -39,15 +49,26 @@ func NewEngine(b Backend, tickRate time.Duration) *Engine {
 			e.emit(EngineEvent{Kind: EventError, ID: id, Snapshot: snap, Err: err})
 		})
 	}
-	go e.run()
+	// run() is started lazily on the first Subscribe() — see Engine.tickOnce.
 	return e
 }
 
 func (e *Engine) Subscribe() <-chan EngineEvent {
 	ch := make(chan EngineEvent, 64)
 	e.mu.Lock()
+	if e.closed {
+		// Engine already torn down — hand back a closed channel so a late
+		// Subscribe() drains immediately instead of blocking forever, and
+		// don't start the poll loop on a dead engine.
+		e.mu.Unlock()
+		close(ch)
+		return ch
+	}
 	e.subs = append(e.subs, ch)
 	e.mu.Unlock()
+	// Start the poll loop on the first subscriber. A daemon that never
+	// subscribes never spins it up.
+	e.tickOnce.Do(func() { go e.run() })
 	return ch
 }
 

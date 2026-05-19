@@ -120,7 +120,19 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, key string) (Caller, e
 // CallerForUserID resolves a user id (from a session) to a Caller identity.
 // Returns ErrUnauthorized for disabled accounts so a user disabled mid-session
 // is locked out on their next request.
+//
+// The resolved Caller is memoized in s.callers: it is the same for every
+// request a user makes until that user is mutated, and rebuilding it from a
+// users-table SELECT on every authenticated HTTP request and per-user WS tick
+// is pure overhead. Cache entries are evicted by invalidateCaller on any
+// authority change, so a disabled/demoted user cannot keep a stale caller —
+// only enabled users are ever cached here.
 func (s *Service) CallerForUserID(ctx context.Context, id int) (Caller, error) {
+	if s.callers != nil {
+		if c, ok := s.callers.get(id); ok {
+			return c, nil
+		}
+	}
 	u, err := s.users.Get(ctx, id)
 	if err != nil {
 		return Caller{}, err
@@ -128,7 +140,11 @@ func (s *Service) CallerForUserID(ctx context.Context, id int) (Caller, error) {
 	if u.Disabled {
 		return Caller{}, ErrUnauthorized
 	}
-	return CallerFromUser(u), nil
+	caller := CallerFromUser(u)
+	if s.callers != nil {
+		s.callers.put(id, caller)
+	}
+	return caller, nil
 }
 
 // Me returns the calling user's own profile.
@@ -244,11 +260,10 @@ func (s *Service) UpdateUser(ctx context.Context, id int, in UserInput) (UserDTO
 	if err := s.users.Update(ctx, u); err != nil {
 		return UserDTO{}, err
 	}
-	// A role/permission/disable change must drop that user's live sessions so
-	// the new (possibly reduced) authority takes effect immediately.
-	if s.sessions != nil {
-		s.sessions.RevokeUser(id)
-	}
+	// A role/permission/disable change must drop that user's live sessions and
+	// cached caller so the new (possibly reduced) authority takes effect
+	// immediately.
+	s.invalidateCaller(id)
 	updated, err := s.users.Get(ctx, id)
 	if err != nil {
 		return UserDTO{}, err
@@ -277,9 +292,7 @@ func (s *Service) DeleteUser(ctx context.Context, id int) error {
 	if err := s.users.Delete(ctx, id); err != nil {
 		return err
 	}
-	if s.sessions != nil {
-		s.sessions.RevokeUser(id)
-	}
+	s.invalidateCaller(id)
 	return nil
 }
 
@@ -298,9 +311,7 @@ func (s *Service) ResetUserPassword(ctx context.Context, id int, newPassword str
 	if err := s.setUserPasswordHash(ctx, id, newPassword, true); err != nil {
 		return err
 	}
-	if s.sessions != nil {
-		s.sessions.RevokeUser(id)
-	}
+	s.invalidateCaller(id)
 	return nil
 }
 
@@ -321,9 +332,7 @@ func (s *Service) ChangeMyPassword(ctx context.Context, oldPassword, newPassword
 	if err := s.setUserPasswordHash(ctx, caller.UserID, newPassword, true); err != nil {
 		return err
 	}
-	if s.sessions != nil {
-		s.sessions.RevokeUser(caller.UserID)
-	}
+	s.invalidateCaller(caller.UserID)
 	return nil
 }
 
@@ -398,17 +407,13 @@ func (s *Service) ListTorrentShares(ctx context.Context, infohash string) ([]Sha
 	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessOwner); err != nil {
 		return nil, err
 	}
-	rows, err := s.access.ListForTorrent(ctx, infohash)
+	rows, err := s.access.ListSharesForTorrent(ctx, infohash)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]ShareDTO, 0, len(rows))
 	for _, r := range rows {
-		name := ""
-		if u, err := s.users.Get(ctx, r.UserID); err == nil {
-			name = u.Username
-		}
-		out = append(out, ShareDTO{UserID: r.UserID, Username: name, Access: r.Access})
+		out = append(out, ShareDTO{UserID: r.UserID, Username: r.Username, Access: r.Access})
 	}
 	return out, nil
 }
