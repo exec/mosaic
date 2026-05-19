@@ -1,7 +1,8 @@
 import {ArrowDown, ArrowUp, Globe, Wifi} from 'lucide-solid';
-import {Show} from 'solid-js';
+import {Show, createSignal, createEffect} from 'solid-js';
 import type {GlobalStatsT, WebConfigDTO} from '../../lib/bindings';
 import {fmtRate} from '../../lib/format';
+import {emaStep} from '../../lib/smoothing';
 
 type Props = {
   stats: GlobalStatsT;
@@ -12,15 +13,33 @@ type Props = {
 
 export function StatusBar(props: Props) {
   const s = () => props.stats;
+  // The engine reports raw ~1 Hz rates that flicker frame-to-frame. Show an
+  // EMA-smoothed value instead so the readout settles; the first sample
+  // seeds the average so it doesn't visibly ramp up from zero on mount.
+  const [downRate, setDownRate] = createSignal(props.stats.total_download_rate);
+  const [upRate, setUpRate] = createSignal(props.stats.total_upload_rate);
+  let seeded = false;
+  createEffect(() => {
+    const d = props.stats.total_download_rate;
+    const u = props.stats.total_upload_rate;
+    if (!seeded) {
+      seeded = true;
+      setDownRate(d);
+      setUpRate(u);
+      return;
+    }
+    setDownRate((p) => emaStep(p, d));
+    setUpRate((p) => emaStep(p, u));
+  });
   return (
     <footer class="flex h-7 shrink-0 items-center gap-4 border-t border-white/[.04] bg-zinc-950/60 px-3 text-[11px] text-zinc-400">
       <span class="inline-flex items-center gap-1.5">
         <ArrowDown class="h-3 w-3 text-down" />
-        <span class="font-mono tabular-nums">{fmtRate(s().total_download_rate)}</span>
+        <span class="font-mono tabular-nums">{fmtRate(downRate())}</span>
       </span>
       <span class="inline-flex items-center gap-1.5">
         <ArrowUp class="h-3 w-3 text-zinc-500" />
-        <span class="font-mono tabular-nums">{fmtRate(s().total_upload_rate)}</span>
+        <span class="font-mono tabular-nums">{fmtRate(upRate())}</span>
       </span>
 
       <span class="h-3 w-px bg-white/[.06]" />
