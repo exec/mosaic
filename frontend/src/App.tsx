@@ -4,7 +4,9 @@ import {createTorrentsStore, filterTorrents, computeCounts} from './lib/store';
 import {api, onLaunchNotice} from './lib/bindings';
 import {transport} from './lib/transport';
 import {isWailsRuntime} from './lib/runtime';
-import {ThemeProvider} from './components/theme/ThemeProvider';
+// Importing the appearance module here ensures the persisted theme is applied
+// to <html data-theme> before the first render — no need for a context provider.
+import './lib/appearance';
 import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
 import {WindowShell} from './components/shell/WindowShell';
 import {GnomeTrayPrompt} from './components/shell/GnomeTrayPrompt';
@@ -23,15 +25,20 @@ const SettingsRoute = lazy(() => import('./components/settings/SettingsRoute').t
 
 export default function App() {
   if (isWailsRuntime()) {
-    return <ThemeProvider><Toaster position="bottom-right" toastOptions={{style: {background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(255,255,255,0.1)', color: '#e7e7e9', 'backdrop-filter': 'blur(12px)'}}} /><AuthenticatedApp /></ThemeProvider>;
+    return (
+      <>
+        <Toaster position="bottom-right" toastOptions={{style: {background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(255,255,255,0.1)', color: '#e7e7e9', 'backdrop-filter': 'blur(12px)'}}} />
+        <AuthenticatedApp />
+      </>
+    );
   }
   return (
-    <ThemeProvider>
+    <>
       <Toaster position="bottom-right" toastOptions={{style: {background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(255,255,255,0.1)', color: '#e7e7e9', 'backdrop-filter': 'blur(12px)'}}} />
       <BrowserAuthGate>
         <AuthenticatedApp />
       </BrowserAuthGate>
-    </ThemeProvider>
+    </>
   );
 }
 
