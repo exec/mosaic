@@ -2,6 +2,7 @@ import {Match, Switch} from 'solid-js';
 import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WebConfigDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
+import {AppearancePane} from './AppearancePane';
 import {ConnectionPane} from './ConnectionPane';
 import {WebInterfacePane} from './WebInterfacePane';
 import {UsersPane} from './UsersPane';
@@ -78,6 +79,9 @@ export function SettingsRoute(props: Props) {
         <Switch>
           <Match when={props.pane === 'general'}>
             <GeneralPane defaultSavePath={props.defaultSavePath} onSetDefaultSavePath={props.onSetDefaultSavePath} />
+          </Match>
+          <Match when={props.pane === 'appearance'}>
+            <AppearancePane />
           </Match>
           <Match when={props.pane === 'connection'}>
             <ConnectionPane

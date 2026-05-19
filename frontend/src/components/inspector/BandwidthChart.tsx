@@ -3,6 +3,7 @@ import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import type {BandwidthRing} from '../../lib/ringbuffer';
 import {emaSeries, emaStep} from '../../lib/smoothing';
+import {theme} from '../../lib/appearance';
 
 type Props = {
   ring: BandwidthRing;
@@ -17,14 +18,33 @@ type Props = {
   showSmoothed: boolean;
 };
 
-// Line colours. The smoothed lines carry the canonical download/upload
-// colours; the raw lines are a faded variant of each so they read as a
-// ghost behind the smoothed line — lighter for download, darker for upload.
-const COLOR_DOWN = 'oklch(0.65 0.25 290)'; // --color-down (purple)
-const COLOR_DOWN_RAW = 'oklch(0.82 0.11 290)'; // lighter, desaturated purple
-const COLOR_UP = '#71717a'; // zinc-500
+// Download line colours come from CSS custom properties so the chart picks
+// up the active theme — `--color-down` and friends are redefined per
+// `html[data-theme]` in index.css. We re-read these on every theme change
+// (the createEffect below) and rebuild the chart so uPlot picks up the
+// new strokes; uPlot has no live "change series colour" API. Upload stays
+// a neutral zinc across themes — the accent is reserved for download.
+const COLOR_UP = '#71717a';     // zinc-500
 const COLOR_UP_RAW = '#52525b'; // zinc-600, darker
-const FILL_DOWN = 'oklch(0.65 0.25 290 / 0.12)';
+
+type ChartColors = {down: string; downRaw: string; downFill: string};
+
+// readChartColors pulls the current --color-down* values from CSS. Called
+// at mount and again whenever the theme signal flips. The fallbacks match
+// the Amethyst defaults so a test environment with no @theme rules still
+// produces a sensible chart instead of empty strings.
+function readChartColors(): ChartColors {
+  if (typeof document === 'undefined') {
+    return {down: 'oklch(0.65 0.25 290)', downRaw: 'oklch(0.82 0.11 290)', downFill: 'oklch(0.65 0.25 290 / 0.12)'};
+  }
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name: string, fb: string) => cs.getPropertyValue(name).trim() || fb;
+  return {
+    down: v('--color-down', 'oklch(0.65 0.25 290)'),
+    downRaw: v('--color-down-raw', 'oklch(0.82 0.11 290)'),
+    downFill: v('--color-down-fill', 'oklch(0.65 0.25 290 / 0.12)'),
+  };
+}
 
 // Series indices in the uPlot data/series arrays (index 0 is the x axis).
 const S_DOWN_RAW = 1;
@@ -86,7 +106,7 @@ export function BandwidthChart(props: Props) {
   let builtRange = -1;
   let lastTick = -1;
 
-  const buildOptions = (width: number, height: number): uPlot.Options => ({
+  const buildOptions = (width: number, height: number, c: ChartColors): uPlot.Options => ({
     width,
     height,
     cursor: {show: false},
@@ -99,10 +119,10 @@ export function BandwidthChart(props: Props) {
     // Order matters: raw pair first so the smoothed pair paints on top.
     series: [
       {},
-      {label: 'Download (raw)', stroke: COLOR_DOWN_RAW, width: 1, show: props.showRaw},
-      {label: 'Upload (raw)',   stroke: COLOR_UP_RAW,   width: 1, show: props.showRaw},
-      {label: 'Download',       stroke: COLOR_DOWN, width: 1.75, fill: FILL_DOWN, show: props.showSmoothed},
-      {label: 'Upload',         stroke: COLOR_UP,   width: 1.75, show: props.showSmoothed},
+      {label: 'Download (raw)', stroke: c.downRaw, width: 1, show: props.showRaw},
+      {label: 'Upload (raw)',   stroke: COLOR_UP_RAW, width: 1, show: props.showRaw},
+      {label: 'Download',       stroke: c.down, width: 1.75, fill: c.downFill, show: props.showSmoothed},
+      {label: 'Upload',         stroke: COLOR_UP, width: 1.75, show: props.showSmoothed},
     ],
     scales: {x: {time: true}},
   });
@@ -226,7 +246,7 @@ export function BandwidthChart(props: Props) {
     data = fullBuild(props.rangeSeconds);
     builtRange = props.rangeSeconds;
     lastTick = props.tick;
-    chart = new uPlot(buildOptions(rect.width, rect.height), asAligned(data), container);
+    chart = new uPlot(buildOptions(rect.width, rect.height, readChartColors()), asAligned(data), container);
   });
 
   // Update on range switch (full rebuild) or on a new tick (incremental).
@@ -258,6 +278,22 @@ export function BandwidthChart(props: Props) {
     chart.setSeries(S_UP_RAW, {show: props.showRaw});
     chart.setSeries(S_DOWN_SMOOTH, {show: props.showSmoothed});
     chart.setSeries(S_UP_SMOOTH, {show: props.showSmoothed});
+  });
+
+  // Rebuild the chart when the theme changes. uPlot has no live setStroke
+  // API, so we destroy and re-create with the new colours, keeping the
+  // already-built `data` so the user doesn't lose their visible history.
+  // The guard skips the very first run — onMount has already created the
+  // chart with the right colours by then.
+  let lastTheme = theme();
+  createEffect(() => {
+    const t = theme();
+    if (t === lastTheme) return;
+    lastTheme = t;
+    if (!container || !chart || !data) return;
+    const rect = container.getBoundingClientRect();
+    chart.destroy();
+    chart = new uPlot(buildOptions(rect.width, rect.height, readChartColors()), asAligned(data), container);
   });
 
   onCleanup(() => chart?.destroy());
