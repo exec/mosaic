@@ -116,6 +116,39 @@ ORDER BY CASE access WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, user_i
 	return out, rows.Err()
 }
 
+// TorrentShareRow is one access grant joined with the grantee's username, for
+// display in the share UI.
+type TorrentShareRow struct {
+	UserID   int
+	Username string
+	Access   string
+}
+
+// ListSharesForTorrent returns every access grant for a torrent with the
+// grantee's username resolved in a single JOIN, owners first. This replaces an
+// N+1 of per-row user lookups.
+func (a *TorrentAccess) ListSharesForTorrent(ctx context.Context, infohash string) ([]TorrentShareRow, error) {
+	rows, err := a.db.SQL().QueryContext(ctx, `
+SELECT ta.user_id, u.username, ta.access
+FROM torrent_access ta
+JOIN users u ON u.id = ta.user_id
+WHERE ta.infohash = ?
+ORDER BY CASE ta.access WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, ta.user_id`, infohash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TorrentShareRow
+	for rows.Next() {
+		var r TorrentShareRow
+		if err := rows.Scan(&r.UserID, &r.Username, &r.Access); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // InfohashesForUser returns the set of infohashes a user has any access to.
 func (a *TorrentAccess) InfohashesForUser(ctx context.Context, userID int) (map[string]string, error) {
 	rows, err := a.db.SQL().QueryContext(ctx,

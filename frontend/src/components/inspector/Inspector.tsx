@@ -1,19 +1,23 @@
-import {Match, Show, Switch} from 'solid-js';
+import {lazy, Match, Show, Suspense, Switch} from 'solid-js';
 import type {DetailDTO, InspectorTab} from '../../lib/bindings';
-import type {BandwidthSample} from '../../lib/store';
+import type {BandwidthRing} from '../../lib/ringbuffer';
 import {InspectorHeader} from './InspectorHeader';
 import {InspectorTabs} from './InspectorTabs';
 import {OverviewTab} from './OverviewTab';
 import {FilesTab} from './FilesTab';
 import {PeersTab} from './PeersTab';
 import {TrackersTab} from './TrackersTab';
-import {SpeedTab} from './SpeedTab';
+
+// SpeedTab pulls in uPlot (~45KB) and is only reached when the user opens
+// the Speed tab — lazy-load it so the chart bundle stays off the hot path.
+const SpeedTab = lazy(() => import('./SpeedTab').then((m) => ({default: m.SpeedTab})));
 
 type Props = {
   open: boolean;
   detail: DetailDTO | null;
   tab: InspectorTab;
-  bandwidth: BandwidthSample[];
+  bandwidthRing: BandwidthRing;
+  bandwidthTick: number;
   onTabChange: (t: InspectorTab) => void;
   onClose: () => void;
   onSetFilePriority: (index: number, priority: 'skip' | 'normal' | 'high' | 'max') => void;
@@ -42,7 +46,9 @@ export function Inspector(props: Props) {
               <TrackersTab detail={props.detail} />
             </Match>
             <Match when={props.tab === 'speed'}>
-              <SpeedTab samples={props.bandwidth} />
+              <Suspense fallback={<div class="p-4 text-xs text-zinc-500">Loading chart…</div>}>
+                <SpeedTab ring={props.bandwidthRing} tick={props.bandwidthTick} />
+              </Suspense>
             </Match>
           </Switch>
         </div>
