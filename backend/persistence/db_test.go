@@ -3,7 +3,9 @@ package persistence
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -112,4 +114,66 @@ func TestOpen_BusyTimeoutSurvivesConcurrentWriters(t *testing.T) {
 	var count int
 	require.NoError(t, db.SQL().QueryRow(`SELECT COUNT(*) FROM torrents WHERE infohash LIKE 'stress-%'`).Scan(&count))
 	require.Equal(t, writers*writesPerWriter, count)
+}
+
+// TestOpen_DBFileIsMode0600 verifies that Open tightens the on-disk sqlite
+// file (and its WAL/SHM siblings, if present) to 0600 so other local accounts
+// can't read the password hashes / API-key SHA-256s stored inside.
+//
+// Skipped on Windows because unix permission bits are not enforceable there
+// — the chmod call still runs in production but the kernel ignores the
+// non-owner bits.
+func TestOpen_DBFileIsMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file mode semantics are not enforced on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "perm.db")
+	db, err := Open(context.Background(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	st, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), st.Mode().Perm(),
+		"db file %s should be mode 0600 (got %#o)", path, st.Mode().Perm())
+
+	// WAL/SHM are created on first write; goose migrations write, so they
+	// should exist after Open returns. Verify if they exist that they're
+	// also 0600. If they're absent (some sqlite builds defer WAL creation
+	// to the first non-migration write), the assertion is vacuously true.
+	for _, sibling := range []string{path + "-wal", path + "-shm"} {
+		st, err := os.Stat(sibling)
+		if os.IsNotExist(err) {
+			continue
+		}
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), st.Mode().Perm(),
+			"sibling %s should be mode 0600 (got %#o)", sibling, st.Mode().Perm())
+	}
+}
+
+// TestOpen_DBFileChmodFailureNonFatal: an unwritable parent dir or a file
+// the process can't chmod must NOT cause Open() to error out. We simulate
+// this by pre-creating the db file as a different mode, then opening; the
+// chmod inside Open will succeed in this scenario so it's mainly a smoke
+// test that Open doesn't panic or fail-open on unusual starting modes.
+func TestOpen_DBFileChmodIdempotent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file mode semantics are not enforced on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "idem.db")
+	// Pre-create with overly-permissive mode 0644 (the default umask
+	// outcome we're trying to prevent).
+	require.NoError(t, os.WriteFile(path, []byte{}, 0o644))
+
+	db, err := Open(context.Background(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	st, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), st.Mode().Perm(),
+		"db file should be tightened from 0644 to 0600 by Open")
 }
