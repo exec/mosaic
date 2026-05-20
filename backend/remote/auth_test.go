@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -97,6 +98,43 @@ func TestSessionStore_RevokeAllClearsAllTokens(t *testing.T) {
 	requireInvalid(t, s, a)
 	requireInvalid(t, s, b)
 	require.Equal(t, 0, s.Count())
+}
+
+// TestSessionStore_ValidSlidesExpiry confirms a successful Valid() lookup
+// extends the entry's expiry by sessionTTL (rolling-window auth so an active
+// user is never abruptly logged out at the 12h mark).
+func TestSessionStore_ValidSlidesExpiry(t *testing.T) {
+	s := NewSessionStore()
+	tok, err := s.Create(1)
+	require.NoError(t, err)
+
+	s.mu.RLock()
+	originalExp := s.sessions[tok].expires
+	s.mu.RUnlock()
+
+	// Re-validate after a short pause — expiry should slide forward.
+	time.Sleep(10 * time.Millisecond)
+	_, ok := s.Valid(tok)
+	require.True(t, ok)
+
+	s.mu.RLock()
+	newExp := s.sessions[tok].expires
+	s.mu.RUnlock()
+	require.True(t, newExp.After(originalExp), "Valid() must slide expiry forward")
+}
+
+// TestSessionStore_CreateRejectsAtCapacity confirms that an in-memory full
+// store refuses new logins instead of silently evicting the oldest live
+// session — closing an availability-attack vector where a flood of logins
+// could knock real users out of their sessions.
+func TestSessionStore_CreateRejectsAtCapacity(t *testing.T) {
+	s := NewSessionStore()
+	for i := 0; i < maxSessions; i++ {
+		_, err := s.Create(i + 1)
+		require.NoError(t, err)
+	}
+	_, err := s.Create(maxSessions + 1)
+	require.ErrorIs(t, err, ErrTooManySessions)
 }
 
 // TestSessionStore_RevokeUser drops only the targeted user's sessions.

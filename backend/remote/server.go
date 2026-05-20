@@ -2,6 +2,7 @@ package remote
 
 import (
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,6 +11,26 @@ import (
 
 	"mosaic/backend/api"
 )
+
+// MountOptions tunes optional security knobs on the router. The zero value is
+// the safe default: no trusted proxies (X-Forwarded-For ignored) and no
+// X-Forwarded-Proto trust (cookie Secure only when the listener itself is TLS).
+type MountOptions struct {
+	// TrustedProxies is the set of CIDR ranges whose RemoteAddr the server
+	// treats as a trusted reverse proxy. When a request arrives from inside
+	// one of these, the X-Forwarded-For header is parsed (rightmost
+	// untrusted hop wins) so per-IP rate limiters can attribute load to the
+	// real client. Empty disables XFF entirely.
+	TrustedProxies []*net.IPNet
+
+	// TrustForwardedProto, when true, makes the server consider a request
+	// secure (for cookie-Secure decisions) if it carries
+	// `X-Forwarded-Proto: https` — used by deployments behind a TLS-
+	// terminating reverse proxy. Off by default because a client-supplied
+	// header on a directly-reachable port would otherwise be a downgrade
+	// vector.
+	TrustForwardedProto bool
+}
 
 // Server flavor identifiers, reported by /api/bootstrap. "daemon" is the
 // headless multi-user mosaicd; "desktop" is the Wails app's optional single-
@@ -27,8 +48,15 @@ const (
 // staticFS, if non-nil, is served at "/". Pass nil during tests.
 // flavor is FlavorDaemon or FlavorDesktop.
 func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, secure bool, flavor string) chi.Router {
+	return MountWithOptions(svc, sessions, hub, staticFS, secure, flavor, MountOptions{})
+}
+
+// MountWithOptions is the configurable form of Mount. See MountOptions.
+func MountWithOptions(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, secure bool, flavor string, opts MountOptions) chi.Router {
 	r := chi.NewRouter()
 	h := NewHandlers(svc, sessions, secure, flavor)
+	h.SetTrustedProxies(opts.TrustedProxies)
+	h.SetTrustForwardedProto(opts.TrustForwardedProto)
 	gate := AuthGate(sessions, svc)
 	csrf := OriginGuard()
 
@@ -132,17 +160,23 @@ func Mount(svc *api.Service, sessions *SessionStore, hub *Hub, staticFS fs.FS, s
 	return r
 }
 
-// OriginGuard rejects state-changing (POST/PUT/DELETE) requests whose Origin
-// header host doesn't match the request Host. This is a CSRF defense for
-// cookie-authed callers; bearer-API-key requests (Authorization: Bearer ... or
-// ?key=...) skip the check because they aren't attached automatically by a
-// browser and so are not CSRF-vulnerable.
+// OriginGuard rejects cookie-authenticated state-changing requests (POST /
+// PUT / DELETE / PATCH) whose Origin (or Referer) header host does not match
+// the request Host. It is the CSRF defense for the session-cookie auth path.
 //
-// Requests with no Origin header (e.g. server-side curl, same-origin GET
-// preflight, non-browser clients) are allowed: a browser will always send
-// Origin on cross-origin POST/PUT/DELETE, and most modern browsers also send
-// it on same-origin POSTs, so the absence of Origin is not by itself a CSRF
-// signal — combined with SameSite=Strict on the cookie, this is enough.
+// Bearer-API-key requests (Authorization: Bearer …) are skipped: browsers do
+// not attach Authorization headers cross-origin on their own, so those
+// requests are not CSRF-vulnerable.
+//
+// Both headers being absent on a state-changing request from a cookie-auth
+// caller is treated as suspicious and rejected — a legitimate browser fetch
+// always sends at least one of Origin/Referer on POST/PUT/DELETE/PATCH, and
+// allowing the unset case would let an attacker bypass the guard by
+// constructing a request that suppresses both (e.g. via a referrer-policy
+// trick combined with a request type that lacks Origin in older browsers).
+//
+// GET / HEAD / OPTIONS are never gated — they are not supposed to mutate
+// state and disabling them would break the SPA's status polling.
 func OriginGuard() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,20 +186,14 @@ func OriginGuard() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Bearer-authed requests are CSRF-immune: browsers don't auto-send
-			// Authorization headers or `?key=` params on cross-origin requests
-			// the way they auto-send cookies.
-			if BearerTokenFromRequest(r) != "" {
+			if hasBearerHeader(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
 			origin := r.Header.Get("Origin")
 			referer := r.Header.Get("Referer")
 			if origin == "" && referer == "" {
-				// No origin info at all (likely non-browser). With
-				// SameSite=Strict on the session cookie, a real browser CSRF
-				// attack would not have the cookie attached anyway.
-				next.ServeHTTP(w, r)
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing origin"})
 				return
 			}
 			if origin != "" && !originHostMatches(origin, r.Host) {
@@ -179,6 +207,15 @@ func OriginGuard() func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// hasBearerHeader reports whether the request carries an Authorization: Bearer
+// header. Detecting via header presence (not BearerTokenFromRequest) is
+// important: ?key= URL bearer support was removed for security, so we must
+// not treat a URL param as a CSRF-immunity hint.
+func hasBearerHeader(r *http.Request) bool {
+	auth := r.Header.Get("Authorization")
+	return strings.HasPrefix(auth, "Bearer ")
 }
 
 // originHostMatches returns true iff the host portion of `origin` (a full URL,

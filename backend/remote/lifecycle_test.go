@@ -87,7 +87,7 @@ func TestServer_DisabledIsNoOp(t *testing.T) {
 func TestServer_StartsHTTPOnLoopbackWhenBindAllFalse(t *testing.T) {
 	svc, srv := newServerFixture(t)
 	port := freePort(t)
-	key, err := svc.RotateAPIKey(context.Background())
+	key, err := svc.RotateAPIKey(sysCtx())
 	require.NoError(t, err)
 
 	srv.Apply(api.WebConfigDTO{Enabled: true, Port: port, BindAll: false})
@@ -112,7 +112,7 @@ func TestServer_StartsHTTPOnLoopbackWhenBindAllFalse(t *testing.T) {
 func TestServer_StartsHTTPSWhenBindAll(t *testing.T) {
 	svc, srv := newServerFixture(t)
 	port := freePort(t)
-	key, err := svc.RotateAPIKey(context.Background())
+	key, err := svc.RotateAPIKey(sysCtx())
 	require.NoError(t, err)
 
 	srv.Apply(api.WebConfigDTO{Enabled: true, Port: port, BindAll: true})
@@ -173,14 +173,14 @@ func TestService_OnWebConfigChange_FiresFromSetWebConfig(t *testing.T) {
 
 	// SetWebConfig should now restart srv.
 	port := freePort(t)
-	require.NoError(t, svc.SetWebConfig(context.Background(), api.WebConfigDTO{
+	require.NoError(t, svc.SetWebConfig(sysCtx(), api.WebConfigDTO{
 		Enabled: true, Port: port, Username: "alice",
 	}))
 	waitListening(t, fmt.Sprintf("127.0.0.1:%d", port))
 	require.Contains(t, srv.CurrentAddr(), fmt.Sprintf(":%d", port))
 
 	// Disable → server stops.
-	require.NoError(t, svc.SetWebConfig(context.Background(), api.WebConfigDTO{
+	require.NoError(t, svc.SetWebConfig(sysCtx(), api.WebConfigDTO{
 		Enabled: false, Port: port, Username: "alice",
 	}))
 	require.Eventually(t, func() bool { return srv.CurrentAddr() == "" },

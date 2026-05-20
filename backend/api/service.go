@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -68,6 +70,13 @@ type Service struct {
 	// call RevokeAll() to force every existing browser session to re-auth.
 	sessions SessionRevoker
 
+	// wsRevoker, if attached, is the remote-server Hub. Wired post-construction
+	// (AttachWSRevoker) for the same import-cycle reason as sessions. When a
+	// user is deleted/disabled/password-changed/renamed, invalidateCaller calls
+	// RevokeUser here so any already-upgraded WebSocket is closed instead of
+	// continuing to stream until its next re-auth check.
+	wsRevoker WSRevoker
+
 	// callers memoizes the Caller resolved for each user id so authenticated
 	// HTTP requests and per-user WS ticks don't re-SELECT the users table on
 	// every call. Invalidated alongside session revocation — see
@@ -88,6 +97,21 @@ type SessionRevoker interface {
 // every active session. Pass nil (or never call) if there's no remote layer.
 func (s *Service) AttachSessionRevoker(r SessionRevoker) {
 	s.sessions = r
+}
+
+// WSRevoker is the subset of *remote.Hub that api.Service needs to terminate
+// live WebSocket connections owned by a user whose credentials/authority just
+// changed. Defined here as an interface to avoid an import cycle with
+// backend/remote.
+type WSRevoker interface {
+	RevokeUser(userID int)
+}
+
+// AttachWSRevoker wires the remote Hub into the Service so invalidateCaller
+// can hang up live WebSockets in addition to revoking sessions. Pass nil (or
+// never call) when there's no remote layer.
+func (s *Service) AttachWSRevoker(r WSRevoker) {
+	s.wsRevoker = r
 }
 
 // blocklistState is the in-memory snapshot of the most recent successful (or
@@ -138,6 +162,9 @@ func NewService(
 func (s *Service) invalidateCaller(userID int) {
 	if s.sessions != nil {
 		s.sessions.RevokeUser(userID)
+	}
+	if s.wsRevoker != nil {
+		s.wsRevoker.RevokeUser(userID)
 	}
 	if s.callers != nil {
 		s.callers.evict(userID)
@@ -213,6 +240,9 @@ type WebConfigDTO struct {
 const adminUserID = 1
 
 func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return WebConfigDTO{}
+	}
 	port := s.intSetting(ctx, settingWebPort)
 	if port == 0 {
 		port = 8080
@@ -220,7 +250,7 @@ func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
 	dto := WebConfigDTO{
 		Enabled:  s.boolSetting(ctx, settingWebEnabled),
 		Port:     port,
-		BindAll:  s.boolSetting(ctx, settingWebBindAll),
+		BindAll:  s.boolSettingDefault(ctx, settingWebBindAll, false),
 		Username: "admin",
 	}
 	// Username + api-key hint live on the admin user row, not in settings.
@@ -232,6 +262,9 @@ func (s *Service) GetWebConfig(ctx context.Context) WebConfigDTO {
 }
 
 func (s *Service) SetWebConfig(ctx context.Context, c WebConfigDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	if err := s.setBoolSetting(ctx, settingWebEnabled, c.Enabled); err != nil {
 		return err
 	}
@@ -281,6 +314,9 @@ func (s *Service) fireWebConfigChanged(c WebConfigDTO) {
 // Every active session for that user is revoked. The hash + password_set flag
 // are written by a single atomic UPDATE, so there is no partial-failure window.
 func (s *Service) SetWebPassword(ctx context.Context, plain string) error {
+	if !CallerFrom(ctx).CanManageUsers() {
+		return ErrForbidden
+	}
 	if err := s.setUserPasswordHash(ctx, adminUserID, plain, true); err != nil {
 		return err
 	}
@@ -297,10 +333,15 @@ func (s *Service) SetWebPasswordEphemeral(ctx context.Context, plain string) err
 
 // IsWebPasswordUserSet reports whether the admin user's password was set
 // explicitly by the operator. mosaicd consults it to decide whether to mint a
-// fresh ephemeral password on each boot.
+// fresh ephemeral password on each boot. Fail-safe default is true: if the
+// admin row is unreadable for any reason, we report "operator-set" so we don't
+// silently regenerate a password over the operator's existing one.
 func (s *Service) IsWebPasswordUserSet(ctx context.Context) bool {
 	u, err := s.users.Get(ctx, adminUserID)
-	return err == nil && u.PasswordSet
+	if err != nil {
+		return true
+	}
+	return u.PasswordSet
 }
 
 func (s *Service) setUserPasswordHash(ctx context.Context, userID int, plain string, userSet bool) error {
@@ -314,6 +355,9 @@ func (s *Service) setUserPasswordHash(ctx context.Context, userID int, plain str
 // RotateAPIKey mints a fresh API key for the admin user (desktop "Web
 // Interface" pane). The cleartext is returned once — only its hash is stored.
 func (s *Service) RotateAPIKey(ctx context.Context) (string, error) {
+	if !CallerFrom(ctx).CanManageUsers() {
+		return "", ErrForbidden
+	}
 	return s.RotateUserAPIKey(ctx, adminUserID)
 }
 
@@ -427,6 +471,9 @@ func (s *Service) UpdaterChannel(ctx context.Context) string {
 }
 
 func (s *Service) GetUpdaterConfig(ctx context.Context) UpdaterConfigDTO {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return UpdaterConfigDTO{}
+	}
 	seen, _ := s.settings.Get(ctx, settingUpdaterLastSeenVersion)
 	src := string(s.installSource)
 	if src == "" {
@@ -442,6 +489,9 @@ func (s *Service) GetUpdaterConfig(ctx context.Context) UpdaterConfigDTO {
 }
 
 func (s *Service) SetUpdaterConfig(ctx context.Context, c UpdaterConfigDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	if c.Channel != "stable" && c.Channel != "beta" {
 		return fmt.Errorf("channel must be stable or beta")
 	}
@@ -474,6 +524,9 @@ func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
 }
 
 func (s *Service) InstallUpdate(ctx context.Context) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	if s.updater == nil {
 		return fmt.Errorf("updater disabled")
 	}
@@ -553,6 +606,9 @@ func (s *Service) GetDesktopIntegration(ctx context.Context) DesktopIntegrationD
 // reconfigure themselves. No validation: the user is allowed to disable
 // everything (a perfectly reasonable choice).
 func (s *Service) SetDesktopIntegration(ctx context.Context, c DesktopIntegrationDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
 	if err := s.setBoolSetting(ctx, settingDesktopTrayEnabled, c.TrayEnabled); err != nil {
 		return err
 	}
@@ -696,8 +752,9 @@ func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engin
 	if !caller.CanAddTorrents() {
 		return "", ErrForbidden
 	}
-	if savePath == "" {
-		savePath = s.defaultPath(ctx)
+	savePath, err := s.resolveSavePath(ctx, caller, savePath)
+	if err != nil {
+		return "", err
 	}
 	id, err := s.engine.AddMagnet(ctx, magnet, savePath)
 	if err != nil {
@@ -729,6 +786,32 @@ func (s *Service) grantOwner(ctx context.Context, infohash string, caller Caller
 	return s.access.Grant(ctx, infohash, uid, persistence.AccessOwner, &uid)
 }
 
+// resolveSavePath returns the cleaned absolute save path the engine should
+// MkdirAll into, after applying the per-user containment policy.
+//
+// Admins (including the system caller used by the Wails desktop and internal
+// workers) keep unrestricted behavior — the operator already has shell access
+// to the host. Non-admin callers are pinned to <defaultSavePath>/<username>:
+// an unconstrained save_path would let a low-privilege multi-user mosaicd
+// account write torrent data into arbitrary directories the daemon process
+// can reach (/etc/cron.d, another user's home, the daemon's data dir).
+func (s *Service) resolveSavePath(ctx context.Context, caller Caller, savePath string) (string, error) {
+	if caller.IsAdmin() {
+		if savePath == "" {
+			savePath = s.defaultPath(ctx)
+		}
+		return engine.ValidateSavePath("", savePath, false)
+	}
+	if caller.Username == "" || s.defaultSavePath == "" {
+		return "", ErrForbidden
+	}
+	userRoot := filepath.Join(s.defaultSavePath, caller.Username)
+	if savePath == "" {
+		savePath = userRoot
+	}
+	return engine.ValidateSavePath(userRoot, savePath, true)
+}
+
 // requireTorrentAccess returns ErrForbidden unless the caller holds at least
 // minLevel access on the torrent. Admins and the system caller always pass.
 func (s *Service) requireTorrentAccess(ctx context.Context, infohash, minLevel string) error {
@@ -751,8 +834,9 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string)
 	if !caller.CanAddTorrents() {
 		return "", ErrForbidden
 	}
-	if savePath == "" {
-		savePath = s.defaultPath(ctx)
+	savePath, err := s.resolveSavePath(ctx, caller, savePath)
+	if err != nil {
+		return "", err
 	}
 	blob, err := os.ReadFile(filePath)
 	if err != nil {
@@ -786,8 +870,9 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 	if !caller.CanAddTorrents() {
 		return "", ErrForbidden
 	}
-	if savePath == "" {
-		savePath = s.defaultPath(ctx)
+	savePath, err := s.resolveSavePath(ctx, caller, savePath)
+	if err != nil {
+		return "", err
 	}
 	id, err := s.engine.AddFile(ctx, blob, savePath)
 	if err != nil {
@@ -1489,6 +1574,9 @@ type PeerLimitsDTO struct {
 }
 
 func (s *Service) GetPeerLimits(ctx context.Context) PeerLimitsDTO {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return PeerLimitsDTO{}
+	}
 	// DHT + encryption default to true (matches anacrolix's defaults + good
 	// privacy hygiene). The bool helpers in this Service treat unset as
 	// false, so use a presence-aware reader.
@@ -1650,15 +1738,34 @@ type BlocklistDTO struct {
 }
 
 func (s *Service) GetBlocklist(ctx context.Context) BlocklistDTO {
-	url, _ := s.settings.Get(ctx, settingBlocklistURL)
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return BlocklistDTO{}
+	}
+	rawURL, _ := s.settings.Get(ctx, settingBlocklistURL)
 	en := s.boolSetting(ctx, settingBlocklistEnabled)
 	s.blocklistMu.RLock()
 	defer s.blocklistMu.RUnlock()
-	dto := BlocklistDTO{URL: url, Enabled: en, Entries: s.blocklist.entries, Error: s.blocklist.lastErr}
+	dto := BlocklistDTO{URL: redactURLCredentials(rawURL), Enabled: en, Entries: s.blocklist.entries, Error: s.blocklist.lastErr}
 	if !s.blocklist.loadedAt.IsZero() {
 		dto.LastLoadedAt = s.blocklist.loadedAt.Unix()
 	}
 	return dto
+}
+
+// redactURLCredentials strips userinfo from a URL so a stored "http://user:pw@host/..."
+// blocklist URL doesn't leak the password back to the SPA in GetBlocklist. The
+// raw URL with credentials remains in settings (so refresh still works); only
+// the DTO is scrubbed.
+func redactURLCredentials(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
 }
 
 func (s *Service) SetBlocklistURL(ctx context.Context, url string, enabled bool) error {
@@ -1750,7 +1857,14 @@ func countLines(b []byte) int {
 // RestoreOnStartup hydrates engine + scheduler limits from persisted settings
 // AND re-adds every persisted torrent to the engine so prior-session downloads
 // resume on next launch. Call this once after constructing the Service.
+//
+// Installs SystemCaller on the context so callers don't have to — this is the
+// trusted startup hydration path, not a user-driven action.
 func (s *Service) RestoreOnStartup(ctx context.Context) error {
+	ctx = WithCaller(ctx, SystemCaller)
+	if err := s.recoverInvalidAdminPasswordHash(ctx); err != nil {
+		log.Warn().Err(err).Msg("restore: recover invalid admin password hash failed")
+	}
 	q := s.GetQueueLimits(ctx)
 	if s.scheduler != nil {
 		s.scheduler.SetLimits(q.MaxActiveDownloads, q.MaxActiveSeeds)

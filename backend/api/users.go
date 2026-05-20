@@ -10,6 +10,21 @@ import (
 	"mosaic/backend/remote/cred"
 )
 
+// sentinelPasswordHash is a fixed argon2id PHC string generated once at init
+// time. Authenticate / AuthenticateAPIKey verify against it on a user-lookup
+// miss so the verify cost is paid on every login attempt — without this an
+// attacker can distinguish "user does not exist" from "user exists, wrong
+// password" by timing the response.
+var sentinelPasswordHash string
+
+func init() {
+	h, err := cred.HashPassword("invalid-sentinel-password-do-not-use")
+	if err != nil {
+		panic("api: sentinel password hash init failed: " + err.Error())
+	}
+	sentinelPasswordHash = h
+}
+
 // UserDTO is the transport shape for an account. It never carries the password
 // hash or the API key — only whether each is set, plus a non-secret key hint.
 type UserDTO struct {
@@ -96,9 +111,17 @@ func applyRoleDefaults(u *persistence.User) {
 func (s *Service) Authenticate(ctx context.Context, username, plain string) (Caller, error) {
 	u, err := s.users.GetByUsername(ctx, username)
 	if err != nil {
+		// Constant-time defense against username enumeration — always run a
+		// real argon2id verify on a miss so the response timing matches a
+		// real user with a wrong password.
+		_ = cred.VerifyPassword(plain, sentinelPasswordHash)
 		return Caller{}, ErrUnauthorized
 	}
-	if u.Disabled || u.PasswordHash == "" || !cred.VerifyPassword(plain, u.PasswordHash) {
+	if u.Disabled || u.PasswordHash == "" {
+		_ = cred.VerifyPassword(plain, sentinelPasswordHash)
+		return Caller{}, ErrUnauthorized
+	}
+	if !cred.VerifyPassword(plain, u.PasswordHash) {
 		return Caller{}, ErrUnauthorized
 	}
 	return CallerFromUser(u), nil
@@ -108,10 +131,15 @@ func (s *Service) Authenticate(ctx context.Context, username, plain string) (Cal
 // ErrUnauthorized for unknown keys and disabled accounts.
 func (s *Service) AuthenticateAPIKey(ctx context.Context, key string) (Caller, error) {
 	if key == "" {
+		// Pay the same verify cost on an empty key as on a real lookup so
+		// callers can't distinguish "no key supplied" from "key not found"
+		// by timing.
+		_ = cred.VerifyPassword(key, sentinelPasswordHash)
 		return Caller{}, ErrUnauthorized
 	}
 	u, err := s.users.GetByAPIKeyHash(ctx, cred.HashAPIKey(key))
 	if err != nil || u.Disabled {
+		_ = cred.VerifyPassword(key, sentinelPasswordHash)
 		return Caller{}, ErrUnauthorized
 	}
 	return CallerFromUser(u), nil
@@ -149,7 +177,11 @@ func (s *Service) CallerForUserID(ctx context.Context, id int) (Caller, error) {
 
 // Me returns the calling user's own profile.
 func (s *Service) Me(ctx context.Context) (UserDTO, error) {
-	u, err := s.users.Get(ctx, CallerFrom(ctx).UserID)
+	caller := CallerFrom(ctx)
+	if err := requireAuth(caller); err != nil {
+		return UserDTO{}, err
+	}
+	u, err := s.users.Get(ctx, caller.UserID)
 	if err != nil {
 		return UserDTO{}, err
 	}
@@ -319,6 +351,9 @@ func (s *Service) ResetUserPassword(ctx context.Context, id int, newPassword str
 // confirming the current one. Their other sessions are revoked.
 func (s *Service) ChangeMyPassword(ctx context.Context, oldPassword, newPassword string) error {
 	caller := CallerFrom(ctx)
+	if err := requireAuth(caller); err != nil {
+		return err
+	}
 	u, err := s.users.Get(ctx, caller.UserID)
 	if err != nil {
 		return err
@@ -338,12 +373,24 @@ func (s *Service) ChangeMyPassword(ctx context.Context, oldPassword, newPassword
 
 // RotateMyAPIKey mints a fresh API key for the calling user.
 func (s *Service) RotateMyAPIKey(ctx context.Context) (string, error) {
-	return s.RotateUserAPIKey(ctx, CallerFrom(ctx).UserID)
+	caller := CallerFrom(ctx)
+	if err := requireAuth(caller); err != nil {
+		return "", err
+	}
+	return s.RotateUserAPIKey(ctx, caller.UserID)
 }
 
 // RotateUserAPIKey mints a fresh API key for a user and returns the cleartext
 // (shown to the operator once). Only the hash + a display hint are persisted.
+// A user may rotate their own key; only admins may rotate another user's.
 func (s *Service) RotateUserAPIKey(ctx context.Context, userID int) (string, error) {
+	caller := CallerFrom(ctx)
+	if err := requireAuth(caller); err != nil {
+		return "", err
+	}
+	if userID != caller.UserID && !caller.CanManageUsers() {
+		return "", ErrForbidden
+	}
 	key, err := cred.RandomToken()
 	if err != nil {
 		return "", err
@@ -435,4 +482,28 @@ func (s *Service) EnsureAdminUser(ctx context.Context) error {
 		PermShare:          true,
 	})
 	return err
+}
+
+// recoverInvalidAdminPasswordHash self-heals an admin row whose password_hash
+// was copied verbatim from a pre-0009 legacy web_password_hash setting in a
+// non-argon2id format (e.g. bcrypt or sha256). Without this the admin would
+// be permanently locked out: VerifyPassword only accepts argon2id PHC, and
+// users.password_set=1 keeps mosaicd from minting a fresh ephemeral password.
+//
+// We clear the hash + password_set on detection so the daemon's
+// ephemeral-password path runs on the next boot and prints a fresh credential
+// banner. Idempotent: a valid argon2id PHC, an empty hash, or a missing admin
+// row all no-op.
+func (s *Service) recoverInvalidAdminPasswordHash(ctx context.Context) error {
+	u, err := s.users.Get(ctx, adminUserID)
+	if err != nil {
+		return nil
+	}
+	if u.PasswordHash == "" {
+		return nil
+	}
+	if strings.HasPrefix(u.PasswordHash, "$argon2id$") {
+		return nil
+	}
+	return s.users.SetPasswordHash(ctx, adminUserID, "", false)
 }

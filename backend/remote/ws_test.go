@@ -62,6 +62,17 @@ func wsURL(httpURL, path string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http") + path
 }
 
+// bearerDialOpts builds DialOptions carrying an Authorization: Bearer header.
+// The legacy `?key=` URL-param auth path was removed for security, so WS
+// tests must send the key in the header.
+func bearerDialOpts(key string, extra ...string) *websocket.DialOptions {
+	hdr := map[string][]string{"Authorization": {"Bearer " + key}}
+	for i := 0; i+1 < len(extra); i += 2 {
+		hdr[extra[i]] = []string{extra[i+1]}
+	}
+	return &websocket.DialOptions{HTTPHeader: hdr}
+}
+
 func TestWS_RejectsUnauthenticated(t *testing.T) {
 	_, _, _, srv := newWSFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -73,13 +84,13 @@ func TestWS_RejectsUnauthenticated(t *testing.T) {
 
 func TestWS_AcceptsBearerKeyAndDeliversTorrentTick(t *testing.T) {
 	svc, _, hub, srv := newWSFixture(t)
-	key, err := svc.RotateAPIKey(context.Background())
+	key, err := svc.RotateAPIKey(sysCtx())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL(srv.URL, "/api/ws?key="+key), nil)
+	conn, _, err := websocket.Dial(ctx, wsURL(srv.URL, "/api/ws"), bearerDialOpts(key))
 	require.NoError(t, err)
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
@@ -101,8 +112,8 @@ func TestWS_AcceptsBearerKeyAndDeliversTorrentTick(t *testing.T) {
 
 func TestWS_AcceptsCookieAuth(t *testing.T) {
 	svc, sessions, hub, srv := newWSFixture(t)
-	require.NoError(t, svc.SetWebConfig(context.Background(), api.WebConfigDTO{Username: "alice"}))
-	require.NoError(t, svc.SetWebPassword(context.Background(), "p4ss"))
+	require.NoError(t, svc.SetWebConfig(sysCtx(), api.WebConfigDTO{Username: "alice"}))
+	require.NoError(t, svc.SetWebPassword(sysCtx(), "p4ss"))
 	// The session must reference a real user — SetWebConfig renamed the
 	// seeded admin (id 1) to "alice".
 	tok, err := sessions.Create(1)
@@ -122,13 +133,13 @@ func TestWS_AcceptsCookieAuth(t *testing.T) {
 
 func TestWS_FanOutsToMultipleClients(t *testing.T) {
 	svc, _, hub, srv := newWSFixture(t)
-	key, _ := svc.RotateAPIKey(context.Background())
+	key, _ := svc.RotateAPIKey(sysCtx())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	dial := func() *websocket.Conn {
-		c, _, err := websocket.Dial(ctx, wsURL(srv.URL, "/api/ws?key="+key), nil)
+		c, _, err := websocket.Dial(ctx, wsURL(srv.URL, "/api/ws"), bearerDialOpts(key))
 		require.NoError(t, err)
 		return c
 	}
@@ -153,19 +164,18 @@ func TestWS_FanOutsToMultipleClients(t *testing.T) {
 
 func TestWS_RejectsMismatchedOrigin(t *testing.T) {
 	svc, _, _, srv := newWSFixture(t)
-	key, err := svc.RotateAPIKey(context.Background())
+	key, err := svc.RotateAPIKey(sysCtx())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Browser-style upgrade: legitimate auth (bearer key in query) but a
+	// Browser-style upgrade: legitimate auth (bearer key in header) but a
 	// mismatched Origin header — exactly what a CSWH attempt looks like. The
 	// upgrade must fail because OriginPatterns is pinned to r.Host.
-	hdr := map[string][]string{"Origin": {"https://evil.example.com"}}
 	_, resp, err := websocket.Dial(ctx,
-		wsURL(srv.URL, "/api/ws?key="+key),
-		&websocket.DialOptions{HTTPHeader: hdr},
+		wsURL(srv.URL, "/api/ws"),
+		bearerDialOpts(key, "Origin", "https://evil.example.com"),
 	)
 	require.Error(t, err, "expected upgrade to fail on mismatched Origin")
 	if resp != nil {
@@ -174,14 +184,53 @@ func TestWS_RejectsMismatchedOrigin(t *testing.T) {
 	}
 }
 
-func TestWS_RemoveClientOnDisconnect(t *testing.T) {
+// TestWS_RevokeUserClosesSocket confirms Hub.RevokeUser hangs up the
+// targeted user's live WebSocket. This is the new hook that
+// api.invalidateCaller is expected to call when a user is deleted, disabled,
+// or has their password changed.
+func TestWS_RevokeUserClosesSocket(t *testing.T) {
 	svc, _, hub, srv := newWSFixture(t)
-	key, _ := svc.RotateAPIKey(context.Background())
+	key, _ := svc.RotateAPIKey(sysCtx())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL(srv.URL, "/api/ws?key="+key), nil)
+	conn, _, err := websocket.Dial(ctx, wsURL(srv.URL, "/api/ws"), bearerDialOpts(key))
+	require.NoError(t, err)
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	require.Eventually(t, func() bool { return hub.ClientCount() == 1 },
+		2*time.Second, 10*time.Millisecond)
+
+	hub.RevokeUser(1)
+
+	// Read should now return with a non-nil error within a short window —
+	// the server-side close races the client's read loop.
+	readErrCh := make(chan error, 1)
+	go func() {
+		_, _, err := conn.Read(ctx)
+		readErrCh <- err
+	}()
+	select {
+	case err := <-readErrCh:
+		require.Error(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected revoked WS to be closed")
+	}
+	require.Eventually(t, func() bool { return hub.ClientCount() == 0 },
+		2*time.Second, 10*time.Millisecond)
+
+	// RevokeUser on a userID with no live socket is a no-op.
+	hub.RevokeUser(999)
+}
+
+func TestWS_RemoveClientOnDisconnect(t *testing.T) {
+	svc, _, hub, srv := newWSFixture(t)
+	key, _ := svc.RotateAPIKey(sysCtx())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL(srv.URL, "/api/ws"), bearerDialOpts(key))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return hub.ClientCount() == 1 },
 		2*time.Second, 10*time.Millisecond)

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,7 +57,7 @@ func newPollerForTest(t *testing.T) (*RSSPoller, *Service, *persistence.Feeds, *
 
 func newRSSDAOs(t *testing.T) (*persistence.Feeds, *persistence.Filters) {
 	t.Helper()
-	db, err := persistence.Open(context.Background(), t.TempDir()+"/rss.db")
+	db, err := persistence.Open(sysCtx(), t.TempDir()+"/rss.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return persistence.NewFeeds(db), persistence.NewFilters(db)
@@ -73,7 +72,7 @@ func TestRSSPoller_PollOne_MatchesAndAddsMagnet(t *testing.T) {
 	defer srv.Close()
 
 	p, svc, feeds, filters := newPollerForTest(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	feedID, err := feeds.Create(ctx, persistence.Feed{URL: srv.URL, Name: "test", IntervalMin: 1, Enabled: true})
 	require.NoError(t, err)
@@ -106,7 +105,7 @@ func TestRSSPoller_PollOne_NotModifiedSkips(t *testing.T) {
 	defer srv.Close()
 
 	p, svc, feeds, filters := newPollerForTest(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	feedID, err := feeds.Create(ctx, persistence.Feed{URL: srv.URL, Name: "n", IntervalMin: 1, ETag: `"abc"`, Enabled: true})
 	require.NoError(t, err)
@@ -136,7 +135,7 @@ func TestRSSPoller_PollOne_DedupViaSeenSet(t *testing.T) {
 	defer srv.Close()
 
 	p, svc, feeds, filters := newPollerForTest(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	feedID, _ := feeds.Create(ctx, persistence.Feed{URL: srv.URL, Name: "n", IntervalMin: 1, Enabled: true})
 	_, _ = filters.Create(ctx, persistence.Filter{FeedID: feedID, Regex: `.*`, Enabled: true})
@@ -161,7 +160,7 @@ func TestRSSPoller_Tick_SkipsDisabledAndNotDue(t *testing.T) {
 	defer srv.Close()
 
 	p, _, feeds, filters := newPollerForTest(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	disabledID, _ := feeds.Create(ctx, persistence.Feed{URL: srv.URL, Name: "off", IntervalMin: 1, Enabled: false})
 	_, _ = filters.Create(ctx, persistence.Filter{FeedID: disabledID, Regex: `.*`, Enabled: true})
@@ -183,7 +182,7 @@ func TestRSSPoller_Tick_PollsDueFeed(t *testing.T) {
 	defer srv.Close()
 
 	p, svc, feeds, filters := newPollerForTest(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	feedID, _ := feeds.Create(ctx, persistence.Feed{URL: srv.URL, Name: "due", IntervalMin: 1, Enabled: true})
 	_, _ = filters.Create(ctx, persistence.Filter{FeedID: feedID, Regex: `(?i)ubuntu`, Enabled: true})
@@ -203,7 +202,7 @@ func TestRSSPoller_PollOne_HTTPErrorReturnsErr(t *testing.T) {
 	defer srv.Close()
 
 	p, _, feeds, _ := newPollerForTest(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	feedID, _ := feeds.Create(ctx, persistence.Feed{URL: srv.URL, Name: "n", IntervalMin: 1, Enabled: true})
 	f, _ := feeds.Get(ctx, feedID)
 
