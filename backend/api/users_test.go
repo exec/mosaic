@@ -9,18 +9,25 @@ import (
 	"mosaic/backend/persistence"
 )
 
+// sysCtx is a context carrying SystemCaller — equivalent to mosaicd's startup
+// hooks or the desktop adapter. Tests that drive admin-gated Service methods
+// without explicitly setting up a user identity use this.
+func sysCtx() context.Context {
+	return WithCaller(context.Background(), SystemCaller)
+}
+
 // asUser returns a context whose caller is the given user id, so a test can
 // drive Service methods as that user instead of the implicit system caller.
 func asUser(t *testing.T, svc *Service, id int) context.Context {
 	t.Helper()
-	c, err := svc.CallerForUserID(context.Background(), id)
+	c, err := svc.CallerForUserID(sysCtx(), id)
 	require.NoError(t, err)
 	return WithCaller(context.Background(), c)
 }
 
 func mkUser(t *testing.T, svc *Service, in UserInput) UserDTO {
 	t.Helper()
-	u, err := svc.CreateUser(context.Background(), in)
+	u, err := svc.CreateUser(sysCtx(), in)
 	require.NoError(t, err)
 	return u
 }
@@ -46,7 +53,7 @@ func TestUsers_CreateAndAuthenticate(t *testing.T) {
 func TestUsers_DisabledAccountCannotAuthenticate(t *testing.T) {
 	svc, _ := newTestService(t)
 	u := mkUser(t, svc, UserInput{Username: "bob", Password: "password123", Role: persistence.RoleUser})
-	_, err := svc.UpdateUser(context.Background(), u.ID, UserInput{Username: "bob", Role: persistence.RoleUser, Disabled: true})
+	_, err := svc.UpdateUser(sysCtx(), u.ID, UserInput{Username: "bob", Role: persistence.RoleUser, Disabled: true})
 	require.NoError(t, err)
 	_, err = svc.Authenticate(context.Background(), "bob", "password123")
 	require.ErrorIs(t, err, ErrUnauthorized)
@@ -101,8 +108,8 @@ func TestUsers_AdminSeesAllTorrents(t *testing.T) {
 	_, err := svc.AddMagnet(bobCtx, "magnet:?xt=urn:btih:bobs", "")
 	require.NoError(t, err)
 
-	// The implicit system/admin caller sees every torrent regardless of grants.
-	rows, err := svc.ListTorrents(context.Background())
+	// The explicit system/admin caller sees every torrent regardless of grants.
+	rows, err := svc.ListTorrents(sysCtx())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, persistence.AccessOwner, rows[0].Access)
@@ -130,7 +137,7 @@ func TestUsers_PermissionGating(t *testing.T) {
 
 func TestUsers_AdminGuards(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	// The seeded primary admin (id 1) cannot be deleted.
 	require.Error(t, svc.DeleteUser(ctx, adminUserID))

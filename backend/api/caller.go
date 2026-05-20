@@ -90,15 +90,26 @@ func WithCaller(ctx context.Context, c Caller) context.Context {
 	return context.WithValue(ctx, callerCtxKey{}, c)
 }
 
-// CallerFrom extracts the caller from a context. When no caller has been set
-// it returns SystemCaller — this is deliberate: contexts without a caller come
-// from internal background workers and the Wails desktop app, all of which are
-// trusted system operations. Every remote HTTP request that reaches a gated
-// Service method has already passed through AuthGate, which always installs
-// the authenticated caller.
+// CallerFrom extracts the caller from a context. Default-deny: a context with
+// no caller installed yields a zero-value Caller (no System, no role, no
+// perms). Every internal call site that legitimately needs system privileges
+// must call WithCaller(ctx, SystemCaller) explicitly — see the RSS poller,
+// schedule engine, RestoreOnStartup, and the Wails desktop adapter.
 func CallerFrom(ctx context.Context) Caller {
 	if c, ok := ctx.Value(callerCtxKey{}).(Caller); ok {
 		return c
 	}
-	return SystemCaller
+	return Caller{}
+}
+
+// requireAuth is the defense-in-depth check at the top of every Service method
+// that requires an authenticated identity. Even with the default-deny
+// CallerFrom above, a Service method reached via a context that somehow
+// bypassed AuthGate (or an internal call site that forgot WithCaller) is
+// rejected here rather than running as the zero-value Caller.
+func requireAuth(c Caller) error {
+	if !c.System && c.UserID == 0 {
+		return ErrUnauthorized
+	}
+	return nil
 }

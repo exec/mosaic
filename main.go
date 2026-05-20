@@ -71,7 +71,10 @@ func main() {
 		log.Fatal().Err(err).Msg("load config")
 	}
 
-	ctx := context.Background()
+	// Desktop main runs as the system caller — there's no login UI and every
+	// startup hook (RestoreOnStartup, GetWebConfig, GetDesktopIntegration,
+	// PauseAll / ResumeAll from the tray, etc.) is a trusted system operation.
+	ctx := api.WithCaller(context.Background(), api.SystemCaller)
 	db, err := persistence.Open(ctx, filepath.Join(paths.DataDir, "mosaic.db"))
 	if err != nil {
 		log.Fatal().Err(err).Msg("open db")
@@ -182,6 +185,7 @@ func main() {
 	defer hub.Close()
 	sessions := remote.NewSessionStore()
 	svc.AttachSessionRevoker(sessions)
+	svc.AttachWSRevoker(hub)
 	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir, remote.FlavorDesktop)
 	defer remoteSrv.Stop()
 	// The remote interface is optional in the GUI — the user has the

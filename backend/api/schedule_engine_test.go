@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -20,7 +19,7 @@ func absentDayMask(mask int) int {
 
 func TestScheduleEngine_AppliesActiveRule(t *testing.T) {
 	svc, fb := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	require.NoError(t, svc.SetLimits(ctx, LimitsDTO{DownKbps: 100, UpKbps: 50, AltDownKbps: 10, AltUpKbps: 5}))
 
@@ -49,7 +48,7 @@ func TestScheduleEngine_AppliesActiveRule(t *testing.T) {
 
 func TestScheduleEngine_NoActiveRule_RestoresUserLimits(t *testing.T) {
 	svc, fb := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	require.NoError(t, svc.SetLimits(ctx, LimitsDTO{DownKbps: 200, UpKbps: 100}))
 
 	dayBitNow := 1 << int(time.Now().Weekday())
@@ -71,7 +70,7 @@ func TestScheduleEngine_NoActiveRule_RestoresUserLimits(t *testing.T) {
 
 func TestService_ScheduleRuleCRUD_RoundTrip(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	id, err := svc.CreateScheduleRule(ctx, ScheduleRuleDTO{
 		DaysMask: 0b0111110, StartMin: 22 * 60, EndMin: 6 * 60,

@@ -66,13 +66,14 @@ func (p *RSSPoller) PollNow(ctx context.Context, feedID int) error {
 func (p *RSSPoller) run() {
 	t := time.NewTicker(60 * time.Second)
 	defer t.Stop()
-	p.tick(context.Background())
+	ctx := WithCaller(context.Background(), SystemCaller)
+	p.tick(ctx)
 	for {
 		select {
 		case <-p.stop:
 			return
 		case <-t.C:
-			p.tick(context.Background())
+			p.tick(ctx)
 		}
 	}
 }
