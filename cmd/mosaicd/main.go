@@ -98,8 +98,24 @@ func main() {
 		paths.ConfigDir = dataRoot
 		paths.LogDir = filepath.Join(dataRoot, "logs")
 	}
+	// Daemon flavor runs on shared multi-user hosts (servers, NAS boxes),
+	// where the data dir holds the sqlite DB with credential hashes, API
+	// key hashes, downloaded torrent metadata, and torrent content. None
+	// of that should be readable by other local accounts — narrow to 0700
+	// so the dir is only traversable by the user the daemon runs as.
+	// (The desktop Wails app uses a separate code path and stays at 0755.)
+	// Chmod after MkdirAll because MkdirAll does NOT tighten permissions
+	// on a pre-existing dir, and most upgrades will hit the "already
+	// exists with mode 0755 from a prior install" branch.
 	for _, d := range []string{paths.ConfigDir, paths.DataDir, paths.LogDir} {
-		_ = os.MkdirAll(d, 0o755)
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			// Best-effort: MkdirAll failure isn't fatal here; downstream
+			// open()s on the dir's contents will surface the real error.
+			log.Warn().Err(err).Str("dir", d).Msg("mosaicd: mkdir failed")
+		}
+		if err := os.Chmod(d, 0o700); err != nil && !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("dir", d).Msg("mosaicd: chmod 0700 failed (multi-user host: other accounts may be able to read the data dir)")
+		}
 	}
 
 	debug := os.Getenv("MOSAIC_DEBUG") == "1"
@@ -120,6 +136,13 @@ func main() {
 
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	defer cancelCtx()
+	// mosaicd's own startup/restoration code paths call into the api.Service
+	// before any HTTP request has installed a caller. With the default-deny
+	// CallerFrom, those calls would be rejected as unauthorized; install the
+	// system caller on the root context so internal boot-time work runs with
+	// full privileges. Per-request contexts derived from HTTP handlers
+	// overwrite this with the authenticated caller in AuthGate.
+	ctx = api.WithCaller(ctx, api.SystemCaller)
 	db, err := persistence.Open(ctx, filepath.Join(paths.DataDir, "mosaic.db"))
 	if err != nil {
 		log.Fatal().Err(err).Msg("open db")
@@ -155,9 +178,20 @@ func main() {
 		preallocateFullFiles = true
 	}
 
+	// Pre-create the engine state dir with 0700 so the daemon's piece-
+	// completion bolt and verify-snapshot files aren't world-readable on a
+	// shared host. NewAnacrolixBackend would otherwise MkdirAll it at 0o755.
+	engineDir := filepath.Join(paths.DataDir, "engine")
+	if err := os.MkdirAll(engineDir, 0o700); err != nil {
+		log.Warn().Err(err).Str("dir", engineDir).Msg("mosaicd: mkdir engine dir failed")
+	}
+	if err := os.Chmod(engineDir, 0o700); err != nil && !os.IsNotExist(err) {
+		log.Warn().Err(err).Str("dir", engineDir).Msg("mosaicd: chmod engine dir 0700 failed")
+	}
+
 	verifySnaps := persistence.NewVerifySnapshots(db)
 	backend, err := engine.NewAnacrolixBackend(engine.AnacrolixConfig{
-		DataDir:              filepath.Join(paths.DataDir, "engine"),
+		DataDir:              engineDir,
 		ListenPort:           listenPort,
 		EnableDHT:            enableDHT,
 		EnableEncryption:     enableEnc,
@@ -255,6 +289,7 @@ func main() {
 	defer hub.Close()
 	sessions := remote.NewSessionStore()
 	svc.AttachSessionRevoker(sessions)
+	svc.AttachWSRevoker(hub)
 	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir, remote.FlavorDaemon)
 	defer remoteSrv.Stop()
 	// Runtime web-config changes (operator flips port via Settings) are

@@ -2,8 +2,8 @@ package remote
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,7 +34,7 @@ func authedReq(t *testing.T, key, method, path string, body any) *http.Request {
 
 func TestHandlers_Categories_CRUD(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	// Create.
 	rec := httptest.NewRecorder()
@@ -70,9 +70,9 @@ func TestHandlers_Categories_CRUD(t *testing.T) {
 
 func TestHandlers_Tags_CRUDAndAssign(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
-	id, err := f.svc.AddMagnet(context.Background(), "magnet:?xt=urn:btih:tag", "/tmp")
+	id, err := f.svc.AddMagnet(sysCtx(), "magnet:?xt=urn:btih:tag", "/tmp")
 	require.NoError(t, err)
 
 	// Create tag.
@@ -104,7 +104,7 @@ func TestHandlers_Tags_CRUDAndAssign(t *testing.T) {
 
 func TestHandlers_Limits_GetSetToggle(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPut, "/api/settings/limits", api.LimitsDTO{
@@ -131,7 +131,7 @@ func TestHandlers_Limits_GetSetToggle(t *testing.T) {
 
 func TestHandlers_WebConfigAndPasswordRotation(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	// PUT web config.
 	rec := httptest.NewRecorder()
@@ -173,7 +173,7 @@ func TestHandlers_WebConfigAndPasswordRotation(t *testing.T) {
 
 func TestHandlers_Stats(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/stats", nil))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -183,7 +183,7 @@ func TestHandlers_Stats(t *testing.T) {
 
 func TestHandlers_Updater_GetConfig_DefaultsEnabled(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/settings/updater", nil))
@@ -197,7 +197,7 @@ func TestHandlers_Updater_GetConfig_DefaultsEnabled(t *testing.T) {
 
 func TestHandlers_Updater_SetConfig_RoundTrip(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPut, "/api/settings/updater", api.UpdaterConfigDTO{
@@ -216,7 +216,7 @@ func TestHandlers_Updater_SetConfig_RoundTrip(t *testing.T) {
 
 func TestHandlers_Updater_RejectsUnknownChannel(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPut, "/api/settings/updater", api.UpdaterConfigDTO{
@@ -229,7 +229,7 @@ func TestHandlers_Updater_CheckWithoutUpdater_500s(t *testing.T) {
 	// fixture Service has no updater attached → CheckForUpdate returns the
 	// "updater disabled" error → handler maps to 500.
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/check", nil))
@@ -238,7 +238,7 @@ func TestHandlers_Updater_CheckWithoutUpdater_500s(t *testing.T) {
 
 func TestHandlers_Updater_InstallWithoutUpdater_500s(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/install", nil))
@@ -247,7 +247,7 @@ func TestHandlers_Updater_InstallWithoutUpdater_500s(t *testing.T) {
 
 func TestHandlers_Version_OK(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/version", nil))
@@ -344,7 +344,7 @@ func TestOriginGuard_AllowsMatchingOriginOnPOST(t *testing.T) {
 
 func TestOriginGuard_BypassedForBearerAuth(t *testing.T) {
 	f := newFixture(t)
-	key, err := f.svc.RotateAPIKey(context.Background())
+	key, err := f.svc.RotateAPIKey(sysCtx())
 	require.NoError(t, err)
 
 	body, _ := json.Marshal(map[string]string{"magnet": "magnet:?xt=urn:btih:bypass", "save_path": "/tmp"})
@@ -363,7 +363,7 @@ func TestOriginGuard_BypassedForBearerAuth(t *testing.T) {
 func TestOriginGuard_AllowsGETWithMismatchedOrigin(t *testing.T) {
 	// GET is not state-changing; the guard must let it through.
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/torrents", nil)
 	req.Host = "mosaic.local:8080"
@@ -372,6 +372,229 @@ func TestOriginGuard_AllowsGETWithMismatchedOrigin(t *testing.T) {
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+// TestCookieSecure_RespectsTrustForwardedProto exercises the
+// XFP-aware cookie-Secure decision: when TrustForwardedProto is on, a
+// request flagged `X-Forwarded-Proto: https` yields a Secure cookie even
+// though the listener itself is plain HTTP.
+func TestCookieSecure_RespectsTrustForwardedProto(t *testing.T) {
+	h := &Handlers{}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	require.False(t, h.cookieSecure(r), "default off — XFP must be ignored")
+
+	h.SetTrustForwardedProto(true)
+	require.True(t, h.cookieSecure(r))
+
+	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	require.False(t, h.cookieSecure(r2), "no XFP header → still insecure")
+
+	h2 := &Handlers{secure: true}
+	require.True(t, h2.cookieSecure(httptest.NewRequest(http.MethodGet, "/", nil)),
+		"listener TLS short-circuits regardless of XFP")
+}
+
+// TestChangeMyPassword_RateLimitedPerUser confirms a stolen session cookie
+// can't be used to grind through the old-password check: after the burst
+// budget is exhausted, the endpoint returns 429.
+func TestChangeMyPassword_RateLimitedPerUser(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+	cookie := f.loginCookie(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{
+		"old_password": "wrong-guess",
+		"new_password": "new-pass-123",
+	})
+	post := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/me/password", bytes.NewReader(body))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://"+req.Host)
+		f.router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// burst attempts return 400 ("current password is incorrect") because
+	// the wrong old password fails validation but the limiter is still
+	// charged on each call.
+	for i := 0; i < passwordRateBurst; i++ {
+		rec := post()
+		require.Equal(t, http.StatusBadRequest, rec.Code, "attempt %d body=%s", i+1, rec.Body.String())
+	}
+	// (burst+1)th attempt must trip the per-user limiter.
+	rec := post()
+	require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+}
+
+// TestClientIP_HonorsXFFFromTrustedProxy walks the rightmost-untrusted-hop
+// rule: when the request originates from a trusted proxy CIDR, the rightmost
+// X-Forwarded-For entry that isn't itself a trusted proxy is the attributed
+// client IP. From an untrusted RemoteAddr the header is ignored.
+func TestClientIP_HonorsXFFFromTrustedProxy(t *testing.T) {
+	nets, err := ParseTrustedProxiesCIDRs([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+	h := &Handlers{trustedProxies: nets}
+
+	// Trusted proxy → walks XFF, skipping trusted hops.
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.1.2.3:55555"
+	r.Header.Set("X-Forwarded-For", "203.0.113.5, 198.51.100.7, 10.0.0.1")
+	require.Equal(t, "198.51.100.7", h.clientIP(r))
+
+	// Untrusted RemoteAddr → XFF ignored.
+	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r2.RemoteAddr = "203.0.113.99:1234"
+	r2.Header.Set("X-Forwarded-For", "1.1.1.1")
+	require.Equal(t, "203.0.113.99", h.clientIP(r2))
+
+	// Empty trusted list → XFF always ignored even from loopback.
+	h2 := &Handlers{}
+	r3 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r3.RemoteAddr = "10.1.2.3:55555"
+	r3.Header.Set("X-Forwarded-For", "1.1.1.1")
+	require.Equal(t, "10.1.2.3", h2.clientIP(r3))
+}
+
+// TestParseTrustedProxiesCIDRs covers both the bare-IP shorthand and an
+// invalid entry (the safe behavior is to reject the whole list rather than
+// silently drop the bad one).
+func TestParseTrustedProxiesCIDRs(t *testing.T) {
+	nets, err := ParseTrustedProxiesCIDRs([]string{"10.0.0.0/8", "192.0.2.1", "::1"})
+	require.NoError(t, err)
+	require.Len(t, nets, 3)
+
+	_, err = ParseTrustedProxiesCIDRs([]string{"not-an-ip"})
+	require.Error(t, err)
+}
+
+// TestDecodeJSON_BodyOver1MiBReturns413 confirms the MaxBytesReader cap
+// applied inside decodeJSON: a 2 MiB body is rejected as 413 (Request Entity
+// Too Large) rather than silently consuming memory.
+func TestDecodeJSON_BodyOver1MiBReturns413(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(sysCtx())
+
+	// 2 MiB of payload wrapped as a JSON object — any JSON endpoint will do;
+	// AddMagnet is convenient because its struct ignores unknown fields.
+	junk := bytes.Repeat([]byte("a"), 2<<20)
+	body := append([]byte(`{"junk":"`), junk...)
+	body = append(body, []byte(`"}`)...)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/torrents/magnet", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
+}
+
+// TestLogin_BodyOver1MiBReturns413BeforeRateLimit confirms the body cap is
+// applied to /api/login before the per-IP limiter slot is consumed — i.e. a
+// malicious sender of huge bodies can't burn through their own bucket via the
+// cheap reject path.
+func TestLogin_BodyOver1MiBReturns413BeforeRateLimit(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+
+	junk := bytes.Repeat([]byte("a"), 2<<20)
+	body := append([]byte(`{"username":"alice","password":"`), junk...)
+	body = append(body, []byte(`"}`)...)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.99:12345"
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
+
+	// Limiter must still allow a legitimate login from the same IP — the
+	// rejected oversized request did not consume a slot.
+	good, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
+	for i := 0; i < 5; i++ {
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(good))
+		req.RemoteAddr = "10.0.0.99:12345"
+		f.router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "login %d", i+1)
+	}
+}
+
+// TestOriginGuard_RejectsMissingOriginAndRefererOnPOST is the closure of the
+// previously-tolerated "no Origin and no Referer" case for cookie-authed
+// state-changing requests. A real browser always sends at least one.
+func TestOriginGuard_RejectsMissingOriginAndRefererOnPOST(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+	cookie := f.loginCookie(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{"magnet": "magnet:?xt=urn:btih:noorigin", "save_path": "/tmp"})
+	req := httptest.NewRequest(http.MethodPost, "/api/torrents/magnet", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	// No Origin / Referer headers — this used to slip past the guard.
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+}
+
+// TestOriginGuard_AllowsMissingOriginForBearerAuth confirms the bearer-key
+// path still skips the OriginGuard — scripted clients (curl, mosaicd CLI)
+// don't set Origin and aren't CSRF-vulnerable.
+func TestOriginGuard_AllowsMissingOriginForBearerAuth(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(sysCtx())
+
+	body, _ := json.Marshal(map[string]string{"magnet": "magnet:?xt=urn:btih:scripted", "save_path": "/tmp"})
+	req := httptest.NewRequest(http.MethodPost, "/api/torrents/magnet", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+// TestBearerToken_URLParamNoLongerAuthenticates locks in the removal of the
+// `?key=` query-param bearer path. A request that supplies the key only via
+// URL must be 401, even if the key itself is valid.
+func TestBearerToken_URLParamNoLongerAuthenticates(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(sysCtx())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/torrents?key="+key, nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+}
+
+// TestWriteServiceErr_UnknownErrorMapsTo500 confirms that an unrecognized
+// error type drops to 500 with a generic body rather than leaking
+// err.Error() into the response.
+func TestWriteServiceErr_UnknownErrorMapsTo500(t *testing.T) {
+	rec := httptest.NewRecorder()
+	// A bespoke error type the allowlist will not recognise. Its message
+	// looks like an SQL error string — exactly what we don't want leaking.
+	writeServiceErr(rec, errors.New("sql: no rows in result set: /var/lib/mosaic/mosaic.db"))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	var got map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "internal error", got["error"])
+	require.NotContains(t, got["error"], "sql")
+	require.NotContains(t, got["error"], "mosaic.db")
+}
+
+// TestWriteServiceErr_ValidationErrorKeepsBody confirms a validation-class
+// error stays as 400 with its friendly text — the SPA renders this so the
+// allowlist must not regress.
+func TestWriteServiceErr_ValidationErrorKeepsBody(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeServiceErr(rec, errors.New("password must be at least 8 characters"))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "password must be at least 8 characters")
 }
 
 func itoa(n int) string {
