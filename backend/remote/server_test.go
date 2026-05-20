@@ -26,6 +26,13 @@ type fixture struct {
 	router   http.Handler
 }
 
+// sysCtx is the trusted-test-harness context for direct svc.* calls that seed
+// state (RotateAPIKey, SetWebConfig, AddMagnet, etc.). Calls through the
+// router carry their own caller derived from the session/api-key.
+func sysCtx() context.Context {
+	return api.WithCaller(context.Background(), api.SystemCaller)
+}
+
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	db, err := persistence.Open(context.Background(), filepath.Join(t.TempDir(), "t.db"))
@@ -56,8 +63,8 @@ func newFixture(t *testing.T) *fixture {
 
 func (f *fixture) seedCreds(t *testing.T, user, pass string) {
 	t.Helper()
-	require.NoError(t, f.svc.SetWebConfig(context.Background(), api.WebConfigDTO{Username: user}))
-	require.NoError(t, f.svc.SetWebPassword(context.Background(), pass))
+	require.NoError(t, f.svc.SetWebConfig(sysCtx(), api.WebConfigDTO{Username: user}))
+	require.NoError(t, f.svc.SetWebPassword(sysCtx(), pass))
 }
 
 func (f *fixture) loginCookie(t *testing.T, user, pass string) *http.Cookie {
@@ -122,7 +129,7 @@ func TestServer_GatedRouteAcceptsSessionCookie(t *testing.T) {
 
 func TestServer_GatedRouteAcceptsBearerAPIKey(t *testing.T) {
 	f := newFixture(t)
-	key, err := f.svc.RotateAPIKey(context.Background())
+	key, err := f.svc.RotateAPIKey(sysCtx())
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/torrents", nil)
@@ -140,6 +147,10 @@ func TestServer_LogoutClearsCookieAndInvalidatesSession(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
 	req.AddCookie(cookie)
+	// OriginGuard now rejects cookie-authed POSTs with no Origin/Referer to
+	// close the "missing-origin" CSRF gap. The SPA always sends Origin on
+	// fetch, so set it to match the request Host.
+	req.Header.Set("Origin", "http://"+req.Host)
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -148,7 +159,7 @@ func TestServer_LogoutClearsCookieAndInvalidatesSession(t *testing.T) {
 
 func TestServer_AddMagnetThenList(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	body, _ := json.Marshal(map[string]string{"magnet": "magnet:?xt=urn:btih:abc", "save_path": "/tmp"})
 	req := httptest.NewRequest(http.MethodPost, "/api/torrents/magnet", bytes.NewReader(body))
@@ -170,8 +181,8 @@ func TestServer_AddMagnetThenList(t *testing.T) {
 
 func TestServer_PauseResumeRemove(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
-	id, err := f.svc.AddMagnet(context.Background(), "magnet:?xt=urn:btih:zzz", "/tmp")
+	key, _ := f.svc.RotateAPIKey(sysCtx())
+	id, err := f.svc.AddMagnet(sysCtx(), "magnet:?xt=urn:btih:zzz", "/tmp")
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -193,7 +204,7 @@ func TestServer_PauseResumeRemove(t *testing.T) {
 
 func TestServer_AddTorrentFileMultipart(t *testing.T) {
 	f := newFixture(t)
-	key, _ := f.svc.RotateAPIKey(context.Background())
+	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	var buf bytes.Buffer
 	mw := newMultipart(&buf)

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,13 @@ type Server struct {
 	dataDir  string
 	flavor   string
 
+	// trustedProxies / trustForwardedProto are the deployment-time knobs for
+	// running mosaicd behind a reverse proxy. Set via SetTrustedProxies and
+	// SetTrustForwardedProto before Apply; both default to the safe-when-
+	// directly-exposed values (empty / false).
+	trustedProxies      []*net.IPNet
+	trustForwardedProto bool
+
 	mu      sync.Mutex
 	srv     *http.Server
 	cancel  context.CancelFunc
@@ -40,6 +48,57 @@ type Server struct {
 // FlavorDesktop (the Wails app's optional web server).
 func NewServer(svc *api.Service, hub *Hub, sessions *SessionStore, staticFS fs.FS, dataDir, flavor string) *Server {
 	return &Server{svc: svc, hub: hub, sessions: sessions, staticFS: staticFS, dataDir: dataDir, flavor: flavor}
+}
+
+// SetTrustedProxies configures the reverse-proxy CIDR allowlist consulted by
+// the per-IP rate limiters. Must be called before Apply to take effect on the
+// first router build; subsequent calls only affect the next restart.
+func (s *Server) SetTrustedProxies(nets []*net.IPNet) {
+	s.mu.Lock()
+	s.trustedProxies = nets
+	s.mu.Unlock()
+}
+
+// SetTrustForwardedProto enables honouring `X-Forwarded-Proto: https` for
+// cookie-Secure decisions. Off by default; turn on only when behind a TLS-
+// terminating reverse proxy that sets the header itself (i.e. strips any
+// client-supplied value).
+func (s *Server) SetTrustForwardedProto(v bool) {
+	s.mu.Lock()
+	s.trustForwardedProto = v
+	s.mu.Unlock()
+}
+
+// ParseTrustedProxiesCIDRs converts a list of CIDR strings ("10.0.0.0/8",
+// "fe80::/10", ...) to *net.IPNet for SetTrustedProxies. Bare-IP entries
+// without a mask are accepted and treated as /32 (or /128 for IPv6) so an
+// operator can list individual proxy hosts without arithmetic. A bad entry
+// returns an error rather than being silently dropped — a misconfigured
+// allowlist would otherwise re-enable XFF spoofing.
+func ParseTrustedProxiesCIDRs(cidrs []string) ([]*net.IPNet, error) {
+	if len(cidrs) == 0 {
+		return nil, nil
+	}
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, s := range cidrs {
+		if !strings.Contains(s, "/") {
+			ip := net.ParseIP(s)
+			if ip == nil {
+				return nil, fmt.Errorf("trusted proxy %q: not an IP or CIDR", s)
+			}
+			if ip.To4() != nil {
+				s = s + "/32"
+			} else {
+				s = s + "/128"
+			}
+		}
+		_, n, err := net.ParseCIDR(s)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy %q: %w", s, err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 // Apply starts, stops, or restarts the server to match cfg. Returns the
@@ -98,7 +157,10 @@ func (s *Server) startLocked(cfg api.WebConfigDTO) error {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", cfg.Port))
 
 	useTLS := cfg.BindAll
-	router := Mount(s.svc, s.sessions, s.hub, s.staticFS, useTLS, s.flavor)
+	router := MountWithOptions(s.svc, s.sessions, s.hub, s.staticFS, useTLS, s.flavor, MountOptions{
+		TrustedProxies:      s.trustedProxies,
+		TrustForwardedProto: s.trustForwardedProto,
+	})
 
 	srv := &http.Server{
 		Addr:              addr,

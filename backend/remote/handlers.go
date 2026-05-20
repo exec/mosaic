@@ -7,15 +7,35 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 
 	"mosaic/backend/api"
 	"mosaic/backend/engine"
 	"mosaic/backend/persistence"
+)
+
+// maxJSONBodyBytes bounds JSON request bodies. Keeps a runaway client (or a
+// malicious one) from exhausting memory on a single request. Multipart torrent
+// upload has its own larger ceiling (see AddTorrentFile).
+const maxJSONBodyBytes = 1 << 20 // 1 MiB
+
+// maxTorrentUploadBytes bounds the AddTorrentFile multipart body. The form
+// parser uses this both for the in-memory portion and as the upper limit on
+// total request size.
+const maxTorrentUploadBytes = 10 << 20 // 10 MiB
+
+// passwordRateInterval / passwordRateBurst guard the password-change endpoints
+// per-user: 5 attempts in ~60s, enough for legitimate retypes but not for
+// brute-forcing a remembered old password over a stolen session cookie.
+const (
+	passwordRateInterval = 12 * time.Second
+	passwordRateBurst    = 5
 )
 
 // Handlers wraps an *api.Service with thin REST adapters. Each method maps 1:1
@@ -26,17 +46,42 @@ type Handlers struct {
 	secure   bool   // controls Secure cookie attribute
 	flavor   string // "daemon" | "desktop" — reported by /api/bootstrap
 
-	loginLimiter *loginRateLimiter
+	// trustedProxies, when non-empty, makes clientIP honour X-Forwarded-For
+	// for requests whose RemoteAddr is inside one of these CIDRs. Empty list
+	// means XFF is ignored — see clientIP.
+	trustedProxies []*net.IPNet
+
+	// trustForwardedProto, when true, lets a request flagged with
+	// `X-Forwarded-Proto: https` be treated as TLS for cookie-Secure
+	// purposes. Operators behind a TLS-terminating reverse proxy enable this
+	// so issued session cookies carry the Secure attribute.
+	trustForwardedProto bool
+
+	loginLimiter    *loginRateLimiter
+	passwordLimiter *userRateLimiter
 }
 
 func NewHandlers(svc *api.Service, sessions *SessionStore, secure bool, flavor string) *Handlers {
 	return &Handlers{
-		svc:          svc,
-		sessions:     sessions,
-		secure:       secure,
-		flavor:       flavor,
-		loginLimiter: newLoginRateLimiter(),
+		svc:             svc,
+		sessions:        sessions,
+		secure:          secure,
+		flavor:          flavor,
+		loginLimiter:    newLoginRateLimiter(),
+		passwordLimiter: newUserRateLimiter(passwordRateInterval, passwordRateBurst),
 	}
+}
+
+// SetTrustedProxies installs the CIDR allowlist consulted by clientIP. Calling
+// with an empty/nil slice disables XFF parsing entirely (the safe default).
+func (h *Handlers) SetTrustedProxies(nets []*net.IPNet) {
+	h.trustedProxies = nets
+}
+
+// SetTrustForwardedProto toggles whether `X-Forwarded-Proto: https` upgrades a
+// connection's perceived TLS state for cookie-Secure decisions.
+func (h *Handlers) SetTrustForwardedProto(v bool) {
+	h.trustForwardedProto = v
 }
 
 // ---- login rate limiter ----
@@ -98,14 +143,114 @@ func (l *loginRateLimiter) janitor() {
 	}
 }
 
-// clientIP extracts the host portion of r.RemoteAddr, handling IPv6 brackets
-// gracefully. Falls back to the raw RemoteAddr if parsing fails.
-func clientIP(r *http.Request) string {
+// clientIP returns the IP that rate-limiters and audit logs should attribute a
+// request to. When mosaicd sits behind a reverse proxy, every request's
+// RemoteAddr is the proxy — so without honouring X-Forwarded-For the entire
+// internet shares one limiter bucket. The walk is right-to-left because each
+// hop appends its observed RemoteAddr to XFF; the rightmost entry that is
+// *not* itself one of our trusted proxies is the closest IP we can attribute.
+//
+// When trustedProxies is empty (the default) XFF is ignored entirely — a
+// client-supplied header on a directly-reachable port would otherwise let an
+// attacker forge their IP and bypass the login limiter.
+func (h *Handlers) clientIP(r *http.Request) string {
+	host := remoteAddrHost(r)
+	if len(h.trustedProxies) == 0 || !ipInNets(host, h.trustedProxies) {
+		return host
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return host
+	}
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		ip := strings.TrimSpace(parts[i])
+		if ip == "" {
+			continue
+		}
+		if ipInNets(ip, h.trustedProxies) {
+			continue
+		}
+		return ip
+	}
+	return host
+}
+
+// remoteAddrHost strips the port from r.RemoteAddr, gracefully handling
+// IPv6 brackets and the (rare) host-only forms used in tests.
+func remoteAddrHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// ipInNets reports whether ip (a textual address) is inside any of nets.
+// Returns false on unparsable input rather than panicking; callers treat
+// false as "untrusted", which is the safe direction.
+func ipInNets(ip string, nets []*net.IPNet) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// userRateLimiter is a per-user token bucket used by sensitive endpoints
+// (password change / reset) so a stolen session cookie can't be turned into a
+// brute-force oracle for the old password. Keyed by user id, evicted by an
+// idle janitor identical to loginRateLimiter's so a flood of distinct users
+// can't grow the map without bound.
+type userRateLimiter struct {
+	interval time.Duration
+	burst    int
+
+	mu      sync.Mutex
+	buckets map[int]*userBucket
+}
+
+type userBucket struct {
+	lim  *rate.Limiter
+	seen time.Time
+}
+
+func newUserRateLimiter(interval time.Duration, burst int) *userRateLimiter {
+	l := &userRateLimiter{interval: interval, burst: burst, buckets: make(map[int]*userBucket)}
+	go l.janitor()
+	return l
+}
+
+func (l *userRateLimiter) allow(userID int) bool {
+	l.mu.Lock()
+	b, ok := l.buckets[userID]
+	if !ok {
+		b = &userBucket{lim: rate.NewLimiter(rate.Every(l.interval), l.burst)}
+		l.buckets[userID] = b
+	}
+	b.seen = time.Now()
+	l.mu.Unlock()
+	return b.lim.Allow()
+}
+
+func (l *userRateLimiter) janitor() {
+	t := time.NewTicker(loginJanitorPeriod)
+	defer t.Stop()
+	for range t.C {
+		cutoff := time.Now().Add(-loginBucketIdleTTL)
+		l.mu.Lock()
+		for id, b := range l.buckets {
+			if b.seen.Before(cutoff) {
+				delete(l.buckets, id)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -118,10 +263,13 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
-func decodeJSON[T any](r *http.Request, dst *T) error {
+func decodeJSON[T any](w http.ResponseWriter, r *http.Request, dst *T) error {
 	if r.Body == nil {
 		return errors.New("empty body")
 	}
+	// MaxBytesReader bounds the body and, on overflow, makes the Decode below
+	// return a *http.MaxBytesError that writeServiceErr translates to 413.
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	return json.NewDecoder(r.Body).Decode(dst)
 }
 
@@ -133,14 +281,32 @@ type loginRequest struct {
 }
 
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
+	// Reject oversized bodies BEFORE consulting the per-IP rate limiter so
+	// an attacker can't burn through the bucket of a legitimate user (or of
+	// their own connection's IP, used to mask scans) by spraying massive
+	// payloads that the limiter would otherwise count against the slot
+	// before the decoder ever sees them. Content-Length is advisory but
+	// near-universal for client-issued POSTs; the MaxBytesReader wrap
+	// further down handles the chunked/no-Content-Length case as defense in
+	// depth (it still bounds the read; the slot is just consumed in that
+	// rarer path).
+	if r.ContentLength > maxJSONBodyBytes {
+		writeErr(w, http.StatusRequestEntityTooLarge, errors.New("request body too large"))
+		return
+	}
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	}
+	ip := h.clientIP(r)
 	if !h.loginLimiter.allow(ip) {
 		w.Header().Set("Retry-After", strconv.Itoa(loginRetryAfterSecs))
 		writeErr(w, http.StatusTooManyRequests, errors.New("too many login attempts"))
 		return
 	}
 	var req loginRequest
-	if err := decodeJSON(r, &req); err != nil {
+	// decodeJSON installs its own MaxBytesReader, but the body is already
+	// wrapped above; a double-wrap is harmless.
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -151,34 +317,145 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, err := h.sessions.Create(caller.UserID)
 	if err != nil {
+		if errors.Is(err, ErrTooManySessions) {
+			writeErr(w, http.StatusServiceUnavailable, errors.New("session store full; try again later"))
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, errors.New("session create failed"))
 		return
 	}
-	SetSessionCookie(w, tok, h.secure)
+	SetSessionCookie(w, tok, h.cookieSecure(r))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// writeServiceErr translates a Service-layer error into the right HTTP status:
-// permission failures → 403, auth failures → 401, missing rows → 404, and
-// everything else (validation, bad input) → 400.
+// cookieSecure returns whether the session cookie issued in response to this
+// request should carry the Secure attribute. It is true when either the
+// listener itself is TLS (h.secure was set at Mount time) or the request
+// arrived via a TLS-terminating proxy that announced it with
+// `X-Forwarded-Proto: https` AND the operator opted into trusting that header
+// via TrustForwardedProto.
+func (h *Handlers) cookieSecure(r *http.Request) bool {
+	if h.secure {
+		return true
+	}
+	if h.trustForwardedProto && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	return false
+}
+
+// writeServiceErr translates a Service-layer error into the right HTTP status.
+// Mapping:
+//   - api.ErrForbidden        → 403 (friendly text from the sentinel)
+//   - api.ErrUnauthorized     → 401
+//   - persistence.ErrNotFound → 404
+//   - http.MaxBytesError      → 413 (request body capped by MaxBytesReader)
+//   - JSON syntax errors      → 400 ("invalid request body")
+//   - any other validation message defined by the api package's
+//     errors.New(...)  → 400 with the friendly message preserved
+//   - anything else            → 500 with a generic body; full error logged
+//
+// The default-500 keeps SQL strings, file paths, and other internal state out
+// of HTTP responses; validation messages go through a textual allowlist below.
 func writeServiceErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, api.ErrForbidden):
 		writeErr(w, http.StatusForbidden, err)
+		return
 	case errors.Is(err, api.ErrUnauthorized):
 		writeErr(w, http.StatusUnauthorized, err)
+		return
 	case errors.Is(err, persistence.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
-	default:
-		writeErr(w, http.StatusBadRequest, err)
+		return
 	}
+	var maxBytes *http.MaxBytesError
+	if errors.As(err, &maxBytes) {
+		writeErr(w, http.StatusRequestEntityTooLarge, errors.New("request body too large"))
+		return
+	}
+	if isJSONDecodeError(err) {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid request body"))
+		return
+	}
+	if isUserFacingValidation(err) {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	log.Error().Err(err).Msg("remote: internal error")
+	writeErr(w, http.StatusInternalServerError, errors.New("internal error"))
+}
+
+// isJSONDecodeError reports whether err originates from the standard library
+// JSON decoder. These are caller-fault (malformed body) so we surface them as
+// 400 with a generic message rather than leaking parser internals.
+func isJSONDecodeError(err error) bool {
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	return errors.As(err, &syn) || errors.As(err, &typ) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+// userFacingValidationPrefixes is the set of message prefixes the api package
+// uses for caller-fault validation errors that the SPA renders verbatim.
+// Anything matching is surfaced as 400 + the original text; anything else is
+// treated as an internal error and replaced with a generic 500 body so we
+// don't leak SQL / filesystem / network internals into HTTP responses.
+//
+// These mirror the errors.New / fmt.Errorf call sites in
+// backend/api/{users,service,rss_*}.go that produce hand-written validation
+// strings. Wrapped errors (`fmt.Errorf("persist: %w", err)`) have a colon-and-
+// wrap shape and intentionally do not appear here — those leak internals and
+// must drop to 500.
+var userFacingValidationPrefixes = []string{
+	"empty body",
+	"invalid request body",
+	"username is required",
+	"role must be ",
+	"password must be at least ",
+	"cannot demote or disable the last admin",
+	"the primary admin account cannot be deleted",
+	"you cannot delete your own account",
+	"current password is incorrect",
+	"share access must be ",
+	"cannot share a torrent with yourself",
+	"target user does not exist",
+	"cannot share with a disabled account",
+	"cannot unshare an owner",
+	"too many login attempts",
+	"too many password attempts",
+	"channel must be stable or beta",
+	"updater disabled",
+	"this Mosaic is managed by apt",
+	"listen port must be ",
+	"max peers per torrent must be ",
+	"no blocklist URL configured",
+	"rss poller not attached",
+	"URL is empty",
+	"URL has no host",
+	"URL scheme must be http or https",
+	"feed URL must be http or https",
+	"blocklist URL must be http or https",
+	"bad user id",
+}
+
+func isUserFacingValidation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, p := range userFacingValidationPrefixes {
+		if strings.HasPrefix(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	if tok := SessionTokenFromRequest(r); tok != "" {
 		h.sessions.Delete(tok)
 	}
-	ClearSessionCookie(w, h.secure)
+	ClearSessionCookie(w, h.cookieSecure(r))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -200,7 +477,7 @@ type addMagnetRequest struct {
 
 func (h *Handlers) AddMagnet(w http.ResponseWriter, r *http.Request) {
 	var req addMagnetRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -213,7 +490,14 @@ func (h *Handlers) AddMagnet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) AddTorrentFile(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MiB
+	// ParseMultipartForm's maxMemory argument is the in-memory buffer
+	// threshold, *not* a request-body cap — without MaxBytesReader a 5 GiB
+	// upload would happily stream to /tmp. Cap the whole request to the same
+	// 10 MiB ceiling that bounds the in-memory part.
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxTorrentUploadBytes)
+	}
+	if err := r.ParseMultipartForm(maxTorrentUploadBytes); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -279,7 +563,7 @@ type inspectorFocusRequest struct {
 
 func (h *Handlers) SetInspectorFocus(w http.ResponseWriter, r *http.Request) {
 	var req inspectorFocusRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -325,7 +609,7 @@ func (h *Handlers) ListCategories(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) CreateCategory(w http.ResponseWriter, r *http.Request) {
 	var req createCategoryRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -346,7 +630,7 @@ type updateCategoryRequest struct {
 
 func (h *Handlers) UpdateCategory(w http.ResponseWriter, r *http.Request) {
 	var req updateCategoryRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -386,7 +670,7 @@ func (h *Handlers) ListTags(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) CreateTag(w http.ResponseWriter, r *http.Request) {
 	var req createTagRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -418,7 +702,7 @@ type assignTagRequest struct {
 
 func (h *Handlers) AssignTag(w http.ResponseWriter, r *http.Request) {
 	var req assignTagRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -431,7 +715,7 @@ func (h *Handlers) AssignTag(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) UnassignTag(w http.ResponseWriter, r *http.Request) {
 	var req assignTagRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -449,7 +733,7 @@ type setTorrentCategoryRequest struct {
 
 func (h *Handlers) SetTorrentCategory(w http.ResponseWriter, r *http.Request) {
 	var req setTorrentCategoryRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -477,7 +761,7 @@ type setDefaultSavePathRequest struct {
 
 func (h *Handlers) SetDefaultSavePath(w http.ResponseWriter, r *http.Request) {
 	var req setDefaultSavePathRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -499,7 +783,7 @@ func (h *Handlers) GetLimits(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) SetLimits(w http.ResponseWriter, r *http.Request) {
 	var l api.LimitsDTO
-	if err := decodeJSON(r, &l); err != nil {
+	if err := decodeJSON(w, r, &l); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -525,7 +809,7 @@ func (h *Handlers) GetQueueLimits(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) SetQueueLimits(w http.ResponseWriter, r *http.Request) {
 	var q api.QueueLimitsDTO
-	if err := decodeJSON(r, &q); err != nil {
+	if err := decodeJSON(w, r, &q); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -542,7 +826,7 @@ func (h *Handlers) GetPeerLimits(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) SetPeerLimits(w http.ResponseWriter, r *http.Request) {
 	var p api.PeerLimitsDTO
-	if err := decodeJSON(r, &p); err != nil {
+	if err := decodeJSON(w, r, &p); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -560,7 +844,7 @@ type queuePosRequest struct {
 
 func (h *Handlers) SetQueuePosition(w http.ResponseWriter, r *http.Request) {
 	var req queuePosRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -578,7 +862,7 @@ type forceStartRequest struct {
 
 func (h *Handlers) SetForceStart(w http.ResponseWriter, r *http.Request) {
 	var req forceStartRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -600,7 +884,7 @@ type setBlocklistRequest struct {
 
 func (h *Handlers) SetBlocklist(w http.ResponseWriter, r *http.Request) {
 	var req setBlocklistRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -626,7 +910,7 @@ type setFilePrioritiesRequest struct {
 
 func (h *Handlers) SetFilePriorities(w http.ResponseWriter, r *http.Request) {
 	var req setFilePrioritiesRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -648,7 +932,7 @@ func (h *Handlers) ListScheduleRules(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) CreateScheduleRule(w http.ResponseWriter, r *http.Request) {
 	var rule api.ScheduleRuleDTO
-	if err := decodeJSON(r, &rule); err != nil {
+	if err := decodeJSON(w, r, &rule); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -662,7 +946,7 @@ func (h *Handlers) CreateScheduleRule(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) UpdateScheduleRule(w http.ResponseWriter, r *http.Request) {
 	var rule api.ScheduleRuleDTO
-	if err := decodeJSON(r, &rule); err != nil {
+	if err := decodeJSON(w, r, &rule); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -697,7 +981,7 @@ func (h *Handlers) ListFeeds(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) CreateFeed(w http.ResponseWriter, r *http.Request) {
 	var feed api.FeedDTO
-	if err := decodeJSON(r, &feed); err != nil {
+	if err := decodeJSON(w, r, &feed); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -711,7 +995,7 @@ func (h *Handlers) CreateFeed(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) UpdateFeed(w http.ResponseWriter, r *http.Request) {
 	var feed api.FeedDTO
-	if err := decodeJSON(r, &feed); err != nil {
+	if err := decodeJSON(w, r, &feed); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -751,7 +1035,7 @@ func (h *Handlers) ListFiltersByFeed(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) CreateFilter(w http.ResponseWriter, r *http.Request) {
 	var filter api.FilterDTO
-	if err := decodeJSON(r, &filter); err != nil {
+	if err := decodeJSON(w, r, &filter); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -765,7 +1049,7 @@ func (h *Handlers) CreateFilter(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) UpdateFilter(w http.ResponseWriter, r *http.Request) {
 	var filter api.FilterDTO
-	if err := decodeJSON(r, &filter); err != nil {
+	if err := decodeJSON(w, r, &filter); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -797,7 +1081,7 @@ func (h *Handlers) GetWebConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) SetWebConfig(w http.ResponseWriter, r *http.Request) {
 	var c api.WebConfigDTO
-	if err := decodeJSON(r, &c); err != nil {
+	if err := decodeJSON(w, r, &c); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -814,7 +1098,7 @@ type setWebPasswordRequest struct {
 
 func (h *Handlers) SetWebPassword(w http.ResponseWriter, r *http.Request) {
 	var req setWebPasswordRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -842,7 +1126,7 @@ func (h *Handlers) GetUpdaterConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) SetUpdaterConfig(w http.ResponseWriter, r *http.Request) {
 	var c api.UpdaterConfigDTO
-	if err := decodeJSON(r, &c); err != nil {
+	if err := decodeJSON(w, r, &c); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -907,8 +1191,16 @@ type changePasswordRequest struct {
 
 // ChangeMyPassword changes the caller's own password.
 func (h *Handlers) ChangeMyPassword(w http.ResponseWriter, r *http.Request) {
+	caller := api.CallerFrom(r.Context())
+	// Rate-limit per user so a stolen session cookie can't be used to brute
+	// force the old password by spamming this endpoint.
+	if !h.passwordLimiter.allow(caller.UserID) {
+		w.Header().Set("Retry-After", strconv.Itoa(loginRetryAfterSecs))
+		writeErr(w, http.StatusTooManyRequests, errors.New("too many password attempts"))
+		return
+	}
 	var req changePasswordRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -916,8 +1208,7 @@ func (h *Handlers) ChangeMyPassword(w http.ResponseWriter, r *http.Request) {
 		writeServiceErr(w, err)
 		return
 	}
-	// The caller's sessions were just revoked — clear their cookie too.
-	ClearSessionCookie(w, h.secure)
+	ClearSessionCookie(w, h.cookieSecure(r))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -972,7 +1263,7 @@ func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 // CreateUser adds a new account (admin only).
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var req userInputRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -992,7 +1283,7 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req userInputRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -1029,8 +1320,16 @@ func (h *Handlers) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("bad user id"))
 		return
 	}
+	// Rate-limit keyed by the *target* user id so a compromised admin
+	// session can't grind through a password-reset oracle for a victim
+	// account.
+	if !h.passwordLimiter.allow(id) {
+		w.Header().Set("Retry-After", strconv.Itoa(loginRetryAfterSecs))
+		writeErr(w, http.StatusTooManyRequests, errors.New("too many password attempts"))
+		return
+	}
 	var req resetPasswordRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -1061,7 +1360,7 @@ type shareRequest struct {
 // ShareTorrent grants another user access to a torrent (owner only).
 func (h *Handlers) ShareTorrent(w http.ResponseWriter, r *http.Request) {
 	var req shareRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeServiceErr(w, err)
 		return
 	}

@@ -204,10 +204,14 @@ func (h *Hub) ClientCount() int {
 type hubClient struct {
 	send   chan []byte
 	caller api.Caller
+	// conn is held so RevokeUser can synchronously close the underlying
+	// socket with a policy-violation status code, signalling the SPA to
+	// fall back to the login screen.
+	conn *websocket.Conn
 }
 
-func (h *Hub) addClient(caller api.Caller) *hubClient {
-	c := &hubClient{send: make(chan []byte, 64), caller: caller}
+func (h *Hub) addClient(caller api.Caller, conn *websocket.Conn) *hubClient {
+	c := &hubClient{send: make(chan []byte, 64), caller: caller, conn: conn}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.clients == nil {
@@ -230,6 +234,38 @@ func (h *Hub) removeClient(c *hubClient) {
 	h.mu.Unlock()
 }
 
+// RevokeUser hangs up every live WebSocket belonging to userID. It is the
+// counterpart to SessionStore.RevokeUser: when a user is deleted, disabled,
+// renamed, or has their password changed, the session is gone but an already-
+// upgraded WebSocket would otherwise keep streaming until it next tried to
+// re-auth. The conn.Close races with the per-conn read loop noticing the
+// closed socket; the periodic Valid() check in HandleUpgrade is the secondary
+// safety net. Wired into api.Service.invalidateCaller via AttachWSRevoker
+// from the binary's startup (cmd/mosaicd/main.go and main.go).
+func (h *Hub) RevokeUser(userID int) {
+	h.mu.Lock()
+	var victims []*hubClient
+	for c := range h.clients {
+		if c.caller.UserID == userID {
+			victims = append(victims, c)
+		}
+	}
+	h.mu.Unlock()
+	// Close outside the hub lock so the loop in HandleUpgrade can call
+	// removeClient (which re-acquires it) without deadlocking us.
+	for _, c := range victims {
+		if c.conn != nil {
+			_ = c.conn.Close(websocket.StatusPolicyViolation, "session revoked")
+		}
+	}
+}
+
+// wsSessionRecheckInterval is the cadence at which a live WebSocket
+// re-validates its session token. Cheaper than checking on every frame and
+// still fast enough that a logged-out user's stream stops within ~30s of
+// their session disappearing.
+const wsSessionRecheckInterval = 30 * time.Second
+
 // HandleUpgrade returns an http.HandlerFunc that upgrades the request to a
 // WebSocket and pumps frames from the per-client buffered channel until either
 // side disconnects. Auth is checked inline (cookie OR bearer) so the upgrade
@@ -241,6 +277,11 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.Han
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
+		// Capture the session token (if any) so the loop below can re-validate
+		// it periodically. Bearer-keyed callers have token == "" and skip the
+		// periodic check — RevokeUser still hangs up their socket directly
+		// when the underlying user is mutated.
+		sessionToken := SessionTokenFromRequest(r)
 
 		// Pin the Origin to the request Host to prevent Cross-Site WebSocket
 		// Hijacking: if a logged-in user visits a malicious page, the browser
@@ -258,7 +299,7 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.Han
 		}
 		defer conn.Close(websocket.StatusInternalError, "closing")
 
-		client := h.addClient(caller)
+		client := h.addClient(caller, conn)
 		defer h.removeClient(client)
 
 		ctx := r.Context()
@@ -273,14 +314,27 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.Han
 			}
 		}()
 
+		recheck := time.NewTicker(wsSessionRecheckInterval)
+		defer recheck.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-peerGone:
 				return
+			case <-recheck.C:
+				if sessionToken != "" {
+					if _, ok := sessions.Valid(sessionToken); !ok {
+						conn.Close(websocket.StatusPolicyViolation, "session revoked")
+						return
+					}
+				}
 			case frame, ok := <-client.send:
 				if !ok {
+					// Channel was closed by RevokeUser or hub shutdown — the
+					// kicker also called conn.Close, but exit promptly so the
+					// defer can run.
 					return
 				}
 				writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

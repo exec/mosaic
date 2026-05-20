@@ -15,7 +15,7 @@ import (
 
 func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 	t.Helper()
-	db, err := persistence.Open(context.Background(), filepath.Join(t.TempDir(), "t.db"))
+	db, err := persistence.Open(sysCtx(), filepath.Join(t.TempDir(), "t.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -41,7 +41,7 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 func TestService_AddMagnet_PersistsAndAddsToEngine(t *testing.T) {
 	svc, fb := newTestService(t)
 
-	id, err := svc.AddMagnet(context.Background(), "magnet:?xt=urn:btih:abc", "")
+	id, err := svc.AddMagnet(sysCtx(), "magnet:?xt=urn:btih:abc", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 
@@ -49,7 +49,7 @@ func TestService_AddMagnet_PersistsAndAddsToEngine(t *testing.T) {
 	require.Len(t, fb.List(), 1)
 
 	// persistence sees it
-	rows, err := svc.ListTorrents(context.Background())
+	rows, err := svc.ListTorrents(sysCtx())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, string(id), rows[0].ID)
@@ -57,10 +57,10 @@ func TestService_AddMagnet_PersistsAndAddsToEngine(t *testing.T) {
 
 func TestService_AddMagnet_UsesDefaultSavePathWhenEmpty(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.AddMagnet(context.Background(), "magnet:?xt=urn:btih:def", "")
+	_, err := svc.AddMagnet(sysCtx(), "magnet:?xt=urn:btih:def", "")
 	require.NoError(t, err)
 
-	rows, err := svc.ListTorrents(context.Background())
+	rows, err := svc.ListTorrents(sysCtx())
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/dl", rows[0].SavePath)
 }
@@ -73,13 +73,13 @@ func TestService_AddTorrentFile_PersistsAndAddsToEngine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fixture.torrent")
 	require.NoError(t, os.WriteFile(path, []byte("d4:infod6:lengthi42e4:name3:abcee"), 0o644))
 
-	id, err := svc.AddTorrentFile(context.Background(), path, "")
+	id, err := svc.AddTorrentFile(sysCtx(), path, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 
 	require.Len(t, fb.List(), 1)
 
-	rows, err := svc.ListTorrents(context.Background())
+	rows, err := svc.ListTorrents(sysCtx())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "/tmp/dl", rows[0].SavePath)
@@ -87,23 +87,23 @@ func TestService_AddTorrentFile_PersistsAndAddsToEngine(t *testing.T) {
 
 func TestService_AddTorrentFile_ErrorOnMissingFile(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.AddTorrentFile(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.torrent"), "")
+	_, err := svc.AddTorrentFile(sysCtx(), filepath.Join(t.TempDir(), "does-not-exist.torrent"), "")
 	require.Error(t, err)
 }
 
 func TestService_Remove_RemovesFromEngineAndPersistence(t *testing.T) {
 	svc, fb := newTestService(t)
-	id, _ := svc.AddMagnet(context.Background(), "magnet:?xt=urn:btih:rm", "/tmp")
-	require.NoError(t, svc.Remove(context.Background(), id, false))
+	id, _ := svc.AddMagnet(sysCtx(), "magnet:?xt=urn:btih:rm", "/tmp")
+	require.NoError(t, svc.Remove(sysCtx(), id, false))
 
 	require.Len(t, fb.List(), 0)
-	rows, _ := svc.ListTorrents(context.Background())
+	rows, _ := svc.ListTorrents(sysCtx())
 	require.Empty(t, rows)
 }
 
 func TestService_InspectorFocus_StoresAndReturnsDetail(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:focus", "")
 
@@ -126,7 +126,7 @@ func TestService_InspectorFocus_StoresAndReturnsDetail(t *testing.T) {
 
 func TestService_ClearInspectorFocus(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:cf", "")
 	require.NoError(t, svc.SetInspectorFocus(ctx, string(id), []string{"overview"}))
 	svc.ClearInspectorFocus(ctx)
@@ -138,7 +138,7 @@ func TestService_ClearInspectorFocus(t *testing.T) {
 
 func TestService_InspectorFocus_ScopesByVisibleTabs(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:scope2", "")
 
 	// Only Overview tab visible — files/peers/trackers should be empty
@@ -159,7 +159,7 @@ func TestService_InspectorFocus_ScopesByVisibleTabs(t *testing.T) {
 
 func TestService_CategoryCRUD(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	id, err := svc.CreateCategory(ctx, "Movies", "/Volumes/media", "#ef4444")
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestService_CategoryCRUD(t *testing.T) {
 
 func TestService_TagAssignment(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:tag", "")
 	tagID, err := svc.CreateTag(ctx, "#priority", "#3b82f6")
@@ -196,7 +196,7 @@ func TestService_TagAssignment(t *testing.T) {
 
 func TestService_SetTorrentCategory(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:cat", "")
 	catID, _ := svc.CreateCategory(ctx, "Linux ISOs", "", "#22c55e")
@@ -211,7 +211,7 @@ func TestService_SetTorrentCategory(t *testing.T) {
 
 func TestService_SetFilePriorities(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:fp", "")
 
 	require.NoError(t, svc.SetFilePriorities(ctx, string(id), map[int]string{
@@ -222,7 +222,7 @@ func TestService_SetFilePriorities(t *testing.T) {
 
 func TestService_DefaultSavePath_Persistence(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	got, err := svc.GetDefaultSavePath(ctx)
 	require.NoError(t, err)
@@ -237,7 +237,7 @@ func TestService_DefaultSavePath_Persistence(t *testing.T) {
 
 func TestService_LimitsRoundTrip(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	require.NoError(t, svc.SetLimits(ctx, LimitsDTO{DownKbps: 1000, UpKbps: 100, AltDownKbps: 200, AltUpKbps: 50}))
 	got, _ := svc.GetLimits(ctx)
 	require.Equal(t, 1000, got.DownKbps)
@@ -246,7 +246,7 @@ func TestService_LimitsRoundTrip(t *testing.T) {
 
 func TestService_ToggleAltSpeed(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	on, err := svc.ToggleAltSpeed(ctx)
 	require.NoError(t, err)
 	require.True(t, on)
@@ -256,7 +256,7 @@ func TestService_ToggleAltSpeed(t *testing.T) {
 
 func TestService_QueuePosition(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:qp", "")
 	require.NoError(t, svc.SetQueuePosition(ctx, string(id), 7))
 	rows, _ := svc.ListTorrents(ctx)
@@ -265,7 +265,7 @@ func TestService_QueuePosition(t *testing.T) {
 
 func TestService_GlobalStats(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	// Empty state
 	stats, err := svc.GlobalStats(ctx)
@@ -286,7 +286,7 @@ func TestService_GlobalStats(t *testing.T) {
 
 func TestService_FeedCRUD(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	id, err := svc.CreateFeed(ctx, FeedDTO{URL: "https://x.test/rss", Name: "X", IntervalMin: 30, Enabled: true})
 	require.NoError(t, err)
@@ -312,7 +312,7 @@ func TestService_FeedCRUD(t *testing.T) {
 
 func TestService_FilterCRUD(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	feedID, err := svc.CreateFeed(ctx, FeedDTO{URL: "https://example.com/rss", Name: "f", IntervalMin: 30, Enabled: true})
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ func TestService_FilterCRUD(t *testing.T) {
 
 func TestService_DeleteFeed_CascadesFilters(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	feedID, _ := svc.CreateFeed(ctx, FeedDTO{URL: "https://example.com/rss", Name: "f", IntervalMin: 30, Enabled: true})
 	_, _ = svc.CreateFilter(ctx, FilterDTO{FeedID: feedID, Regex: ".*", Enabled: true})
@@ -365,7 +365,7 @@ func TestService_DeleteFeed_CascadesFilters(t *testing.T) {
 
 func TestService_GetWebConfig_Defaults(t *testing.T) {
 	svc, _ := newTestService(t)
-	cfg := svc.GetWebConfig(context.Background())
+	cfg := svc.GetWebConfig(sysCtx())
 	require.False(t, cfg.Enabled)
 	require.Equal(t, 8080, cfg.Port)
 	require.False(t, cfg.BindAll)
@@ -375,7 +375,7 @@ func TestService_GetWebConfig_Defaults(t *testing.T) {
 
 func TestService_SetWebConfig_RoundTrip(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{
 		Enabled: true, Port: 9091, BindAll: true, Username: "remote",
 	}))
@@ -400,7 +400,7 @@ func apiKeyOK(svc *Service, ctx context.Context, key string) bool {
 
 func TestService_SetWebPassword_VerifyCredentials(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{
 		Enabled: true, Port: 8080, Username: "alice",
 	}))
@@ -419,7 +419,7 @@ func TestService_SetWebPassword_VerifyCredentials(t *testing.T) {
 // ephemeral mode (audit fix #3); this test documents the post-condition.
 func TestService_SetWebPassword_FlipsUserSetFlag(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	require.False(t, svc.IsWebPasswordUserSet(ctx), "fresh DB starts as not-user-set")
 	require.NoError(t, svc.SetWebPassword(ctx, "operator-chosen-pw"))
 	require.True(t, svc.IsWebPasswordUserSet(ctx), "after SetWebPassword the flag must be true")
@@ -431,14 +431,14 @@ func TestService_SetWebPassword_FlipsUserSetFlag(t *testing.T) {
 // operator's intent and never rotate it again.
 func TestService_SetWebPasswordEphemeral_DoesNotFlipFlag(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	require.NoError(t, svc.SetWebPasswordEphemeral(ctx, "auto-generated-pw"))
 	require.False(t, svc.IsWebPasswordUserSet(ctx), "ephemeral set must leave the flag false")
 }
 
 func TestService_VerifyWebCredentials_NoPasswordSet(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	require.NoError(t, svc.SetWebConfig(ctx, WebConfigDTO{Username: "alice"}))
 	require.False(t, authOK(svc, ctx, "alice", "anything"))
 }
@@ -452,7 +452,7 @@ func TestService_VerifyWebCredentials_NoPasswordSet(t *testing.T) {
 // credentials" because the stored value is "" != "admin".
 func TestService_VerifyWebCredentials_DefaultsToAdmin_OnFreshDB(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	// Do NOT call SetWebConfig — leave settingWebUsername unset to
 	// mimic mosaicd's first-boot state. The ephemeral-password path
 	// only writes the password hash, not the username.
@@ -465,7 +465,7 @@ func TestService_VerifyWebCredentials_DefaultsToAdmin_OnFreshDB(t *testing.T) {
 
 func TestService_RotateAPIKey_AndVerify(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	require.False(t, apiKeyOK(svc, ctx, "anything"))
 
@@ -487,7 +487,7 @@ func TestService_RotateAPIKey_AndVerify(t *testing.T) {
 
 func TestService_GetWebConfig_ReturnsAPIKeyHint(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	key, err := svc.RotateAPIKey(ctx)
 	require.NoError(t, err)
 	// API keys are stored hashed; GetWebConfig only exposes the last-4 hint.
@@ -496,7 +496,7 @@ func TestService_GetWebConfig_ReturnsAPIKeyHint(t *testing.T) {
 
 func TestUpdaterConfig_DefaultsAndRoundTrip(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	cfg := svc.GetUpdaterConfig(ctx)
 	require.True(t, cfg.Enabled, "updater should be enabled by default")
@@ -512,14 +512,14 @@ func TestUpdaterConfig_DefaultsAndRoundTrip(t *testing.T) {
 
 func TestUpdaterConfig_RejectsUnknownChannel(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	err := svc.SetUpdaterConfig(ctx, UpdaterConfigDTO{Enabled: true, Channel: "nightly"})
 	require.Error(t, err)
 }
 
 func TestCheckForUpdate_NoUpdater(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 	info, err := svc.CheckForUpdate(ctx)
 	require.Error(t, err, "expected updater-disabled error")
 	require.False(t, info.Available)
@@ -528,14 +528,14 @@ func TestCheckForUpdate_NoUpdater(t *testing.T) {
 
 func TestInstallUpdate_NoUpdater(t *testing.T) {
 	svc, _ := newTestService(t)
-	require.Error(t, svc.InstallUpdate(context.Background()))
+	require.Error(t, svc.InstallUpdate(sysCtx()))
 }
 
 // serviceWithDB lets two Service instances share one DB file across the test
 // (to simulate a process restart).
 func serviceWithDB(t *testing.T, dbPath string) (*Service, *engine.FakeBackend) {
 	t.Helper()
-	db, err := persistence.Open(context.Background(), dbPath)
+	db, err := persistence.Open(sysCtx(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	fb := engine.NewFakeBackend()
@@ -557,7 +557,7 @@ func serviceWithDB(t *testing.T, dbPath string) (*Service, *engine.FakeBackend) 
 
 func TestDesktopIntegration_DefaultsOnFreshDB(t *testing.T) {
 	svc, _ := newTestService(t)
-	got := svc.GetDesktopIntegration(context.Background())
+	got := svc.GetDesktopIntegration(sysCtx())
 
 	// Spec defaults: tray on, close-to-tray on (matches qBittorrent /
 	// Discord / Steam — closing the window into a running tray was
@@ -573,7 +573,7 @@ func TestDesktopIntegration_DefaultsOnFreshDB(t *testing.T) {
 
 func TestDesktopIntegration_SetRoundtrips(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	in := DesktopIntegrationDTO{
 		TrayEnabled:      false,
@@ -594,7 +594,7 @@ func TestDesktopIntegration_SetRoundtrips(t *testing.T) {
 // the app entirely).
 func TestDesktopIntegration_AllFalseAccepted(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	// All-false combo — no validation, no error.
 	require.NoError(t, svc.SetDesktopIntegration(ctx, DesktopIntegrationDTO{}))
@@ -610,7 +610,7 @@ func TestDesktopIntegration_AllFalseAccepted(t *testing.T) {
 
 func TestDesktopIntegration_OnChangeFiresWithLatest(t *testing.T) {
 	svc, _ := newTestService(t)
-	ctx := context.Background()
+	ctx := sysCtx()
 
 	var seen DesktopIntegrationDTO
 	called := 0
@@ -630,14 +630,14 @@ func TestRestoreOnStartup_ReAddsPersistedMagnet(t *testing.T) {
 
 	// Session 1: add a magnet + persist it.
 	svc1, fb1 := serviceWithDB(t, dbPath)
-	_, err := svc1.AddMagnet(context.Background(), "magnet:?xt=urn:btih:abc", "")
+	_, err := svc1.AddMagnet(sysCtx(), "magnet:?xt=urn:btih:abc", "")
 	require.NoError(t, err)
 	require.Len(t, fb1.List(), 1)
 
 	// Session 2: fresh engine (empty), same DB. Restore should re-add.
 	svc2, fb2 := serviceWithDB(t, dbPath)
 	require.Empty(t, fb2.List(), "fresh engine starts empty")
-	require.NoError(t, svc2.RestoreOnStartup(context.Background()))
+	require.NoError(t, svc2.RestoreOnStartup(sysCtx()))
 	require.Len(t, fb2.List(), 1, "magnet torrent should be re-added")
 }
 
@@ -646,13 +646,13 @@ func TestRestoreOnStartup_ReAddsPersistedFile(t *testing.T) {
 
 	svc1, fb1 := serviceWithDB(t, dbPath)
 	// FakeBackend.AddFile records the bytes verbatim; any non-empty blob suffices.
-	_, err := svc1.AddTorrentBytes(context.Background(), []byte("fake-torrent-bytes"), "")
+	_, err := svc1.AddTorrentBytes(sysCtx(), []byte("fake-torrent-bytes"), "")
 	require.NoError(t, err)
 	require.Len(t, fb1.List(), 1)
 
 	svc2, fb2 := serviceWithDB(t, dbPath)
 	require.Empty(t, fb2.List())
-	require.NoError(t, svc2.RestoreOnStartup(context.Background()))
+	require.NoError(t, svc2.RestoreOnStartup(sysCtx()))
 	require.Len(t, fb2.List(), 1, "file-added torrent should be re-added via persisted metainfo")
 }
 
@@ -661,10 +661,10 @@ func TestRestoreOnStartup_SkipsOrphanRecord(t *testing.T) {
 	svc, fb := serviceWithDB(t, dbPath)
 
 	// Insert a record with neither magnet nor metainfo (the pre-fix legacy state).
-	require.NoError(t, svc.torrents.Save(context.Background(), persistence.TorrentRecord{
+	require.NoError(t, svc.torrents.Save(sysCtx(), persistence.TorrentRecord{
 		InfoHash: "deadbeef", Name: "orphan", SavePath: "/tmp/dl", AddedAt: time.Now(),
 	}))
 
-	require.NoError(t, svc.RestoreOnStartup(context.Background()))
+	require.NoError(t, svc.RestoreOnStartup(sysCtx()))
 	require.Empty(t, fb.List(), "orphan should be skipped, not crash")
 }

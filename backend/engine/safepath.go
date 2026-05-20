@@ -86,3 +86,36 @@ func pathContained(base, target string) bool {
 	}
 	return true
 }
+
+// sanityCheckSaveTo is the last-line-of-defense guard fired right before
+// RemoveAll on a torrent's recorded save directory. By the time we reach
+// here the api/ layer should already have rejected a hostile path at Add
+// time via engine.ValidateSavePath — but if a legacy record predates the
+// validator, or some future caller skipped it, we still refuse to fire
+// RemoveAll on anything that smells dangerous.
+//
+// Rejections:
+//   - empty
+//   - contains NUL byte
+//   - not absolute after Clean (so a bare "etc" or "../something" recorded
+//     pre-validation can't escalate to whatever happens to be the CWD)
+//   - resolves (lexically) to the filesystem root or "/" sentinel
+func sanityCheckSaveTo(saveTo string) error {
+	if saveTo == "" {
+		return errors.New("save path empty")
+	}
+	if strings.ContainsRune(saveTo, 0) {
+		return errors.New("save path contains NUL byte")
+	}
+	clean := filepath.Clean(saveTo)
+	if !filepath.IsAbs(clean) {
+		return fmt.Errorf("save path %q is not absolute", saveTo)
+	}
+	// filepath.Dir of a filesystem root returns the root itself; refuse to
+	// RemoveAll on "/" or any single-component root path. Belt and braces
+	// against a bug elsewhere that records SavePath="" → cleaned to ".".
+	if filepath.Dir(clean) == clean {
+		return fmt.Errorf("save path %q is a filesystem root", clean)
+	}
+	return nil
+}

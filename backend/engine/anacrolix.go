@@ -579,6 +579,15 @@ func idFor(t *torrent.Torrent) TorrentID {
 }
 
 func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath string) (TorrentID, error) {
+	// SECURITY: savePath is caller-controlled. In multi-user mosaicd a
+	// non-admin must NOT be able to MkdirAll into arbitrary daemon-writable
+	// paths (/etc/cron.d, ~root/.ssh, another user's home). Callers in
+	// api/service.go must funnel non-admin save paths through
+	// engine.ValidateSavePath(userRoot, savePath, /*restrictToRoot=*/ true)
+	// BEFORE invoking AddMagnet. Admin and single-user-desktop callers
+	// pass restrictToRoot=false to keep the current unrestricted behavior.
+	// This function intentionally does not re-validate because the engine
+	// doesn't know the caller's role/userID — that context lives in api/.
 	if err := os.MkdirAll(savePath, 0o755); err != nil {
 		return "", err
 	}
@@ -975,6 +984,9 @@ func (a *AnacrolixBackend) MarkExpectedComplete(id TorrentID) {
 }
 
 func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath string) (TorrentID, error) {
+	// SECURITY: same caller-controlled-path concern as AddMagnet. See the
+	// note there. The api/service.go AddTorrentFile / AddTorrentBytes paths
+	// are expected to ValidateSavePath before calling in.
 	if err := os.MkdirAll(savePath, 0o755); err != nil {
 		return "", err
 	}
@@ -1173,11 +1185,22 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 			// returns an error we log+skip on. The in-memory unsubscribe
 			// (t.Drop, the map deletes above) has already happened — only the
 			// disk delete is conditional on validation.
-			path, err := safeRemovePath(saveTo, info.Name)
-			if err != nil {
-				log.Printf("refusing to delete files for torrent: name=%q error=%v", info.Name, err)
+			//
+			// Additional defense-in-depth: saveTo itself was caller-controlled
+			// at Add time. In multi-user mode the api/ layer is expected to
+			// validate it via engine.ValidateSavePath before AddMagnet/AddFile,
+			// but we sanity-check here too — a saveTo that's empty, relative,
+			// contains NUL, or resolves to a filesystem root must not have
+			// RemoveAll fired on it under any circumstances.
+			if err := sanityCheckSaveTo(saveTo); err != nil {
+				log.Printf("refusing to delete files for torrent: saveTo=%q error=%v", saveTo, err)
 			} else {
-				_ = os.RemoveAll(path)
+				path, err := safeRemovePath(saveTo, info.Name)
+				if err != nil {
+					log.Printf("refusing to delete files for torrent: name=%q error=%v", info.Name, err)
+				} else {
+					_ = os.RemoveAll(path)
+				}
 			}
 		}
 	}

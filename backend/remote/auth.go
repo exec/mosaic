@@ -2,6 +2,7 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,6 +11,12 @@ import (
 	"mosaic/backend/api"
 	"mosaic/backend/remote/cred"
 )
+
+// ErrTooManySessions is returned by SessionStore.Create when the in-memory
+// store is at capacity. Login translates it to 503 so the operator gets a
+// distinct signal from a generic 500 (and an attacker pumping sessions
+// doesn't quietly evict a real user's token).
+var ErrTooManySessions = errors.New("session store at capacity")
 
 // HashPassword/VerifyPassword/RandomToken are re-exported from the cred leaf
 // subpackage. The split exists to avoid an import cycle: api.Service uses
@@ -50,59 +57,64 @@ func NewSessionStore() *SessionStore {
 	return &SessionStore{sessions: make(map[string]sessionEntry)}
 }
 
-// Create issues a new session token bound to userID. If the store is full, the
-// oldest entry (earliest expiry) is evicted before insertion. Returns ("", err)
-// if the underlying rand source fails — callers should surface a 500.
+// Create issues a new session token bound to userID. If the store is full it
+// returns ErrTooManySessions — the previous behavior (silently evicting the
+// oldest entry) let a flood of logins quietly knock out a legitimate user's
+// session, which is itself an availability attack. Returns ("", err) if the
+// rand source fails.
+//
+// First it opportunistically reaps expired entries, since expiry pruning is
+// otherwise lazy (see Valid) and a store can sit "full" of dead tokens for
+// hours under the sliding-TTL model.
 func (s *SessionStore) Create(userID int) (string, error) {
 	tok, err := RandomToken()
 	if err != nil {
 		return "", err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.sessions) >= maxSessions {
-		s.evictOldestLocked()
+		s.reapExpiredLocked()
+	}
+	if len(s.sessions) >= maxSessions {
+		return "", ErrTooManySessions
 	}
 	s.sessions[tok] = sessionEntry{userID: userID, expires: time.Now().Add(sessionTTL)}
-	s.mu.Unlock()
 	return tok, nil
 }
 
-// evictOldestLocked drops the entry with the earliest expiry. Caller must
-// hold s.mu (write).
-func (s *SessionStore) evictOldestLocked() {
-	var oldestTok string
-	var oldestExp time.Time
-	first := true
+// reapExpiredLocked drops every entry past its expiry. Caller must hold
+// s.mu (write).
+func (s *SessionStore) reapExpiredLocked() {
+	now := time.Now()
 	for tok, e := range s.sessions {
-		if first || e.expires.Before(oldestExp) {
-			oldestTok = tok
-			oldestExp = e.expires
-			first = false
+		if now.After(e.expires) {
+			delete(s.sessions, tok)
 		}
-	}
-	if oldestTok != "" {
-		delete(s.sessions, oldestTok)
 	}
 }
 
-// Valid returns the user id the token authenticates, and ok=false if the token
-// is unknown or expired (expired tokens are pruned in passing).
+// Valid returns the user id the token authenticates, and ok=false if the
+// token is unknown or expired. On a successful lookup the entry's expiry is
+// slid forward by sessionTTL (rolling window) so an active user is never
+// abruptly logged out mid-session at the 12h mark.
 func (s *SessionStore) Valid(token string) (int, bool) {
 	if token == "" {
 		return 0, false
 	}
-	s.mu.RLock()
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	e, ok := s.sessions[token]
-	s.mu.RUnlock()
 	if !ok {
 		return 0, false
 	}
-	if time.Now().After(e.expires) {
-		s.mu.Lock()
+	if now.After(e.expires) {
 		delete(s.sessions, token)
-		s.mu.Unlock()
 		return 0, false
 	}
+	e.expires = now.Add(sessionTTL)
+	s.sessions[token] = e
 	return e.userID, true
 }
 
@@ -181,14 +193,17 @@ func SessionTokenFromRequest(r *http.Request) string {
 	return c.Value
 }
 
-// BearerTokenFromRequest extracts a bearer token from the Authorization header
-// or from a `?key=<token>` query param (browser WS upgrades cannot set headers).
+// BearerTokenFromRequest extracts a bearer token from the Authorization
+// header. The legacy `?key=<token>` query-param form was removed: URL params
+// leak into Referer headers, reverse-proxy access logs, and browser history,
+// so passing a credential there is unsafe. The SPA's WebSocket uses the
+// session cookie; scripted clients use the Authorization header.
 func BearerTokenFromRequest(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 	}
-	return r.URL.Query().Get("key")
+	return ""
 }
 
 // resolveCaller authenticates a request via its session cookie or bearer API

@@ -37,13 +37,14 @@ func (se *ScheduleEngine) Close() { close(se.stop) }
 func (se *ScheduleEngine) run() {
 	t := time.NewTicker(60 * time.Second)
 	defer t.Stop()
-	se.tick(context.Background()) // immediate
+	ctx := WithCaller(context.Background(), SystemCaller)
+	se.tick(ctx) // immediate
 	for {
 		select {
 		case <-se.stop:
 			return
 		case <-t.C:
-			se.tick(context.Background())
+			se.tick(ctx)
 		}
 	}
 }
