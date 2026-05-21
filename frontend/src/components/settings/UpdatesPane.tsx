@@ -3,6 +3,7 @@ import {Download, RefreshCw} from 'lucide-solid';
 import {toast} from 'solid-sonner';
 import type {UpdaterConfigDTO, UpdateInfoDTO} from '../../lib/bindings';
 import {isWailsRuntime} from '../../lib/runtime';
+import {userErr} from '../../lib/errors';
 import {Button} from '../ui/Button';
 
 type Props = {
@@ -41,7 +42,7 @@ export function UpdatesPane(props: Props) {
       await props.onSet({...props.config, enabled: enabled(), channel: channel()});
       toast.success('Update settings saved');
     } catch (e) {
-      toast.error(String(e));
+      toast.error(userErr(e));
     }
   };
 
@@ -51,7 +52,7 @@ export function UpdatesPane(props: Props) {
       await props.onCheck();
       toast.success('Check complete');
     } catch (e) {
-      toast.error(String(e));
+      toast.error(userErr(e));
     } finally {
       setChecking(false);
     }
@@ -63,7 +64,7 @@ export function UpdatesPane(props: Props) {
       await props.onInstall();
       toast.success('Installed — relaunch Mosaic');
     } catch (e) {
-      toast.error(String(e));
+      toast.error(userErr(e));
     } finally {
       setInstalling(false);
     }
