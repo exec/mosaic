@@ -471,6 +471,7 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 			}
 			tick, err := svc.BuildTorrentTickSnapshot(ctx)
 			if err != nil {
+				log.Warn().Err(err).Msg("streamTicks: torrents snapshot failed; clients will see stale state this tick")
 				continue
 			}
 			// Admins all see the same unfiltered list — compute and encode it
@@ -483,6 +484,7 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 				seen[uid] = struct{}{}
 				caller, err := svc.CallerForUserID(ctx, uid)
 				if err != nil {
+					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: caller lookup failed; skipping this user's torrents frame")
 					continue
 				}
 				var frame []byte
@@ -490,6 +492,7 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 					if !adminComputed {
 						rows, err := svc.ListTorrentsFromSnapshot(api.WithCaller(ctx, caller), tick)
 						if err != nil {
+							log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: admin torrents-list failed")
 							continue
 						}
 						adminFrame = remote.EncodeTorrentsFrame(rows)
@@ -499,6 +502,7 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 				} else {
 					rows, err := svc.ListTorrentsFromSnapshot(api.WithCaller(ctx, caller), tick)
 					if err != nil {
+						log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: per-user torrents-list failed")
 						continue
 					}
 					frame = remote.EncodeTorrentsFrame(rows)
@@ -535,12 +539,14 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 			for _, uid := range uids {
 				caller, err := svc.CallerForUserID(ctx, uid)
 				if err != nil {
+					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: caller lookup failed; skipping this user's stats frame")
 					continue
 				}
 				if caller.SeesAllTorrents() {
 					if !adminComputed {
 						adminStats, err = svc.GlobalStatsFromSnapshot(api.WithCaller(ctx, caller), snaps)
 						if err != nil {
+							log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: admin stats failed")
 							continue
 						}
 						adminComputed = true
@@ -548,9 +554,12 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 					hub.PublishStatsTo(uid, adminStats)
 					continue
 				}
-				if st, err := svc.GlobalStatsFromSnapshot(api.WithCaller(ctx, caller), snaps); err == nil {
-					hub.PublishStatsTo(uid, st)
+				st, err := svc.GlobalStatsFromSnapshot(api.WithCaller(ctx, caller), snaps)
+				if err != nil {
+					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: per-user stats failed")
+					continue
 				}
+				hub.PublishStatsTo(uid, st)
 			}
 		case <-inspector.C:
 			// Inspector detail is genuinely per-user — each user's focused
@@ -558,9 +567,15 @@ func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 			for _, uid := range hub.ConnectedUserIDs() {
 				uctx, err := userCtx(ctx, svc, uid)
 				if err != nil {
+					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: caller lookup failed; skipping this user's inspector frame")
 					continue
 				}
-				if detail, err := svc.DetailForFocus(uctx); err == nil && detail != nil {
+				detail, err := svc.DetailForFocus(uctx)
+				if err != nil {
+					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: inspector detail failed")
+					continue
+				}
+				if detail != nil {
 					hub.PublishInspectorTo(uid, *detail)
 				}
 			}

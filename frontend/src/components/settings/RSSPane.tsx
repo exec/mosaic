@@ -2,6 +2,7 @@ import {createSignal, For, Show} from 'solid-js';
 import {Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight, RefreshCw} from 'lucide-solid';
 import {toast} from 'solid-sonner';
 import type {CategoryDTO, FeedDTO, FilterDTO} from '../../lib/bindings';
+import {userErr} from '../../lib/errors';
 import {Button} from '../ui/Button';
 
 type Props = {
@@ -43,7 +44,7 @@ export function RSSPane(props: Props) {
       next.delete(feedID);
     } else {
       next.add(feedID);
-      try { await props.onLoadFilters(feedID); } catch (e) { toast.error(String(e)); }
+      try { await props.onLoadFilters(feedID); } catch (e) { toast.error(userErr(e)); }
     }
     setExpanded(next);
   };
@@ -70,7 +71,7 @@ export function RSSPane(props: Props) {
               await props.onCreateFeed(f);
               setCreating(false);
               toast.success('Feed added');
-            } catch (e) { toast.error(String(e)); }
+            } catch (e) { toast.error(userErr(e)); }
           }}
         />
       </Show>
@@ -117,7 +118,7 @@ export function RSSPane(props: Props) {
                               await props.onPollFeed(feed.id);
                               toast.success(`Refreshed "${feed.name}"`);
                             } catch (err) {
-                              toast.error(`Refresh failed — ${String(err)}`);
+                              toast.error(`Refresh failed — ${userErr(err)}`);
                             } finally {
                               setPollingFeedID(null);
                             }
@@ -140,7 +141,7 @@ export function RSSPane(props: Props) {
                               try {
                                 await props.onDeleteFeed(feed.id);
                                 toast.success('Feed deleted');
-                              } catch (e) { toast.error(String(e)); }
+                              } catch (e) { toast.error(userErr(e)); }
                             }}
                             title="Delete"
                           >
@@ -170,7 +171,7 @@ export function RSSPane(props: Props) {
                                 await props.onCreateFilter(next);
                                 setCreatingFilterFor(null);
                                 toast.success('Filter added');
-                              } catch (e) { toast.error(String(e)); }
+                              } catch (e) { toast.error(userErr(e)); }
                             }}
                           />
                         </Show>
@@ -217,7 +218,7 @@ export function RSSPane(props: Props) {
                                             try {
                                               await props.onDeleteFilter(feed.id, fil.id);
                                               toast.success('Filter deleted');
-                                            } catch (e) { toast.error(String(e)); }
+                                            } catch (e) { toast.error(userErr(e)); }
                                           }}
                                           title="Delete"
                                         >
@@ -236,7 +237,7 @@ export function RSSPane(props: Props) {
                                         await props.onUpdateFilter(next);
                                         setEditingFilterID(null);
                                         toast.success('Filter updated');
-                                      } catch (e) { toast.error(String(e)); }
+                                      } catch (e) { toast.error(userErr(e)); }
                                     }}
                                   />
                                 </Show>
@@ -257,7 +258,7 @@ export function RSSPane(props: Props) {
                       await props.onUpdateFeed(next);
                       setEditingFeedID(null);
                       toast.success('Feed updated');
-                    } catch (e) { toast.error(String(e)); }
+                    } catch (e) { toast.error(userErr(e)); }
                   }}
                 />
               </Show>
