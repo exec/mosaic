@@ -15,6 +15,7 @@ import {ShareTorrentModal} from './components/shell/ShareTorrentModal';
 import {UpdateToast} from './components/shell/UpdateToast';
 import {TorrentList} from './components/list/TorrentList';
 import {canShare} from './lib/permissions';
+import {userErr} from './lib/errors';
 import {Inspector} from './components/inspector/Inspector';
 import './index.css';
 
@@ -40,15 +41,6 @@ export default function App() {
       </BrowserAuthGate>
     </>
   );
-}
-
-// userErr trims an unknown thrown value to a one-line user-friendly message.
-// Strips the noisy 'Error: ' prefix the platform adds and clamps long stacks
-// so an unbounded backend error doesn't blow up the toast.
-function userErr(e: unknown): string {
-  const s = e instanceof Error ? e.message : String(e);
-  const trimmed = s.replace(/^Error:\s*/, '').trim();
-  return trimmed.length > 200 ? trimmed.slice(0, 197) + '…' : trimmed;
 }
 
 function AuthenticatedApp() {
@@ -246,8 +238,14 @@ function AuthenticatedApp() {
             ? async () => {
                 try {
                   await api.logout();
-                } catch {
-                  // Reloading drops the session client-side regardless.
+                } catch (err) {
+                  // Surface the error so a user who clicked Sign Out and the
+                  // request silently failed (e.g. the cookie was already
+                  // gone, but more importantly the server is unreachable
+                  // and the click did nothing) isn't left wondering. The
+                  // reload still runs — client-side session state drops on
+                  // refresh regardless of the API response.
+                  toast.error(`Sign-out call failed — ${userErr(err)}. Reloading anyway.`);
                 }
                 window.location.reload();
               }
