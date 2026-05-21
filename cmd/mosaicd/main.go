@@ -339,6 +339,14 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-stop
 	cancelCtx()
+	// Brief grace so the streamTicks goroutine sees ctx.Done before the
+	// deferred Close()s start tearing down the hub + DB underneath it.
+	// Without this, a tick that started ~1µs before SIGTERM can race the
+	// hub.Close()/db.Close() defers and trip a "send on closed channel"
+	// or DB-after-Close error in the logs. 200ms is much shorter than any
+	// snapshot+encode round-trip in practice, so it just lets the in-flight
+	// tick finish or notice cancellation cleanly.
+	time.Sleep(200 * time.Millisecond)
 	log.Info().Str("signal", sig.String()).Msg("mosaicd: shutting down")
 }
 

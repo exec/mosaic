@@ -762,19 +762,22 @@ func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engin
 	}
 	snap, err := s.engine.Snapshot(id)
 	if err != nil {
+		// Highly unlikely directly after AddMagnet, but if it happens we can't
+		// build a record without the name — roll the engine add back rather
+		// than leave a torrent we can't track.
+		if rmErr := s.engine.Remove(id, false); rmErr != nil {
+			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("AddMagnet: engine rollback after snapshot failure also failed")
+		}
 		return "", err
 	}
-	if err := s.torrents.Save(ctx, persistence.TorrentRecord{
+	if err := s.persistAndGrantTorrent(ctx, id, caller, persistence.TorrentRecord{
 		InfoHash: string(id),
 		Name:     snap.Name,
 		Magnet:   magnet,
 		SavePath: savePath,
 		AddedAt:  time.Now(),
 	}); err != nil {
-		return "", fmt.Errorf("persist: %w", err)
-	}
-	if err := s.grantOwner(ctx, string(id), caller); err != nil {
-		return "", fmt.Errorf("grant owner: %w", err)
+		return "", err
 	}
 	return id, nil
 }
@@ -784,6 +787,37 @@ func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engin
 func (s *Service) grantOwner(ctx context.Context, infohash string, caller Caller) error {
 	uid := caller.UserID
 	return s.access.Grant(ctx, infohash, uid, persistence.AccessOwner, &uid)
+}
+
+// persistAndGrantTorrent runs the post-engine-add steps (persist record,
+// record ownership) with rollback semantics. The caller has already added the
+// torrent to the engine and provides the persistence record. Without this
+// rollback, a failed Save left the torrent in the engine but absent from the
+// DB — it would download for the rest of this session, then vanish on next
+// restart (RestoreOnStartup walks the DB, not the engine). A failed grantOwner
+// left an orphaned, ownerless record visible to admins only.
+//
+// engine.Remove is called with deleteFiles=false: the operation just failed,
+// nothing material has been downloaded yet, and we don't want to clobber
+// anything that might have. Rollback errors are logged but not returned —
+// the original failure is what the caller needs to see.
+func (s *Service) persistAndGrantTorrent(ctx context.Context, id engine.TorrentID, caller Caller, rec persistence.TorrentRecord) error {
+	if err := s.torrents.Save(ctx, rec); err != nil {
+		if rmErr := s.engine.Remove(id, false); rmErr != nil {
+			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("add torrent: engine rollback after persist failure also failed; torrent will linger until restart")
+		}
+		return fmt.Errorf("persist: %w", err)
+	}
+	if err := s.grantOwner(ctx, string(id), caller); err != nil {
+		if rmErr := s.torrents.Remove(ctx, string(id)); rmErr != nil {
+			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("add torrent: persist rollback after grant failure also failed; record will survive as orphaned")
+		}
+		if rmErr := s.engine.Remove(id, false); rmErr != nil {
+			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("add torrent: engine rollback after grant failure also failed; torrent will linger until restart")
+		}
+		return fmt.Errorf("grant owner: %w", err)
+	}
+	return nil
 }
 
 // resolveSavePath returns the cleaned absolute save path the engine should
@@ -848,19 +882,19 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string)
 	}
 	snap, err := s.engine.Snapshot(id)
 	if err != nil {
+		if rmErr := s.engine.Remove(id, false); rmErr != nil {
+			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("AddTorrentFile: engine rollback after snapshot failure also failed")
+		}
 		return "", err
 	}
-	if err := s.torrents.Save(ctx, persistence.TorrentRecord{
+	if err := s.persistAndGrantTorrent(ctx, id, caller, persistence.TorrentRecord{
 		InfoHash: string(id),
 		Name:     snap.Name,
 		SavePath: savePath,
 		AddedAt:  time.Now(),
 		Metainfo: blob,
 	}); err != nil {
-		return "", fmt.Errorf("persist: %w", err)
-	}
-	if err := s.grantOwner(ctx, string(id), caller); err != nil {
-		return "", fmt.Errorf("grant owner: %w", err)
+		return "", err
 	}
 	return id, nil
 }
@@ -880,19 +914,19 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 	}
 	snap, err := s.engine.Snapshot(id)
 	if err != nil {
+		if rmErr := s.engine.Remove(id, false); rmErr != nil {
+			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("AddTorrentBytes: engine rollback after snapshot failure also failed")
+		}
 		return "", err
 	}
-	if err := s.torrents.Save(ctx, persistence.TorrentRecord{
+	if err := s.persistAndGrantTorrent(ctx, id, caller, persistence.TorrentRecord{
 		InfoHash: string(id),
 		Name:     snap.Name,
 		SavePath: savePath,
 		AddedAt:  time.Now(),
 		Metainfo: blob,
 	}); err != nil {
-		return "", fmt.Errorf("persist: %w", err)
-	}
-	if err := s.grantOwner(ctx, string(id), caller); err != nil {
-		return "", fmt.Errorf("grant owner: %w", err)
+		return "", err
 	}
 	return id, nil
 }
