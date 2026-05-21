@@ -274,13 +274,16 @@ export function createTorrentsStore() {
   } else {
     // Browser mode: learn whether we're talking to the multi-user mosaicd
     // daemon or the desktop app's single-user web server, and load the
-    // logged-in account so the UI can gate per-permission controls.
+    // logged-in account so the UI can gate per-permission controls. Route
+    // failures through bootFailed so the user sees a toast — without it
+    // these silently console.error'd and a mosaicd unreachable at startup
+    // produced an empty Users pane and no UI feedback at all.
     api.bootstrap()
       .then((b) => setState(produce((s) => { s.serverFlavor = b.flavor; })))
-      .catch((e) => console.error('bootstrap fetch failed:', e));
+      .catch(bootFailed('bootstrap'));
     api.me()
       .then((u) => setState(produce((s) => { s.currentUser = u; })))
-      .catch((e) => console.error('me fetch failed:', e));
+      .catch(bootFailed('current user'));
   }
 
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
