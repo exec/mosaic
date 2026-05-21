@@ -3,6 +3,7 @@ import {RefreshCw} from 'lucide-solid';
 import {toast} from 'solid-sonner';
 import type {BlocklistDTO} from '../../lib/bindings';
 import {fmtTimestamp} from '../../lib/format';
+import {userErr} from '../../lib/errors';
 import {Button} from '../ui/Button';
 
 type Props = {
@@ -64,7 +65,7 @@ export function BlocklistPane(props: Props) {
                   await props.onRefreshBlocklist();
                   toast.success('Blocklist refreshed');
                 } catch (e) {
-                  toast.error(String(e));
+                  toast.error(userErr(e));
                 } finally {
                   setRefreshing(false);
                 }
@@ -81,7 +82,7 @@ export function BlocklistPane(props: Props) {
                   await props.onSetBlocklistURL(url(), enabled());
                   toast.success('Blocklist saved');
                 } catch (e) {
-                  toast.error(String(e));
+                  toast.error(userErr(e));
                 }
               }}
             >
