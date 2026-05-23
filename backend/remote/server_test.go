@@ -53,6 +53,7 @@ func newFixture(t *testing.T) *fixture {
 		persistence.NewFilters(db),
 		persistence.NewUsers(db),
 		persistence.NewTorrentAccess(db),
+		persistence.NewTorrentTrackers(db),
 		nil, "/tmp/dl",
 	)
 

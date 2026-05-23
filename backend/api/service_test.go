@@ -33,6 +33,7 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 		persistence.NewFilters(db),
 		persistence.NewUsers(db),
 		persistence.NewTorrentAccess(db),
+		persistence.NewTorrentTrackers(db),
 		nil, // no scheduler in unit tests
 		"/tmp/dl")
 	return svc, fb
@@ -551,6 +552,7 @@ func serviceWithDB(t *testing.T, dbPath string) (*Service, *engine.FakeBackend) 
 		persistence.NewFilters(db),
 		persistence.NewUsers(db),
 		persistence.NewTorrentAccess(db),
+		persistence.NewTorrentTrackers(db),
 		nil,
 		"/tmp/dl"), fb
 }

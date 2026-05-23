@@ -1853,6 +1853,65 @@ func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent
 	}
 }
 
+// AddTracker adds a single tracker URL to an existing torrent in its own tier.
+// anacrolix's AddTrackers takes a slice of tiers ([][]string); we pass one
+// tier containing the single URL so it doesn't compete with metainfo trackers.
+func (a *AnacrolixBackend) AddTracker(id TorrentID, url string) error {
+	t, ok := a.find(id)
+	if !ok {
+		return errors.New("not found")
+	}
+	t.AddTrackers([][]string{{url}})
+	return nil
+}
+
+// RemoveTracker removes a single tracker URL from an existing torrent.
+// anacrolix v1.61 exposes ModifyTrackers which replaces the entire announce
+// list atomically — it stops existing announcers and rebuilds from the
+// provided list. We reconstruct the announce list without the target URL and
+// pass it to ModifyTrackers. The call is a no-op if the URL doesn't appear.
+func (a *AnacrolixBackend) RemoveTracker(id TorrentID, url string) error {
+	t, ok := a.find(id)
+	if !ok {
+		return errors.New("not found")
+	}
+	mi := t.Metainfo()
+	// Build filtered announce list, excluding the target URL from every tier.
+	var newList [][]string
+	for _, tier := range mi.AnnounceList {
+		var newTier []string
+		for _, u := range tier {
+			if u != url {
+				newTier = append(newTier, u)
+			}
+		}
+		if len(newTier) > 0 {
+			newList = append(newList, newTier)
+		}
+	}
+	// Also handle the legacy single-announce field by treating it as a tier.
+	if mi.Announce != "" && mi.Announce != url {
+		// Only add it if it isn't already covered by AnnounceList to avoid dups.
+		covered := false
+		for _, tier := range newList {
+			for _, u := range tier {
+				if u == mi.Announce {
+					covered = true
+					break
+				}
+			}
+		}
+		if !covered {
+			newList = append([][]string{{mi.Announce}}, newList...)
+		}
+	}
+	// ModifyTrackers stops all existing tracker goroutines and replaces the
+	// announce list atomically. This is the correct removal mechanism in
+	// anacrolix v1.61.
+	t.ModifyTrackers(newList)
+	return nil
+}
+
 func (a *AnacrolixBackend) SetQueuePosition(id TorrentID, pos int) {
 	a.pausedMu.Lock()
 	a.queuePos[id] = pos

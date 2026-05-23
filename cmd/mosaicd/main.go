@@ -229,6 +229,7 @@ func main() {
 		filters,
 		persistence.NewUsers(db),
 		persistence.NewTorrentAccess(db),
+		persistence.NewTorrentTrackers(db),
 		sched,
 		cfg.DefaultSavePath)
 	if err := svc.RestoreOnStartup(ctx); err != nil {

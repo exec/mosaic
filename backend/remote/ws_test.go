@@ -37,6 +37,7 @@ func newWSFixture(t *testing.T) (*api.Service, *SessionStore, *Hub, *httptest.Se
 		persistence.NewFilters(db),
 		persistence.NewUsers(db),
 		persistence.NewTorrentAccess(db),
+		persistence.NewTorrentTrackers(db),
 		nil, "/tmp/dl",
 	)
 

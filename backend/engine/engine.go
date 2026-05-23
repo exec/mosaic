@@ -157,6 +157,14 @@ func (e *Engine) MarkExpectedComplete(id TorrentID) {
 	e.backend.MarkExpectedComplete(id)
 }
 
+func (e *Engine) AddTracker(id TorrentID, url string) error {
+	return e.backend.AddTracker(id, url)
+}
+
+func (e *Engine) RemoveTracker(id TorrentID, url string) error {
+	return e.backend.RemoveTracker(id, url)
+}
+
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {
