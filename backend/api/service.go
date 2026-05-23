@@ -37,6 +37,7 @@ type Service struct {
 	filters         *persistence.Filters
 	users           *persistence.Users
 	access          *persistence.TorrentAccess
+	trackers        *persistence.TorrentTrackers
 	scheduler       *engine.Scheduler
 	defaultSavePath string
 
@@ -134,6 +135,7 @@ func NewService(
 	filters *persistence.Filters,
 	users *persistence.Users,
 	access *persistence.TorrentAccess,
+	trackers *persistence.TorrentTrackers,
 	scheduler *engine.Scheduler,
 	defaultSavePath string,
 ) *Service {
@@ -148,6 +150,7 @@ func NewService(
 		filters:         filters,
 		users:           users,
 		access:          access,
+		trackers:        trackers,
 		scheduler:       scheduler,
 		defaultSavePath: defaultSavePath,
 		focus:           make(map[int]focusState),
@@ -1506,6 +1509,62 @@ func (s *Service) SetTorrentCategory(ctx context.Context, infohash string, categ
 	return s.torrents.SetCategory(ctx, infohash, categoryID)
 }
 
+// validateTrackerURL returns an error if the URL is not a valid http, https, or
+// udp tracker URL. Trackers over ws/wss are also accepted (WebSocket trackers).
+func validateTrackerURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https", "udp", "ws", "wss":
+		// accepted
+	default:
+		return fmt.Errorf("tracker URL must use http, https, udp, ws, or wss scheme (got %q)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("tracker URL has no host")
+	}
+	return nil
+}
+
+// AddTracker adds a user-supplied tracker URL to a torrent and persists it so
+// it survives restarts. Requires editor access on the torrent.
+func (s *Service) AddTracker(ctx context.Context, infohash, trackerURL string) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
+	if err := validateTrackerURL(trackerURL); err != nil {
+		return err
+	}
+	if err := s.engine.AddTracker(engine.TorrentID(infohash), trackerURL); err != nil {
+		return fmt.Errorf("add tracker to engine: %w", err)
+	}
+	if s.trackers != nil {
+		if err := s.trackers.Add(ctx, infohash, trackerURL); err != nil {
+			return fmt.Errorf("persist tracker: %w", err)
+		}
+	}
+	return nil
+}
+
+// RemoveTracker removes a user-supplied tracker URL from a torrent and deletes
+// its persisted record. Requires editor access on the torrent.
+func (s *Service) RemoveTracker(ctx context.Context, infohash, trackerURL string) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
+	if err := s.engine.RemoveTracker(engine.TorrentID(infohash), trackerURL); err != nil {
+		return fmt.Errorf("remove tracker from engine: %w", err)
+	}
+	if s.trackers != nil {
+		if err := s.trackers.Remove(ctx, infohash, trackerURL); err != nil {
+			return fmt.Errorf("remove persisted tracker: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *Service) SetFilePriorities(ctx context.Context, infohash string, prios map[int]string) error {
 	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
 		return err
@@ -1953,6 +2012,21 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 		if r.Paused {
 			if err := s.engine.Pause(id); err != nil {
 				log.Warn().Err(err).Str("infohash", r.InfoHash).Msg("restore: re-pause failed")
+			}
+		}
+		// Re-apply any user-added trackers. These are added in addition to
+		// whatever the metainfo carries; anacrolix's AddTrackers is idempotent
+		// for URLs that already exist in the announce list.
+		if s.trackers != nil {
+			urls, err := s.trackers.List(ctx, r.InfoHash)
+			if err != nil {
+				log.Warn().Err(err).Str("infohash", r.InfoHash).Msg("restore: list user trackers failed")
+			} else {
+				for _, u := range urls {
+					if err := s.engine.AddTracker(id, u); err != nil {
+						log.Warn().Err(err).Str("infohash", r.InfoHash).Str("url", u).Msg("restore: re-add tracker failed")
+					}
+				}
 			}
 		}
 	}

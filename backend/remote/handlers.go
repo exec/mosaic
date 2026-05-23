@@ -921,6 +921,38 @@ func (h *Handlers) SetFilePriorities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+type trackerURLRequest struct {
+	URL string `json:"url"`
+}
+
+func (h *Handlers) AddTracker(w http.ResponseWriter, r *http.Request) {
+	infohash := chi.URLParam(r, "id")
+	var req trackerURLRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.AddTracker(r.Context(), infohash, req.URL); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) RemoveTracker(w http.ResponseWriter, r *http.Request) {
+	infohash := chi.URLParam(r, "id")
+	var req trackerURLRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.RemoveTracker(r.Context(), infohash, req.URL); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handlers) ListScheduleRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := h.svc.ListScheduleRules(r.Context())
 	if err != nil {

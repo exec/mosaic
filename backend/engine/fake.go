@@ -198,6 +198,26 @@ func (f *FakeBackend) ScheduledPause(id TorrentID, paused bool) {
 // regression-detection logic lives in AnacrolixBackend's verify goroutine.
 func (f *FakeBackend) MarkExpectedComplete(id TorrentID) {}
 
+// AddTracker is a no-op for the fake backend.
+func (f *FakeBackend) AddTracker(id TorrentID, url string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.torrents[id]; !ok {
+		return errors.New("not found")
+	}
+	return nil
+}
+
+// RemoveTracker is a no-op for the fake backend.
+func (f *FakeBackend) RemoveTracker(id TorrentID, url string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.torrents[id]; !ok {
+		return errors.New("not found")
+	}
+	return nil
+}
+
 func (f *FakeBackend) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

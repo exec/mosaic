@@ -220,6 +220,14 @@ func (a *App) SetFilePriorities(infohash string, prios map[int]string) error {
 	return a.svc.SetFilePriorities(a.ctx, infohash, prios)
 }
 
+func (a *App) AddTracker(infohash, trackerURL string) error {
+	return a.svc.AddTracker(a.ctx, infohash, trackerURL)
+}
+
+func (a *App) RemoveTracker(infohash, trackerURL string) error {
+	return a.svc.RemoveTracker(a.ctx, infohash, trackerURL)
+}
+
 func (a *App) GetDefaultSavePath() (string, error) {
 	return a.svc.GetDefaultSavePath(a.ctx)
 }

@@ -277,6 +277,8 @@ export const api = {
     transport.invoke<void>('SetTorrentCategory', infohash, categoryID),
   setFilePriorities: (infohash: string, prios: Record<number, 'skip' | 'normal' | 'high' | 'max'>) =>
     transport.invoke<void>('SetFilePriorities', infohash, prios),
+  addTracker: (infohash: string, url: string) => transport.invoke<void>('AddTracker', infohash, url),
+  removeTracker: (infohash: string, url: string) => transport.invoke<void>('RemoveTracker', infohash, url),
   addTorrentBytes: (bytes: Uint8Array, savePath: string) =>
     transport.invoke<string>('AddTorrentBytes', bytes, savePath),
   getDefaultSavePath: () => transport.invoke<string>('GetDefaultSavePath'),

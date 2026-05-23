@@ -89,6 +89,14 @@ type Backend interface {
 	// complete on a prior session — so if VerifyData on add finds <100%,
 	// flag it as FilesMissing (user deleted files) and skip auto-download.
 	MarkExpectedComplete(id TorrentID)
+	// AddTracker announces an additional tracker URL to an existing torrent.
+	// The URL is added in its own tier so it doesn't compete with
+	// metainfo-supplied trackers.
+	AddTracker(id TorrentID, url string) error
+	// RemoveTracker stops using a tracker URL for a torrent. Because anacrolix
+	// has no per-tracker remove API, this re-adds the torrent with a filtered
+	// announce list. It is a no-op if the URL is not in the announce list.
+	RemoveTracker(id TorrentID, url string) error
 	Close() error
 }
 
