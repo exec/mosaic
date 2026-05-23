@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,11 @@ import (
 	"mosaic/backend/remote/cred"
 	"mosaic/backend/updater"
 )
+
+// jsonMarshal / jsonUnmarshal are thin wrappers so we can add logging later
+// without touching every callsite.
+var jsonMarshal   = json.Marshal
+var jsonUnmarshal = json.Unmarshal
 
 // Service is the only place business logic lives. Wails handlers and (later)
 // HTTP handlers are thin adapters that translate transport shapes into Service
@@ -2115,4 +2121,169 @@ func (s *Service) DeleteFilter(ctx context.Context, id int) error {
 		return ErrForbidden
 	}
 	return s.filters.Delete(ctx, id)
+}
+
+// ─── Seed Policy ─────────────────────────────────────────────────────────────
+
+const (
+	settingSeedingRatioLimit  = "seeding.ratio_limit"   // float64 as string; "" = no global limit
+	settingSeedingTimeMiniLimit = "seeding.time_min_limit" // int (minutes) as string; "" = no global limit
+)
+
+// SeedingDefaultsDTO carries the global seeding-stop defaults.
+// nil pointer fields mean "no limit".
+type SeedingDefaultsDTO struct {
+	RatioLimit   *float64 `json:"ratio_limit"`    // bytes_up / bytes_done; nil = no limit
+	TimeMinLimit *int     `json:"time_min_limit"` // minutes; nil = no limit
+}
+
+// SeedPolicyDTO is the per-torrent override.
+// nil = "use global default"; non-nil object with nil fields = "no limit for this torrent".
+type SeedPolicyDTO struct {
+	// UseGlobal, when true, means the per-torrent override is cleared —
+	// the torrent reverts to global defaults.
+	UseGlobal    bool     `json:"use_global"`
+	RatioLimit   *float64 `json:"ratio_limit"`
+	TimeMinLimit *int     `json:"time_min_limit"`
+}
+
+func (s *Service) GetSeedingDefaults(ctx context.Context) SeedingDefaultsDTO {
+	var dto SeedingDefaultsDTO
+	if v, err := s.settings.Get(ctx, settingSeedingRatioLimit); err == nil && v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			dto.RatioLimit = &f
+		}
+	}
+	if v, err := s.settings.Get(ctx, settingSeedingTimeMiniLimit); err == nil && v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			dto.TimeMinLimit = &n
+		}
+	}
+	return dto
+}
+
+func (s *Service) SetSeedingDefaults(ctx context.Context, d SeedingDefaultsDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
+	ratioStr := ""
+	if d.RatioLimit != nil {
+		ratioStr = strconv.FormatFloat(*d.RatioLimit, 'f', -1, 64)
+	}
+	if err := s.settings.Set(ctx, settingSeedingRatioLimit, ratioStr); err != nil {
+		return err
+	}
+	timeStr := ""
+	if d.TimeMinLimit != nil {
+		timeStr = strconv.Itoa(*d.TimeMinLimit)
+	}
+	return s.settings.Set(ctx, settingSeedingTimeMiniLimit, timeStr)
+}
+
+func (s *Service) GetTorrentSeedPolicy(ctx context.Context, infohash string) (SeedPolicyDTO, error) {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessViewer); err != nil {
+		return SeedPolicyDTO{}, err
+	}
+	rec, err := s.torrents.Get(ctx, infohash)
+	if err != nil {
+		return SeedPolicyDTO{}, err
+	}
+	if rec.SeedPolicy == nil {
+		return SeedPolicyDTO{UseGlobal: true}, nil
+	}
+	var p seedPolicyJSON
+	if err := jsonUnmarshal([]byte(*rec.SeedPolicy), &p); err != nil {
+		return SeedPolicyDTO{UseGlobal: true}, nil
+	}
+	return SeedPolicyDTO{
+		UseGlobal:    false,
+		RatioLimit:   p.RatioLimit,
+		TimeMinLimit: p.TimeMinLimit,
+	}, nil
+}
+
+func (s *Service) SetTorrentSeedPolicy(ctx context.Context, infohash string, p SeedPolicyDTO) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
+	if p.UseGlobal {
+		return s.torrents.SetSeedPolicy(ctx, infohash, nil)
+	}
+	raw, err := jsonMarshal(seedPolicyJSON{
+		RatioLimit:   p.RatioLimit,
+		TimeMinLimit: p.TimeMinLimit,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal seed policy: %w", err)
+	}
+	str := string(raw)
+	return s.torrents.SetSeedPolicy(ctx, infohash, &str)
+}
+
+// seedPolicyJSON is the wire/storage shape for a per-torrent seed policy.
+type seedPolicyJSON struct {
+	RatioLimit   *float64 `json:"ratio_limit"`
+	TimeMinLimit *int     `json:"time_min_limit"`
+}
+
+// CheckSeedLimits inspects every completed, non-paused torrent and pauses
+// any that have exceeded their effective seeding limit (ratio or time).
+// It is designed to be called on a periodic ticker (e.g. every 30 seconds).
+func (s *Service) CheckSeedLimits(ctx context.Context) {
+	ctx = WithCaller(ctx, SystemCaller)
+	defaults := s.GetSeedingDefaults(ctx)
+	snaps := s.engine.List()
+	now := time.Now()
+	for _, snap := range snaps {
+		if !snap.Completed || snap.Paused {
+			continue
+		}
+		rec, err := s.torrents.Get(ctx, string(snap.ID))
+		if err != nil {
+			continue
+		}
+		// Determine effective policy: per-torrent override wins over global default.
+		var ratioLimit *float64
+		var timeMinLimit *int
+		if rec.SeedPolicy != nil {
+			var p seedPolicyJSON
+			if jsonUnmarshal([]byte(*rec.SeedPolicy), &p) == nil {
+				ratioLimit = p.RatioLimit
+				timeMinLimit = p.TimeMinLimit
+			}
+		} else {
+			ratioLimit = defaults.RatioLimit
+			timeMinLimit = defaults.TimeMinLimit
+		}
+		if ratioLimit == nil && timeMinLimit == nil {
+			continue
+		}
+		// Record seeding start time on first encounter.
+		if rec.SeedingStartedAt == nil {
+			if err := s.torrents.SetSeedingStartedAt(ctx, string(snap.ID), &now); err != nil {
+				log.Warn().Err(err).Str("id", string(snap.ID)).Msg("seed policy: failed to record seeding_started_at")
+			}
+			rec.SeedingStartedAt = &now
+		}
+		exceeded := false
+		if ratioLimit != nil && snap.BytesDone > 0 {
+			ratio := float64(snap.BytesUp) / float64(snap.BytesDone)
+			if ratio >= *ratioLimit {
+				exceeded = true
+			}
+		}
+		if !exceeded && timeMinLimit != nil && rec.SeedingStartedAt != nil {
+			elapsed := now.Sub(*rec.SeedingStartedAt)
+			if elapsed >= time.Duration(*timeMinLimit)*time.Minute {
+				exceeded = true
+			}
+		}
+		if exceeded {
+			if err := s.engine.Pause(snap.ID); err != nil {
+				log.Warn().Err(err).Str("id", string(snap.ID)).Msg("seed policy: pause failed")
+			} else {
+				log.Info().Str("id", string(snap.ID)).Str("name", snap.Name).Msg("seed policy: paused torrent — limit reached")
+			}
+		}
+	}
 }

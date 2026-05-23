@@ -1,7 +1,8 @@
-import {Show} from 'solid-js';
+import {createEffect, createSignal, Show} from 'solid-js';
 import {Copy} from 'lucide-solid';
 import {toast} from 'solid-sonner';
-import type {DetailDTO} from '../../lib/bindings';
+import type {DetailDTO, SeedPolicyDTO} from '../../lib/bindings';
+import {api} from '../../lib/bindings';
 import {fmtBytes, fmtPercent, fmtTimestamp} from '../../lib/format';
 
 type Props = {detail: DetailDTO | null};
@@ -12,6 +13,164 @@ function Row(props: {label: string; children: any}) {
       <span class="text-zinc-500">{props.label}</span>
       <span class="text-right font-mono tabular-nums text-zinc-200 break-all">{props.children}</span>
     </div>
+  );
+}
+
+function SeedPolicySection(props: {infohash: string; completed: boolean}) {
+  const [, setPolicy] = createSignal<SeedPolicyDTO | null>(null);
+  const [useGlobal, setUseGlobal] = createSignal(true);
+  const [noLimit, setNoLimit] = createSignal(false);
+  const [ratioEnabled, setRatioEnabled] = createSignal(false);
+  const [ratio, setRatio] = createSignal('');
+  const [timeEnabled, setTimeEnabled] = createSignal(false);
+  const [timeMin, setTimeMin] = createSignal('');
+
+  // Load policy whenever infohash changes
+  createEffect(() => {
+    const hash = props.infohash;
+    if (!hash) return;
+    api.getTorrentSeedPolicy(hash).then((p) => {
+      setPolicy(p);
+      if (p.use_global) {
+        setUseGlobal(true);
+        setNoLimit(false);
+        setRatioEnabled(false);
+        setTimeEnabled(false);
+      } else {
+        setUseGlobal(false);
+        const hasRatio = p.ratio_limit !== null && p.ratio_limit !== undefined;
+        const hasTime = p.time_min_limit !== null && p.time_min_limit !== undefined;
+        if (!hasRatio && !hasTime) {
+          setNoLimit(true);
+          setRatioEnabled(false);
+          setTimeEnabled(false);
+        } else {
+          setNoLimit(false);
+          setRatioEnabled(hasRatio);
+          setRatio(hasRatio ? String(p.ratio_limit) : '');
+          setTimeEnabled(hasTime);
+          setTimeMin(hasTime ? String(p.time_min_limit) : '');
+        }
+      }
+    }).catch(() => {});
+  });
+
+  const save = async () => {
+    const hash = props.infohash;
+    if (!hash) return;
+    let dto: SeedPolicyDTO;
+    if (useGlobal()) {
+      dto = {use_global: true, ratio_limit: null, time_min_limit: null};
+    } else if (noLimit()) {
+      dto = {use_global: false, ratio_limit: null, time_min_limit: null};
+    } else {
+      const r = ratioEnabled() && ratio() !== '' ? parseFloat(ratio()) : null;
+      const t = timeEnabled() && timeMin() !== '' ? parseInt(timeMin(), 10) : null;
+      dto = {use_global: false, ratio_limit: r, time_min_limit: t};
+    }
+    try {
+      await api.setTorrentSeedPolicy(hash, dto);
+      setPolicy(dto);
+      toast.success('Seed policy saved');
+    } catch (e) {
+      toast.error(`Couldn't save seed policy — ${String(e)}`);
+    }
+  };
+
+  return (
+    <Show when={props.completed}>
+      <div class="mt-3 border-t border-white/[.04] pt-3">
+        <div class="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">Seeding limits</div>
+
+        {/* Mode selector */}
+        <div class="flex flex-col gap-1 mb-2">
+          <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+            <input
+              type="radio"
+              name="seed-mode"
+              checked={useGlobal()}
+              onChange={() => { setUseGlobal(true); setNoLimit(false); }}
+              class="accent-accent-500"
+            />
+            Use global defaults
+          </label>
+          <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+            <input
+              type="radio"
+              name="seed-mode"
+              checked={!useGlobal() && noLimit()}
+              onChange={() => { setUseGlobal(false); setNoLimit(true); }}
+              class="accent-accent-500"
+            />
+            No limit
+          </label>
+          <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+            <input
+              type="radio"
+              name="seed-mode"
+              checked={!useGlobal() && !noLimit()}
+              onChange={() => { setUseGlobal(false); setNoLimit(false); }}
+              class="accent-accent-500"
+            />
+            Custom
+          </label>
+        </div>
+
+        {/* Custom fields */}
+        <Show when={!useGlobal() && !noLimit()}>
+          <div class="flex flex-col gap-2 pl-1 mb-2">
+            <label class="flex items-center gap-2 text-xs text-zinc-300">
+              <input
+                type="checkbox"
+                checked={ratioEnabled()}
+                onChange={(e) => setRatioEnabled(e.currentTarget.checked)}
+                class="accent-accent-500"
+              />
+              Stop at ratio
+              <Show when={ratioEnabled()}>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+                  value={ratio()}
+                  placeholder="e.g. 2.0"
+                  onInput={(e) => setRatio(e.currentTarget.value)}
+                />
+              </Show>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-zinc-300">
+              <input
+                type="checkbox"
+                checked={timeEnabled()}
+                onChange={(e) => setTimeEnabled(e.currentTarget.checked)}
+                class="accent-accent-500"
+              />
+              Stop after
+              <Show when={timeEnabled()}>
+                <input
+                  type="number"
+                  min={1}
+                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+                  value={timeMin()}
+                  placeholder="minutes"
+                  onInput={(e) => setTimeMin(e.currentTarget.value)}
+                />
+                <span class="text-zinc-500">min</span>
+              </Show>
+            </label>
+          </div>
+        </Show>
+
+        <button
+          type="button"
+          onClick={save}
+          class="mt-1 rounded bg-accent-500/20 px-3 py-1 text-xs font-medium text-accent-400 hover:bg-accent-500/30 transition-colors"
+        >
+          Save
+        </button>
+      </div>
+    </Show>
   );
 }
 
@@ -55,6 +214,7 @@ export function OverviewTab(props: Props) {
               <span class="max-w-[180px] truncate text-zinc-400">{d().magnet || '—'}</span>
             </span>
           </Row>
+          <SeedPolicySection infohash={d().id} completed={d().completed} />
         </div>
       )}
     </Show>

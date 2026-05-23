@@ -22,6 +22,12 @@ type TorrentRecord struct {
 	// Metainfo is the raw .torrent file bytes for file-added torrents. Empty
 	// for magnet-only adds (the magnet URI itself is enough to round-trip).
 	Metainfo []byte
+	// SeedPolicy is the JSON-encoded per-torrent seeding stopping condition.
+	// NULL means "use the global default".
+	SeedPolicy *string
+	// SeedingStartedAt is when the torrent first reached 100% completion.
+	// Used by the seed-policy enforcement loop to measure seeding duration.
+	SeedingStartedAt *time.Time
 }
 
 // Torrents is the DAO for the torrents table.
@@ -50,6 +56,10 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 	if r.ForceStart {
 		forceStart = 1
 	}
+	var seedingStartedAt sql.NullInt64
+	if r.SeedingStartedAt != nil {
+		seedingStartedAt = sql.NullInt64{Int64: r.SeedingStartedAt.Unix(), Valid: true}
+	}
 	_, err := t.db.SQL().ExecContext(ctx, `
 INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -65,6 +75,37 @@ ON CONFLICT(infohash) DO UPDATE SET
   force_start = excluded.force_start,
   metainfo = COALESCE(excluded.metainfo, torrents.metainfo)
 `, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo))
+	if err != nil {
+		return err
+	}
+	// seed_policy and seeding_started_at are set by dedicated methods and are
+	// not overwritten by the general Save (which is used on add/restore paths
+	// that don't carry these fields).
+	_ = seedingStartedAt
+	return nil
+}
+
+// SetSeedPolicy stores the JSON-encoded seed policy for a torrent.
+// Pass nil to revert to "use global default".
+func (t *Torrents) SetSeedPolicy(ctx context.Context, infohash string, policyJSON *string) error {
+	var v any
+	if policyJSON != nil {
+		v = *policyJSON
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET seed_policy = ? WHERE infohash = ?`, v, infohash)
+	return err
+}
+
+// SetSeedingStartedAt records the moment a torrent first completed.
+// Pass nil to clear (e.g. if the torrent is re-verified / re-downloaded).
+func (t *Torrents) SetSeedingStartedAt(ctx context.Context, infohash string, at *time.Time) error {
+	var v sql.NullInt64
+	if at != nil {
+		v = sql.NullInt64{Int64: at.Unix(), Valid: true}
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET seeding_started_at = ? WHERE infohash = ?`, v, infohash)
 	return err
 }
 
@@ -78,7 +119,7 @@ func nullableBytes(b []byte) any {
 // Get returns a single record by infohash.
 func (t *Torrents) Get(ctx context.Context, infohash string) (TorrentRecord, error) {
 	row := t.db.SQL().QueryRowContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, seed_policy, seeding_started_at
 FROM torrents WHERE infohash = ?`, infohash)
 	return scanTorrent(row)
 }
@@ -86,7 +127,7 @@ FROM torrents WHERE infohash = ?`, infohash)
 // List returns all records ordered by added_at descending.
 func (t *Torrents) List(ctx context.Context) ([]TorrentRecord, error) {
 	rows, err := t.db.SQL().QueryContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, seed_policy, seeding_started_at
 FROM torrents ORDER BY added_at DESC`)
 	if err != nil {
 		return nil, err
@@ -150,7 +191,9 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	var paused int
 	var forceStart int
 	var metainfo []byte
-	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo); err != nil {
+	var seedPolicy sql.NullString
+	var seedingStartedAt sql.NullInt64
+	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo, &seedPolicy, &seedingStartedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return r, ErrNotFound
 		}
@@ -168,5 +211,12 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	r.Paused = paused == 1
 	r.ForceStart = forceStart == 1
 	r.Metainfo = metainfo
+	if seedPolicy.Valid {
+		r.SeedPolicy = &seedPolicy.String
+	}
+	if seedingStartedAt.Valid {
+		t := time.Unix(seedingStartedAt.Int64, 0)
+		r.SeedingStartedAt = &t
+	}
 	return r, nil
 }
