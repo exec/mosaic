@@ -28,8 +28,8 @@ export function StatusBar(props: Props) {
       setUpRate(u);
       return;
     }
-    setDownRate((p) => emaStep(p, d));
-    setUpRate((p) => emaStep(p, u));
+    setDownRate((p) => d === 0 ? 0 : emaStep(p, d));
+    setUpRate((p) => u === 0 ? 0 : emaStep(p, u));
   });
   return (
     <footer class="flex h-7 shrink-0 items-center gap-4 border-t border-white/[.04] bg-zinc-950/60 px-3 text-[11px] text-zinc-400">

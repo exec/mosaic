@@ -6,7 +6,7 @@ export function fmtBytes(n: number): string {
 }
 
 export function fmtRate(bytesPerSec: number): string {
-  if (bytesPerSec === 0) return '—';
+  if (bytesPerSec < 1) return '—';
   return `${fmtBytes(bytesPerSec)}/s`;
 }
 

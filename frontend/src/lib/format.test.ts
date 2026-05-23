@@ -9,7 +9,8 @@ describe('fmtBytes', () => {
 });
 
 describe('fmtRate', () => {
-  test('idle', () => expect(fmtRate(0)).toBe('—'));
+  test('idle at zero', () => expect(fmtRate(0)).toBe('—'));
+  test('idle for sub-byte residue', () => expect(fmtRate(1e-50)).toBe('—'));
   test('active', () => expect(fmtRate(1500)).toBe('1.5 KB/s'));
 });
 
