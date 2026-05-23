@@ -74,6 +74,11 @@ type Backend interface {
 	DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error)
 	SetFilePriorities(id TorrentID, prios map[int]Priority) error
 	SetGlobalRateLimits(downBytesPerSec, upBytesPerSec int) error // 0 = unlimited
+	// SetTorrentRateLimits sets per-torrent download/upload caps in bytes/sec.
+	// 0 means unlimited. The limits are enforced via a background goroutine that
+	// uses DisallowDataDownload / AllowDataDownload / DisallowDataUpload /
+	// AllowDataUpload to implement a duty-cycle approximation.
+	SetTorrentRateLimits(id TorrentID, downBytesPerSec, upBytesPerSec int64) error
 	SetIPBlocklist(reader io.Reader) error                        // nil clears
 	// ApplyPerTorrentMaxPeers updates the established-connection cap for every
 	// running torrent. Pass 0 to fall back to the engine's default (anacrolix

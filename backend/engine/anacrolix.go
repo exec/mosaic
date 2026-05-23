@@ -162,6 +162,15 @@ type AnacrolixBackend struct {
 
 	ipBlock *ipBlocklistProxy
 
+	// perTorrentLimits stores per-torrent download/upload caps in bytes/sec.
+	// 0 means unlimited. Guarded by perLimitMu. The actual enforcement is done
+	// by a background goroutine (startPerTorrentLimiter) that uses
+	// DisallowDataDownload/AllowDataDownload/DisallowDataUpload/AllowDataUpload
+	// to implement a duty-cycle approximation of the requested rate.
+	perLimitMu     sync.RWMutex
+	perTorrentDown map[TorrentID]int64 // bytes/sec, 0=unlimited
+	perTorrentUp   map[TorrentID]int64 // bytes/sec, 0=unlimited
+
 	// pieceCompletion is the shared bolt-backed piece-completion store
 	// rooted in cfg.DataDir, so anacrolix's "is this piece valid"
 	// metadata stays in our app data dir instead of getting sprinkled
@@ -384,6 +393,8 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		expectedComplete: make(map[TorrentID]bool),
 		filesMissing:     make(map[TorrentID]bool),
 		snapshotSaved:    make(map[TorrentID]bool),
+		perTorrentDown:   make(map[TorrentID]int64),
+		perTorrentUp:     make(map[TorrentID]int64),
 		dlLim:          dlLim,
 		ulLim:          ulLim,
 		ipBlock:        ipBlock,
@@ -1157,6 +1168,11 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	delete(a.prevRates, id)
 	delete(a.prevPeerRates, id)
 	a.rateMu.Unlock()
+	// Clear per-torrent limits so the limiter goroutine exits on next tick.
+	a.perLimitMu.Lock()
+	delete(a.perTorrentDown, id)
+	delete(a.perTorrentUp, id)
+	a.perLimitMu.Unlock()
 	// t.Drop holds the client lock while it tears the torrent down, and
 	// inside that the cleanup waits on a per-torrent wait group that
 	// covers (among other things) tracker stop announces. A
@@ -1667,6 +1683,164 @@ func (a *AnacrolixBackend) SetGlobalRateLimits(downBPS, upBPS int) error {
 		a.ulLim.SetBurst(max(upBPS, 256<<10))
 	}
 	return nil
+}
+
+// SetTorrentRateLimits sets per-torrent download/upload caps in bytes/sec.
+// 0 means unlimited. Enforcement uses a background duty-cycle goroutine
+// registered on verifyWg so Close() waits for it to drain. If the torrent
+// already has a limiter goroutine running (prior call to SetTorrentRateLimits)
+// it will pick up the new limits on its next tick — no new goroutine is
+// spawned for subsequent updates.
+func (a *AnacrolixBackend) SetTorrentRateLimits(id TorrentID, downBPS, upBPS int64) error {
+	if downBPS < 0 {
+		downBPS = 0
+	}
+	if upBPS < 0 {
+		upBPS = 0
+	}
+	a.perLimitMu.Lock()
+	prev := a.perTorrentDown[id] != 0 || a.perTorrentUp[id] != 0
+	a.perTorrentDown[id] = downBPS
+	a.perTorrentUp[id] = upBPS
+	needsStart := !prev && (downBPS != 0 || upBPS != 0)
+	a.perLimitMu.Unlock()
+
+	if needsStart {
+		t, ok := a.find(id)
+		if !ok {
+			return errors.New("not found")
+		}
+		a.verifyWg.Add(1)
+		go a.runPerTorrentLimiter(id, t)
+	} else if downBPS == 0 && upBPS == 0 {
+		// Limits cleared — ensure download/upload are allowed
+		// (the goroutine may have left them disallowed).
+		t, ok := a.find(id)
+		if !ok {
+			return nil
+		}
+		t.AllowDataDownload()
+		t.AllowDataUpload()
+	}
+	return nil
+}
+
+// runPerTorrentLimiter is a background goroutine that enforces per-torrent
+// rate limits by sampling byte counters every 500ms and using
+// DisallowDataDownload/AllowDataDownload (and the Upload equivalents) to
+// implement a duty-cycle approximation.
+//
+// The approach: each 500ms tick we read how many bytes were transferred since
+// the last tick. If the torrent exceeded its budget (bytes_this_tick >
+// limit_per_500ms), we disallow data for the overrun fraction of the next
+// interval. Otherwise we allow data. This is a coarse token-bucket; actual
+// throughput will hover around the configured cap ±1 tick's worth (~one
+// per-piece chunk, ~16 KB by default in anacrolix) rather than being
+// byte-perfect.
+//
+// The goroutine exits when: (a) engineCtx is cancelled (engine shutdown), or
+// (b) both down and up limits drop to 0 (user cleared the limit).
+func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent) {
+	defer a.verifyWg.Done()
+	const interval = 500 * time.Millisecond
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var prevDown, prevUp int64
+	var dlBlocked, ulBlocked bool
+
+	// Helper: read current cumulative stats from anacrolix.
+	readStats := func() (down, up int64) {
+		s := t.Stats()
+		return s.BytesReadData.Int64(), s.BytesWrittenData.Int64()
+	}
+
+	prevDown, prevUp = readStats()
+
+	for {
+		select {
+		case <-a.engineCtx.Done():
+			// Engine shutting down — re-enable before exit so state is clean.
+			if dlBlocked {
+				t.AllowDataDownload()
+			}
+			if ulBlocked {
+				t.AllowDataUpload()
+			}
+			return
+		case <-ticker.C:
+		}
+
+		a.perLimitMu.RLock()
+		downLimit := a.perTorrentDown[id]
+		upLimit := a.perTorrentUp[id]
+		a.perLimitMu.RUnlock()
+
+		// Both limits cleared — re-enable and exit.
+		if downLimit == 0 && upLimit == 0 {
+			if dlBlocked {
+				t.AllowDataDownload()
+			}
+			if ulBlocked {
+				t.AllowDataUpload()
+			}
+			return
+		}
+
+		curDown, curUp := readStats()
+		deltaDown := curDown - prevDown
+		deltaUp := curUp - prevUp
+		prevDown, prevUp = curDown, curUp
+
+		// Budget per interval (bytes allowed per 500ms tick).
+		budgetDown := int64(float64(downLimit) * interval.Seconds())
+		budgetUp := int64(float64(upLimit) * interval.Seconds())
+
+		// Download enforcement.
+		if downLimit > 0 {
+			// Check paused state — if paused we don't manage download allow/disallow
+			// to avoid conflicting with Pause()'s DisallowDataDownload.
+			a.pausedMu.RLock()
+			isPaused := a.paused[id]
+			a.pausedMu.RUnlock()
+			if !isPaused {
+				if deltaDown > budgetDown {
+					// Over budget — disallow for next tick.
+					if !dlBlocked {
+						t.DisallowDataDownload()
+						dlBlocked = true
+					}
+				} else {
+					// Under budget — allow.
+					if dlBlocked {
+						t.AllowDataDownload()
+						dlBlocked = false
+					}
+				}
+			}
+		} else if dlBlocked {
+			t.AllowDataDownload()
+			dlBlocked = false
+		}
+
+		// Upload enforcement.
+		if upLimit > 0 {
+			if deltaUp > budgetUp {
+				if !ulBlocked {
+					t.DisallowDataUpload()
+					ulBlocked = true
+				}
+			} else {
+				if ulBlocked {
+					t.AllowDataUpload()
+					ulBlocked = false
+				}
+			}
+		} else if ulBlocked {
+			t.AllowDataUpload()
+			ulBlocked = false
+		}
+	}
 }
 
 func (a *AnacrolixBackend) SetQueuePosition(id TorrentID, pos int) {

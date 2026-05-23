@@ -251,6 +251,12 @@ export type DesktopIntegrationDTO = {
   notify_on_update: boolean;      // default true
 };
 
+// Per-torrent bandwidth caps. 0 = unlimited. Values in KB/s.
+export type TorrentRateLimitsDTO = {
+  down_kbps: number;
+  up_kbps: number;
+};
+
 export const api = {
   addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
   pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
@@ -317,6 +323,9 @@ export const api = {
   installUpdate: () => transport.invoke<void>('InstallUpdate'),
   getDesktopIntegration: () => transport.invoke<DesktopIntegrationDTO>('GetDesktopIntegration'),
   setDesktopIntegration: (c: DesktopIntegrationDTO) => transport.invoke<void>('SetDesktopIntegration', c),
+  getTorrentRateLimits: (infohash: string) => transport.invoke<TorrentRateLimitsDTO>('GetTorrentRateLimits', infohash),
+  setTorrentRateLimits: (infohash: string, downKbps: number, upKbps: number) =>
+    transport.invoke<void>('SetTorrentRateLimits', infohash, downKbps, upKbps),
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
   login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
   logout: () => transport.invoke<void>('Logout'),
