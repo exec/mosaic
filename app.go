@@ -528,17 +528,41 @@ func (a *App) OpenFolder(path string) error {
 	return cmd.Start()
 }
 
+// GetSeedingDefaults returns global seeding stop-condition defaults.
+func (a *App) GetSeedingDefaults() api.SeedingDefaultsDTO {
+	return a.svc.GetSeedingDefaults(a.ctx)
+}
+
+// SetSeedingDefaults persists global seeding stop-condition defaults.
+func (a *App) SetSeedingDefaults(d api.SeedingDefaultsDTO) error {
+	return a.svc.SetSeedingDefaults(a.ctx, d)
+}
+
+// GetTorrentSeedPolicy returns the per-torrent seed policy override.
+func (a *App) GetTorrentSeedPolicy(infohash string) (api.SeedPolicyDTO, error) {
+	return a.svc.GetTorrentSeedPolicy(a.ctx, infohash)
+}
+
+// SetTorrentSeedPolicy sets (or clears) the per-torrent seed policy override.
+func (a *App) SetTorrentSeedPolicy(infohash string, p api.SeedPolicyDTO) error {
+	return a.svc.SetTorrentSeedPolicy(a.ctx, infohash, p)
+}
+
 func (a *App) streamTicks(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
 	inspector := time.NewTicker(1 * time.Second)
+	seedCheck := time.NewTicker(30 * time.Second)
 	defer torrents.Stop()
 	defer stats.Stop()
 	defer inspector.Stop()
+	defer seedCheck.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-seedCheck.C:
+			a.svc.CheckSeedLimits(ctx)
 		case <-torrents.C:
 			rows, err := a.svc.ListTorrents(ctx)
 			if err != nil {

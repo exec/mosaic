@@ -200,6 +200,23 @@ const ROUTES: Record<string, RouteSpec> = {
     body: ([p]) => p,
     unwrap: okEnvelope,
   },
+  GetSeedingDefaults: {method: 'GET', path: () => '/api/settings/seeding_defaults'},
+  SetSeedingDefaults: {
+    method: 'PUT',
+    path: () => '/api/settings/seeding_defaults',
+    body: ([d]) => d,
+    unwrap: okEnvelope,
+  },
+  GetTorrentSeedPolicy: {
+    method: 'GET',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/seed_policy`,
+  },
+  SetTorrentSeedPolicy: {
+    method: 'PUT',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/seed_policy`,
+    body: ([, p]) => p,
+    unwrap: okEnvelope,
+  },
   GetBlocklist: {method: 'GET', path: () => '/api/settings/blocklist'},
   SetBlocklistURL: {
     method: 'PUT',

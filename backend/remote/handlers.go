@@ -837,6 +837,45 @@ func (h *Handlers) SetPeerLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func (h *Handlers) GetSeedingDefaults(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.svc.GetSeedingDefaults(r.Context()))
+}
+
+func (h *Handlers) SetSeedingDefaults(w http.ResponseWriter, r *http.Request) {
+	var d api.SeedingDefaultsDTO
+	if err := decodeJSON(w, r, &d); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.SetSeedingDefaults(r.Context(), d); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) GetTorrentSeedPolicy(w http.ResponseWriter, r *http.Request) {
+	p, err := h.svc.GetTorrentSeedPolicy(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (h *Handlers) SetTorrentSeedPolicy(w http.ResponseWriter, r *http.Request) {
+	var p api.SeedPolicyDTO
+	if err := decodeJSON(w, r, &p); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.SetTorrentSeedPolicy(r.Context(), chi.URLParam(r, "id"), p); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 type queuePosRequest struct {
 	InfoHash string `json:"infohash"`
 	Pos      int    `json:"pos"`

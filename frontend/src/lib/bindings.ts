@@ -264,6 +264,21 @@ export type TorrentRateLimitsDTO = {
   up_kbps: number;
 };
 
+// SeedingDefaultsDTO carries the global seeding stop-condition defaults.
+// null fields mean "no limit".
+export type SeedingDefaultsDTO = {
+  ratio_limit: number | null;    // bytes_up / bytes_done; null = no limit
+  time_min_limit: number | null; // minutes; null = no limit
+};
+
+// SeedPolicyDTO is the per-torrent seed-policy override.
+// use_global=true means revert to global defaults (other fields ignored).
+export type SeedPolicyDTO = {
+  use_global: boolean;
+  ratio_limit: number | null;
+  time_min_limit: number | null;
+};
+
 export const api = {
   addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
   pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
@@ -336,6 +351,10 @@ export const api = {
   getTorrentRateLimits: (infohash: string) => transport.invoke<TorrentRateLimitsDTO>('GetTorrentRateLimits', infohash),
   setTorrentRateLimits: (infohash: string, downKbps: number, upKbps: number) =>
     transport.invoke<void>('SetTorrentRateLimits', infohash, downKbps, upKbps),
+  getSeedingDefaults: () => transport.invoke<SeedingDefaultsDTO>('GetSeedingDefaults'),
+  setSeedingDefaults: (d: SeedingDefaultsDTO) => transport.invoke<void>('SetSeedingDefaults', d),
+  getTorrentSeedPolicy: (infohash: string) => transport.invoke<SeedPolicyDTO>('GetTorrentSeedPolicy', infohash),
+  setTorrentSeedPolicy: (infohash: string, p: SeedPolicyDTO) => transport.invoke<void>('SetTorrentSeedPolicy', infohash, p),
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
   login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
   logout: () => transport.invoke<void>('Logout'),

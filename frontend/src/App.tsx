@@ -296,6 +296,7 @@ function AuthenticatedApp() {
             limits={store.state.limits}
             queueLimits={store.state.queueLimits}
             peerLimits={store.state.peerLimits}
+            seedingDefaults={store.state.seedingDefaults}
             scheduleRules={store.state.scheduleRules}
             blocklist={store.state.blocklist}
             feeds={store.state.feeds}
@@ -317,6 +318,7 @@ function AuthenticatedApp() {
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
             onSetPeerLimits={(p) => store.setPeerLimits(p)}
+            onSetSeedingDefaults={(d) => store.setSeedingDefaults(d)}
             onCreateCategory={(name, sp, color) => store.createCategory(name, sp, color)}
             onUpdateCategory={(id, name, sp, color) => store.updateCategory(id, name, sp, color)}
             onDeleteCategory={(id) => store.deleteCategory(id)}

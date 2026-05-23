@@ -1,9 +1,10 @@
 import {Match, Switch} from 'solid-js';
-import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WatchFolderDTO, WebConfigDTO} from '../../lib/bindings';
+import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, SeedingDefaultsDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WatchFolderDTO, WebConfigDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
 import {AppearancePane} from './AppearancePane';
 import {ConnectionPane} from './ConnectionPane';
+import {SeedingPane} from './SeedingPane';
 import {WebInterfacePane} from './WebInterfacePane';
 import {UsersPane} from './UsersPane';
 import {UpdatesPane} from './UpdatesPane';
@@ -45,9 +46,11 @@ type Props = {
   onCheckForUpdate: () => Promise<UpdateInfoDTO>;
   onInstallUpdate: () => Promise<void>;
   onSetDesktopIntegration: (d: DesktopIntegrationDTO) => Promise<void>;
+  seedingDefaults: SeedingDefaultsDTO;
   onSetLimits: (l: LimitsDTO) => Promise<void>;
   onSetQueueLimits: (q: QueueLimitsDTO) => Promise<void>;
   onSetPeerLimits: (p: PeerLimitsDTO) => Promise<void>;
+  onSetSeedingDefaults: (d: SeedingDefaultsDTO) => Promise<void>;
   onCreateCategory: (name: string, savePath: string, color: string) => Promise<void>;
   onUpdateCategory: (id: number, name: string, savePath: string, color: string) => Promise<void>;
   onDeleteCategory: (id: number) => Promise<void>;
@@ -98,6 +101,12 @@ export function SettingsRoute(props: Props) {
               onSetLimits={props.onSetLimits}
               onSetQueueLimits={props.onSetQueueLimits}
               onSetPeerLimits={props.onSetPeerLimits}
+            />
+          </Match>
+          <Match when={props.pane === 'seeding'}>
+            <SeedingPane
+              seedingDefaults={props.seedingDefaults}
+              onSetSeedingDefaults={props.onSetSeedingDefaults}
             />
           </Match>
           <Match when={props.pane === 'web'}>

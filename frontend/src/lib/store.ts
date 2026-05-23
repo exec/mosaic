@@ -5,7 +5,7 @@ import {
   type BlocklistDTO, type CategoryDTO, type DesktopIntegrationDTO, type DetailDTO,
   type FeedDTO, type FilterDTO,
   type GlobalStatsT, type InspectorTab,
-  type LimitsDTO, type PeerLimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
+  type LimitsDTO, type PeerLimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type SeedingDefaultsDTO, type TagDTO, type Torrent,
   type UpdaterConfigDTO, type UpdateInfoDTO,
   type WatchFolderDTO,
   type WebConfigDTO, type ServerFlavor, type UserDTO,
@@ -77,6 +77,9 @@ export type AppState = {
 
   // Watch folder
   watchFolder: WatchFolderDTO;
+
+  // Global seeding stop-condition defaults
+  seedingDefaults: SeedingDefaultsDTO;
 
   // Multi-user. serverFlavor distinguishes the headless mosaicd daemon
   // ('daemon') from the desktop app / its optional web server ('desktop').
@@ -194,6 +197,11 @@ const emptyWatchFolder: WatchFolderDTO = {
   enabled: false,
 };
 
+const emptySeedingDefaults: SeedingDefaultsDTO = {
+  ratio_limit: null,
+  time_min_limit: null,
+};
+
 export function createTorrentsStore() {
   // Live bandwidth history. Held outside the reactive store so per-tick
   // pushes stay O(1) and don't churn a tracked array; the chart reads it
@@ -242,6 +250,7 @@ export function createTorrentsStore() {
     desktopIntegration: defaultDesktopIntegration,
 
     watchFolder: emptyWatchFolder,
+    seedingDefaults: emptySeedingDefaults,
 
     serverFlavor: 'desktop',
     currentUser: null,
@@ -268,6 +277,7 @@ export function createTorrentsStore() {
   api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(bootFailed('tags'));
   api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(bootFailed('default save path'));
   api.getLimits().then((l) => setState(produce((s) => { s.limits = l; }))).catch(bootFailed('limits'));
+  api.getSeedingDefaults().then((d) => setState(produce((s) => { s.seedingDefaults = d; }))).catch(bootFailed('seeding defaults'));
   api.getQueueLimits().then((q) => setState(produce((s) => { s.queueLimits = q; }))).catch(bootFailed('queue limits'));
   api.getPeerLimits().then((p) => setState(produce((s) => { s.peerLimits = p; }))).catch(bootFailed('peer limits'));
   api.listScheduleRules().then((rs) => setState(produce((s) => { s.scheduleRules = rs ?? []; }))).catch(bootFailed('schedule rules'));
@@ -491,6 +501,12 @@ export function createTorrentsStore() {
     },
     setQueuePosition: (infohash: string, pos: number) => api.setQueuePosition(infohash, pos),
     setForceStart: (infohash: string, force: boolean) => api.setForceStart(infohash, force),
+
+    // Seeding defaults
+    setSeedingDefaults: async (d: SeedingDefaultsDTO) => {
+      await api.setSeedingDefaults(d);
+      setState(produce((s) => { s.seedingDefaults = d; }));
+    },
 
     // Scheduling
     refreshScheduleRules: async () => {
