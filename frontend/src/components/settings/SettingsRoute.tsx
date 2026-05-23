@@ -1,5 +1,5 @@
 import {Match, Switch} from 'solid-js';
-import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WebConfigDTO} from '../../lib/bindings';
+import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WatchFolderDTO, WebConfigDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
 import {GeneralPane} from './GeneralPane';
 import {AppearancePane} from './AppearancePane';
@@ -21,6 +21,7 @@ type Props = {
   serverFlavor: ServerFlavor;
   currentUser: UserDTO | null;
   defaultSavePath: string;
+  watchFolder: WatchFolderDTO;
   categories: CategoryDTO[];
   tags: TagDTO[];
   limits: LimitsDTO;
@@ -36,6 +37,7 @@ type Props = {
   appVersion: string;
   desktopIntegration: DesktopIntegrationDTO;
   onSetDefaultSavePath: (path: string) => Promise<void>;
+  onSetWatchFolder: (c: WatchFolderDTO) => Promise<void>;
   onSetWebConfig: (c: WebConfigDTO) => Promise<void>;
   onSetWebPassword: (plain: string) => Promise<void>;
   onRotateAPIKey: () => Promise<string>;
@@ -78,7 +80,12 @@ export function SettingsRoute(props: Props) {
       <div class="flex-1 overflow-auto">
         <Switch>
           <Match when={props.pane === 'general'}>
-            <GeneralPane defaultSavePath={props.defaultSavePath} onSetDefaultSavePath={props.onSetDefaultSavePath} />
+            <GeneralPane
+              defaultSavePath={props.defaultSavePath}
+              onSetDefaultSavePath={props.onSetDefaultSavePath}
+              watchFolder={props.watchFolder}
+              onSetWatchFolder={props.onSetWatchFolder}
+            />
           </Match>
           <Match when={props.pane === 'appearance'}>
             <AppearancePane />

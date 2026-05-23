@@ -352,6 +352,22 @@ func (a *App) SetDesktopIntegration(c api.DesktopIntegrationDTO) error {
 	return a.svc.SetDesktopIntegration(a.ctx, c)
 }
 
+func (a *App) GetWatchFolder() api.WatchFolderDTO {
+	return a.svc.GetWatchFolder(a.ctx)
+}
+
+func (a *App) SetWatchFolder(c api.WatchFolderDTO) error {
+	return a.svc.SetWatchFolder(a.ctx, c)
+}
+
+// PickWatchFolder opens a native directory dialog so the user can choose a
+// watch folder path. Returns the selected path or "" if cancelled.
+func (a *App) PickWatchFolder() (string, error) {
+	return wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title: "Select Watch Folder",
+	})
+}
+
 // QuitFully bypasses the close-to-tray OnBeforeClose hook and tears the
 // process down. Used by the tray's "Quit Mosaic" item — without this the
 // hook would just hide the window again, leaving the app un-quit-able from

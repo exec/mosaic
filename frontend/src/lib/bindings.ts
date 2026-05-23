@@ -251,6 +251,12 @@ export type DesktopIntegrationDTO = {
   notify_on_update: boolean;      // default true
 };
 
+export type WatchFolderDTO = {
+  path: string;
+  delete_after_add: boolean;
+  enabled: boolean;
+};
+
 export const api = {
   addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
   pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
@@ -317,6 +323,9 @@ export const api = {
   installUpdate: () => transport.invoke<void>('InstallUpdate'),
   getDesktopIntegration: () => transport.invoke<DesktopIntegrationDTO>('GetDesktopIntegration'),
   setDesktopIntegration: (c: DesktopIntegrationDTO) => transport.invoke<void>('SetDesktopIntegration', c),
+  getWatchFolder: () => transport.invoke<WatchFolderDTO>('GetWatchFolder'),
+  setWatchFolder: (c: WatchFolderDTO) => transport.invoke<void>('SetWatchFolder', c),
+  pickWatchFolder: () => transport.invoke<string>('PickWatchFolder'),
   openFolder: (path: string) => transport.invoke<void>('OpenFolder', path),
   login: (username: string, password: string) => transport.invoke<void>('Login', username, password),
   logout: () => transport.invoke<void>('Logout'),

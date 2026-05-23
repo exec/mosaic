@@ -58,6 +58,7 @@ type Service struct {
 	appVersion    string
 	installSource updater.InstallSource // "apt" | "appimage" | "manual"
 	rssPoller     *RSSPoller            // may be nil during startup; set by AttachRSSPoller
+	watchFolder   *WatchFolder          // may be nil during startup; set by AttachWatchFolder
 
 	// updateInstalledNotifier, if set, is invoked after a successful
 	// InstallUpdate so the OS-level desktop notification fires. Wired via
@@ -206,6 +207,10 @@ const (
 	settingUpdaterChannel         = "updater_channel"
 	settingUpdaterLastChecked     = "updater_last_checked_at"
 	settingUpdaterLastSeenVersion = "updater_last_seen_version"
+
+	settingWatchFolderPath          = "watch_folder.path"
+	settingWatchFolderDeleteAfterAdd = "watch_folder.delete_after_add"
+	settingWatchFolderEnabled       = "watch_folder.enabled"
 
 	// Desktop integration (system tray + notifications + close-to-tray).
 	// Stored as bool strings via setBoolSetting; reads are presence-aware so
@@ -428,6 +433,58 @@ func (s *Service) AttachUpdater(u *updater.Updater, version string, installSourc
 // this once at startup.
 func (s *Service) AttachRSSPoller(p *RSSPoller) {
 	s.rssPoller = p
+}
+
+// AttachWatchFolder wires the live *WatchFolder into the Service so that
+// SetWatchFolder can (re)start the polling loop when the user changes the
+// configuration. main.go calls this once after construction.
+func (s *Service) AttachWatchFolder(w *WatchFolder) {
+	s.watchFolder = w
+}
+
+// WatchFolderDTO is the transport shape for the watch-folder settings.
+type WatchFolderDTO struct {
+	Path           string `json:"path"`
+	DeleteAfterAdd bool   `json:"delete_after_add"`
+	Enabled        bool   `json:"enabled"`
+}
+
+// GetWatchFolder reads the current watch-folder configuration from settings.
+func (s *Service) GetWatchFolder(ctx context.Context) WatchFolderDTO {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return WatchFolderDTO{}
+	}
+	path, _ := s.settings.Get(ctx, settingWatchFolderPath)
+	return WatchFolderDTO{
+		Path:           path,
+		DeleteAfterAdd: s.boolSetting(ctx, settingWatchFolderDeleteAfterAdd),
+		Enabled:        s.boolSetting(ctx, settingWatchFolderEnabled),
+	}
+}
+
+// SetWatchFolder persists the watch-folder configuration and (re)starts or
+// stops the watcher accordingly.
+func (s *Service) SetWatchFolder(ctx context.Context, c WatchFolderDTO) error {
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return ErrForbidden
+	}
+	if err := s.settings.Set(ctx, settingWatchFolderPath, c.Path); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingWatchFolderDeleteAfterAdd, c.DeleteAfterAdd); err != nil {
+		return err
+	}
+	if err := s.setBoolSetting(ctx, settingWatchFolderEnabled, c.Enabled); err != nil {
+		return err
+	}
+	if s.watchFolder != nil {
+		if c.Enabled && c.Path != "" {
+			s.watchFolder.Start(c.Path, c.DeleteAfterAdd)
+		} else {
+			s.watchFolder.Stop()
+		}
+	}
+	return nil
 }
 
 // PollFeedNow polls a single RSS feed immediately, bypassing its

@@ -175,6 +175,15 @@ func main() {
 	defer rssPoller.Close()
 	svc.AttachRSSPoller(rssPoller)
 
+	watchFolder := api.NewWatchFolder(svc)
+	defer watchFolder.Stop()
+	svc.AttachWatchFolder(watchFolder)
+	// Start the watcher with persisted config (if enabled).
+	wfCfg := svc.GetWatchFolder(ctx)
+	if wfCfg.Enabled && wfCfg.Path != "" {
+		watchFolder.Start(wfCfg.Path, wfCfg.DeleteAfterAdd)
+	}
+
 	// Optional HTTPS+WS remote interface. Reads its enabled/port/bind state
 	// from settings; restarts whenever SetWebConfig fires the change hook.
 	staticFS, err := fs.Sub(assets, "frontend/dist")

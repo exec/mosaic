@@ -7,6 +7,7 @@ import {
   type GlobalStatsT, type InspectorTab,
   type LimitsDTO, type PeerLimitsDTO, type QueueLimitsDTO, type ScheduleRuleDTO, type TagDTO, type Torrent,
   type UpdaterConfigDTO, type UpdateInfoDTO,
+  type WatchFolderDTO,
   type WebConfigDTO, type ServerFlavor, type UserDTO,
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
@@ -73,6 +74,9 @@ export type AppState = {
 
   // Desktop integration (tray + notifications)
   desktopIntegration: DesktopIntegrationDTO;
+
+  // Watch folder
+  watchFolder: WatchFolderDTO;
 
   // Multi-user. serverFlavor distinguishes the headless mosaicd daemon
   // ('daemon') from the desktop app / its optional web server ('desktop').
@@ -183,6 +187,12 @@ const defaultDesktopIntegration: DesktopIntegrationDTO = {
   notify_on_update: true,
 };
 
+const emptyWatchFolder: WatchFolderDTO = {
+  path: '',
+  delete_after_add: false,
+  enabled: false,
+};
+
 export function createTorrentsStore() {
   // Live bandwidth history. Held outside the reactive store so per-tick
   // pushes stay O(1) and don't churn a tracked array; the chart reads it
@@ -230,6 +240,8 @@ export function createTorrentsStore() {
 
     desktopIntegration: defaultDesktopIntegration,
 
+    watchFolder: emptyWatchFolder,
+
     serverFlavor: 'desktop',
     currentUser: null,
   });
@@ -271,6 +283,7 @@ export function createTorrentsStore() {
   // also hides the Desktop pane there.
   if (isWailsRuntime()) {
     api.getDesktopIntegration().then((d) => setState(produce((s) => { s.desktopIntegration = d; }))).catch(bootFailed('desktop integration'));
+    api.getWatchFolder().then((w) => setState(produce((s) => { s.watchFolder = w; }))).catch(bootFailed('watch folder'));
   } else {
     // Browser mode: learn whether we're talking to the multi-user mosaicd
     // daemon or the desktop app's single-user web server, and load the
@@ -611,6 +624,12 @@ export function createTorrentsStore() {
     setDesktopIntegration: async (d: DesktopIntegrationDTO) => {
       await api.setDesktopIntegration(d);
       setState(produce((s) => { s.desktopIntegration = d; }));
+    },
+
+    // Watch folder
+    setWatchFolder: async (w: WatchFolderDTO) => {
+      await api.setWatchFolder(w);
+      setState(produce((s) => { s.watchFolder = w; }));
     },
 
     dispose: () => { offT(); offS(); offI(); offU(); },
