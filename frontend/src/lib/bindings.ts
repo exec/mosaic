@@ -60,6 +60,7 @@ export type PeerLimitsDTO = {
   max_peers_per_torrent: number;
   dht_enabled: boolean;
   encryption_enabled: boolean;
+  upnp_enabled: boolean;
 };
 
 export type GlobalStatsT = {

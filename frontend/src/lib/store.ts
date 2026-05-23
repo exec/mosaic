@@ -149,6 +149,7 @@ const emptyPeerLimits: PeerLimitsDTO = {
   max_peers_per_torrent: 0,
   dht_enabled: true,
   encryption_enabled: true,
+  upnp_enabled: true,
 };
 
 const emptyBlocklist: BlocklistDTO = {

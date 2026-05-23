@@ -59,6 +59,12 @@ type AnacrolixConfig struct {
 	ListenPort       int
 	EnableDHT        bool
 	EnableEncryption bool
+	// EnableUPnP controls automatic UPnP/NAT-PMP port forwarding. When true,
+	// anacrolix discovers routers on the LAN and asks them to forward the
+	// BitTorrent listen port so inbound peers can connect. Requires a restart
+	// to take effect (anacrolix's forwardPort is called once at client startup;
+	// there is no runtime enable/disable path).
+	EnableUPnP bool
 	// MaxPeersPerTorrent is the initial per-torrent established-conn cap
 	// applied to every new torrent on add and (via ApplyPerTorrentMaxPeers)
 	// to all running torrents when the user changes the setting at runtime.
@@ -306,6 +312,10 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	} else {
 		tcfg.HeaderObfuscationPolicy.Preferred = false
 	}
+	// UPnP/NAT-PMP port forwarding. anacrolix's default is to run UPnP
+	// discovery on startup (NoDefaultPortForwarding=false). We flip the
+	// opt-out when the user has disabled the feature in Settings → Connection.
+	tcfg.NoDefaultPortForwarding = !cfg.EnableUPnP
 	// Client identification. The HTTP User-Agent goes to tracker scrapes;
 	// ExtendedHandshakeClientVersion is what other BitTorrent clients see
 	// on the BEP-10 extended handshake; Bep20 is the 8-byte peer-id
