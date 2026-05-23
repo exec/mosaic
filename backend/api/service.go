@@ -777,6 +777,7 @@ type TorrentDTO struct {
 	Tags          []TagDTO `json:"tags"`
 	QueuePosition int      `json:"queue_position"`
 	ForceStart    bool     `json:"force_start"`
+	Sequential    bool     `json:"sequential"`
 	Queued        bool     `json:"queued"`
 	Verifying     bool     `json:"verifying"`
 	FilesMissing  bool     `json:"files_missing"`
@@ -808,6 +809,7 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		AddedAt:       addedAt.Unix(),
 		QueuePosition: s.QueuePosition,
 		ForceStart:    s.ForceStart,
+		Sequential:    s.Sequential,
 		Queued:        s.Queued,
 		Verifying:     s.Verifying,
 		FilesMissing:  s.FilesMissing,
@@ -1874,6 +1876,21 @@ func (s *Service) SetForceStart(ctx context.Context, infohash string, force bool
 	return nil
 }
 
+// SetSequential enables or disables sequential piece download for a torrent.
+// When enabled, pieces are requested in order from first to last, allowing
+// media to be previewed or streamed before the download completes. When
+// disabled, the default rarest-first strategy is restored.
+func (s *Service) SetSequential(ctx context.Context, infohash string, enabled bool) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
+	if err := s.torrents.SetSequential(ctx, infohash, enabled); err != nil {
+		return err
+	}
+	s.engine.SetSequential(engine.TorrentID(infohash), enabled)
+	return nil
+}
+
 // ScheduleRuleDTO is the transport shape for a time-of-day bandwidth rule.
 type ScheduleRuleDTO struct {
 	ID       int  `json:"id"`
@@ -2121,6 +2138,16 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 		// today with no peers attached.
 		s.engine.SetQueuePosition(id, r.QueuePosition)
 		s.engine.SetForceStart(id, r.ForceStart)
+		// Re-apply sequential download preference so the piece-priority
+		// gradient takes effect immediately on restore, before any pieces
+		// are requested. SetSequential is a no-op if the torrent hasn't
+		// received metainfo yet (GotInfo not fired); verifyAndStart will
+		// have applied Normal priorities by then anyway and the gradient
+		// will be overwritten — but for file-added torrents (metainfo
+		// already present) this ensures sequential behavior from the start.
+		if r.Sequential {
+			s.engine.SetSequential(id, true)
+		}
 		// Surface persisted user-pause too, otherwise a torrent the user
 		// paused last session resumes silently.
 		if r.Paused {

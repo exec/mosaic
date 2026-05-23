@@ -97,6 +97,7 @@ func MountWithOptions(svc *api.Service, sessions *SessionStore, hub *Hub, static
 			g.Post("/torrents/force_start", h.SetForceStart)
 			g.Post("/torrents/{id}/trackers", h.AddTracker)
 			g.Delete("/torrents/{id}/trackers", h.RemoveTracker)
+			g.Post("/torrents/sequential", h.SetSequential)
 
 			g.Get("/stats", h.GlobalStats)
 

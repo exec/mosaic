@@ -36,6 +36,7 @@ type Snapshot struct {
 	AddedAt       time.Time
 	QueuePosition int  // 0 = top of queue
 	ForceStart    bool
+	Sequential    bool // true if sequential piece download is enabled
 	Queued        bool // true if scheduler is holding it back
 	Verifying     bool // hashing existing files against the metainfo
 	FilesMissing  bool // was-complete on prior session, now isn't (user deleted files)
@@ -89,6 +90,10 @@ type Backend interface {
 	ApplyPerTorrentMaxPeers(n int) error
 	SetQueuePosition(id TorrentID, pos int)
 	SetForceStart(id TorrentID, force bool)
+	// SetSequential enables or disables sequential piece download for a torrent.
+	// When enabled, pieces are requested from first to last (useful for streaming
+	// media). When disabled, the default rarest-first strategy is restored.
+	SetSequential(id TorrentID, enabled bool)
 	ScheduledPause(id TorrentID, paused bool) // distinct from manual Pause
 	// MarkExpectedComplete tells the backend that this torrent was 100%
 	// complete on a prior session — so if VerifyData on add finds <100%,

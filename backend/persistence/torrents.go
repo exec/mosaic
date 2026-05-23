@@ -31,6 +31,7 @@ type TorrentRecord struct {
 	// SeedingStartedAt is when the torrent first reached 100% completion.
 	// Used by the seed-policy enforcement loop to measure seeding duration.
 	SeedingStartedAt *time.Time
+	Sequential       bool
 }
 
 // Torrents is the DAO for the torrents table.
@@ -59,13 +60,17 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 	if r.ForceStart {
 		forceStart = 1
 	}
+	sequential := 0
+	if r.Sequential {
+		sequential = 1
+	}
 	var seedingStartedAt sql.NullInt64
 	if r.SeedingStartedAt != nil {
 		seedingStartedAt = sql.NullInt64{Int64: r.SeedingStartedAt.Unix(), Valid: true}
 	}
 	_, err := t.db.SQL().ExecContext(ctx, `
-INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, sequential)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(infohash) DO UPDATE SET
   name = excluded.name,
   magnet = excluded.magnet,
@@ -78,8 +83,9 @@ ON CONFLICT(infohash) DO UPDATE SET
   force_start = excluded.force_start,
   metainfo = COALESCE(excluded.metainfo, torrents.metainfo),
   down_rate_limit = excluded.down_rate_limit,
-  up_rate_limit = excluded.up_rate_limit
-`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo), r.DownRateLimit, r.UpRateLimit)
+  up_rate_limit = excluded.up_rate_limit,
+  sequential = excluded.sequential
+`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo), r.DownRateLimit, r.UpRateLimit, sequential)
 	// seed_policy and seeding_started_at are set by dedicated methods only.
 	_ = seedingStartedAt
 	return err
@@ -119,7 +125,7 @@ func nullableBytes(b []byte) any {
 // Get returns a single record by infohash.
 func (t *Torrents) Get(ctx context.Context, infohash string) (TorrentRecord, error) {
 	row := t.db.SQL().QueryRowContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at, sequential
 FROM torrents WHERE infohash = ?`, infohash)
 	return scanTorrent(row)
 }
@@ -127,7 +133,7 @@ FROM torrents WHERE infohash = ?`, infohash)
 // List returns all records ordered by added_at descending.
 func (t *Torrents) List(ctx context.Context) ([]TorrentRecord, error) {
 	rows, err := t.db.SQL().QueryContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at, sequential
 FROM torrents ORDER BY added_at DESC`)
 	if err != nil {
 		return nil, err
@@ -179,6 +185,17 @@ func (t *Torrents) SetForceStart(ctx context.Context, infohash string, force boo
 	return err
 }
 
+// SetSequential toggles whether a torrent downloads pieces in sequential order.
+func (t *Torrents) SetSequential(ctx context.Context, infohash string, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET sequential = ? WHERE infohash = ?`, v, infohash)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -190,10 +207,11 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	var categoryID sql.NullInt64
 	var paused int
 	var forceStart int
+	var sequential int
 	var metainfo []byte
 	var seedPolicy sql.NullString
 	var seedingStartedAt sql.NullInt64
-	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo, &r.DownRateLimit, &r.UpRateLimit, &seedPolicy, &seedingStartedAt); err != nil {
+	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo, &r.DownRateLimit, &r.UpRateLimit, &seedPolicy, &seedingStartedAt, &sequential); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return r, ErrNotFound
 		}
@@ -210,6 +228,7 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	}
 	r.Paused = paused == 1
 	r.ForceStart = forceStart == 1
+	r.Sequential = sequential == 1
 	r.Metainfo = metainfo
 	if seedPolicy.Valid {
 		r.SeedPolicy = &seedPolicy.String

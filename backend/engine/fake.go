@@ -189,6 +189,14 @@ func (f *FakeBackend) SetForceStart(id TorrentID, force bool) {
 	}
 }
 
+func (f *FakeBackend) SetSequential(id TorrentID, enabled bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.torrents[id]; ok {
+		t.Sequential = enabled
+	}
+}
+
 func (f *FakeBackend) ScheduledPause(id TorrentID, paused bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

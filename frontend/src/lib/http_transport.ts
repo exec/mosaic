@@ -119,6 +119,12 @@ const ROUTES: Record<string, RouteSpec> = {
     body: ([infohash, force]) => ({infohash, force}),
     unwrap: okEnvelope,
   },
+  SetSequential: {
+    method: 'POST',
+    path: () => '/api/torrents/sequential',
+    body: ([infohash, enabled]) => ({infohash, enabled}),
+    unwrap: okEnvelope,
+  },
 
   // Stats / inspector
   GlobalStats: {method: 'GET', path: () => '/api/stats'},

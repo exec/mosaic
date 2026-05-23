@@ -150,6 +150,9 @@ func (e *Engine) SetQueuePosition(id TorrentID, pos int) {
 func (e *Engine) SetForceStart(id TorrentID, force bool) {
 	e.backend.SetForceStart(id, force)
 }
+func (e *Engine) SetSequential(id TorrentID, enabled bool) {
+	e.backend.SetSequential(id, enabled)
+}
 func (e *Engine) ScheduledPause(id TorrentID, paused bool) {
 	e.backend.ScheduledPause(id, paused)
 }

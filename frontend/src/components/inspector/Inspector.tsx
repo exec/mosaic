@@ -18,9 +18,11 @@ type Props = {
   tab: InspectorTab;
   bandwidthRing: BandwidthRing;
   bandwidthTick: number;
+  sequential: boolean;
   onTabChange: (t: InspectorTab) => void;
   onClose: () => void;
   onSetFilePriority: (index: number, priority: 'skip' | 'normal' | 'high' | 'max') => void;
+  onToggleSequential: () => void;
 };
 
 export function Inspector(props: Props) {
@@ -34,7 +36,11 @@ export function Inspector(props: Props) {
         <div class="flex-1 overflow-auto">
           <Switch>
             <Match when={props.tab === 'overview'}>
-              <OverviewTab detail={props.detail} />
+              <OverviewTab
+                detail={props.detail}
+                sequential={props.sequential}
+                onToggleSequential={props.onToggleSequential}
+              />
             </Match>
             <Match when={props.tab === 'files'}>
               <FilesTab detail={props.detail} onSetPriority={props.onSetFilePriority} />

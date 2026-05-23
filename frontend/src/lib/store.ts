@@ -501,6 +501,7 @@ export function createTorrentsStore() {
     },
     setQueuePosition: (infohash: string, pos: number) => api.setQueuePosition(infohash, pos),
     setForceStart: (infohash: string, force: boolean) => api.setForceStart(infohash, force),
+    setSequential: (infohash: string, enabled: boolean) => api.setSequential(infohash, enabled),
 
     // Seeding defaults
     setSeedingDefaults: async (d: SeedingDefaultsDTO) => {

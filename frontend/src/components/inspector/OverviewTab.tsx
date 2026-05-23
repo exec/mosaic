@@ -6,7 +6,11 @@ import {api} from '../../lib/bindings';
 import {fmtBytes, fmtPercent, fmtTimestamp} from '../../lib/format';
 import {userErr} from '../../lib/errors';
 
-type Props = {detail: DetailDTO | null};
+type Props = {
+  detail: DetailDTO | null;
+  sequential: boolean;
+  onToggleSequential: () => void;
+};
 
 function Row(props: {label: string; children: any}) {
   return (
@@ -17,8 +21,6 @@ function Row(props: {label: string; children: any}) {
   );
 }
 
-// RateLimitRow renders a KB/s number input. 0 shows as empty with placeholder
-// "Unlimited". On blur or Enter the value is committed if it changed.
 function RateLimitRow(props: {
   label: string;
   kbps: number;
@@ -62,6 +64,28 @@ function RateLimitRow(props: {
         />
         <span class="text-zinc-600">KB/s</span>
       </span>
+    </div>
+  );
+}
+
+function ToggleRow(props: {label: string; description: string; checked: boolean; onChange: () => void}) {
+  return (
+    <div class="flex items-center justify-between gap-3 border-b border-white/[.03] py-2 text-xs">
+      <div class="flex flex-col gap-0.5">
+        <span class="text-zinc-400">{props.label}</span>
+        <span class="text-zinc-600">{props.description}</span>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={props.checked}
+        onClick={props.onChange}
+        class={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/20 ${props.checked ? 'bg-blue-500' : 'bg-zinc-600'}`}
+      >
+        <span
+          class={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${props.checked ? 'translate-x-3.5' : 'translate-x-0.5'}`}
+        />
+      </button>
     </div>
   );
 }
@@ -243,6 +267,12 @@ export function OverviewTab(props: Props) {
           </Show>
           <RateLimitRow label="↓ Speed limit" kbps={downKbps()} onSave={saveDown} />
           <RateLimitRow label="↑ Speed limit" kbps={upKbps()} onSave={saveUp} />
+          <ToggleRow
+            label="Sequential download"
+            description="Download pieces in order (useful for streaming media)"
+            checked={props.sequential}
+            onChange={props.onToggleSequential}
+          />
           <Row label="Magnet">
             <span class="inline-flex items-center gap-1.5">
               <button
