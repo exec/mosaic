@@ -21,7 +21,8 @@ type TorrentRecord struct {
 	ForceStart    bool
 	// Metainfo is the raw .torrent file bytes for file-added torrents. Empty
 	// for magnet-only adds (the magnet URI itself is enough to round-trip).
-	Metainfo []byte
+	Metainfo   []byte
+	Sequential bool
 }
 
 // Torrents is the DAO for the torrents table.
@@ -50,9 +51,13 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 	if r.ForceStart {
 		forceStart = 1
 	}
+	sequential := 0
+	if r.Sequential {
+		sequential = 1
+	}
 	_, err := t.db.SQL().ExecContext(ctx, `
-INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, sequential)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(infohash) DO UPDATE SET
   name = excluded.name,
   magnet = excluded.magnet,
@@ -63,8 +68,9 @@ ON CONFLICT(infohash) DO UPDATE SET
   paused = excluded.paused,
   queue_position = excluded.queue_position,
   force_start = excluded.force_start,
-  metainfo = COALESCE(excluded.metainfo, torrents.metainfo)
-`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo))
+  metainfo = COALESCE(excluded.metainfo, torrents.metainfo),
+  sequential = excluded.sequential
+`, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo), sequential)
 	return err
 }
 
@@ -78,7 +84,7 @@ func nullableBytes(b []byte) any {
 // Get returns a single record by infohash.
 func (t *Torrents) Get(ctx context.Context, infohash string) (TorrentRecord, error) {
 	row := t.db.SQL().QueryRowContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, sequential
 FROM torrents WHERE infohash = ?`, infohash)
 	return scanTorrent(row)
 }
@@ -86,7 +92,7 @@ FROM torrents WHERE infohash = ?`, infohash)
 // List returns all records ordered by added_at descending.
 func (t *Torrents) List(ctx context.Context) ([]TorrentRecord, error) {
 	rows, err := t.db.SQL().QueryContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, sequential
 FROM torrents ORDER BY added_at DESC`)
 	if err != nil {
 		return nil, err
@@ -138,6 +144,17 @@ func (t *Torrents) SetForceStart(ctx context.Context, infohash string, force boo
 	return err
 }
 
+// SetSequential toggles whether a torrent downloads pieces in sequential order.
+func (t *Torrents) SetSequential(ctx context.Context, infohash string, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET sequential = ? WHERE infohash = ?`, v, infohash)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -149,8 +166,9 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	var categoryID sql.NullInt64
 	var paused int
 	var forceStart int
+	var sequential int
 	var metainfo []byte
-	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo); err != nil {
+	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo, &sequential); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return r, ErrNotFound
 		}
@@ -167,6 +185,7 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	}
 	r.Paused = paused == 1
 	r.ForceStart = forceStart == 1
+	r.Sequential = sequential == 1
 	r.Metainfo = metainfo
 	return r, nil
 }

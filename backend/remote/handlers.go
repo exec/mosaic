@@ -873,6 +873,24 @@ func (h *Handlers) SetForceStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+type sequentialRequest struct {
+	InfoHash string `json:"infohash"`
+	Enabled  bool   `json:"enabled"`
+}
+
+func (h *Handlers) SetSequential(w http.ResponseWriter, r *http.Request) {
+	var req sequentialRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.SetSequential(r.Context(), req.InfoHash, req.Enabled); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handlers) GetBlocklist(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.svc.GetBlocklist(r.Context()))
 }

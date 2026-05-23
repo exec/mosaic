@@ -9,7 +9,7 @@ function mk(over: Partial<Torrent>): Torrent {
     download_rate: 0, upload_rate: 0, peers: 0, seeds: 0,
     paused: false, completed: false, added_at: 0,
     category_id: null, tags: [], queue_position: 0,
-    force_start: false, queued: false, verifying: false,
+    force_start: false, sequential: false, queued: false, verifying: false,
     files_missing: false, access: 'owner',
     ...over,
   };

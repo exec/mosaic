@@ -4,13 +4,39 @@ import {toast} from 'solid-sonner';
 import type {DetailDTO} from '../../lib/bindings';
 import {fmtBytes, fmtPercent, fmtTimestamp} from '../../lib/format';
 
-type Props = {detail: DetailDTO | null};
+type Props = {
+  detail: DetailDTO | null;
+  sequential: boolean;
+  onToggleSequential: () => void;
+};
 
 function Row(props: {label: string; children: any}) {
   return (
     <div class="flex justify-between gap-3 border-b border-white/[.03] py-2 text-xs">
       <span class="text-zinc-500">{props.label}</span>
       <span class="text-right font-mono tabular-nums text-zinc-200 break-all">{props.children}</span>
+    </div>
+  );
+}
+
+function ToggleRow(props: {label: string; description: string; checked: boolean; onChange: () => void}) {
+  return (
+    <div class="flex items-center justify-between gap-3 border-b border-white/[.03] py-2 text-xs">
+      <div class="flex flex-col gap-0.5">
+        <span class="text-zinc-400">{props.label}</span>
+        <span class="text-zinc-600">{props.description}</span>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={props.checked}
+        onClick={props.onChange}
+        class={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/20 ${props.checked ? 'bg-blue-500' : 'bg-zinc-600'}`}
+      >
+        <span
+          class={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${props.checked ? 'translate-x-3.5' : 'translate-x-0.5'}`}
+        />
+      </button>
     </div>
   );
 }
@@ -55,6 +81,12 @@ export function OverviewTab(props: Props) {
               <span class="max-w-[180px] truncate text-zinc-400">{d().magnet || '—'}</span>
             </span>
           </Row>
+          <ToggleRow
+            label="Sequential download"
+            description="Download pieces in order (useful for streaming media)"
+            checked={props.sequential}
+            onChange={props.onToggleSequential}
+          />
         </div>
       )}
     </Show>

@@ -32,6 +32,7 @@ export type Torrent = {
   tags: TagDTO[];
   queue_position: number;
   force_start: boolean;
+  sequential: boolean;
   queued: boolean;
   verifying: boolean;
   files_missing: boolean;
@@ -290,6 +291,7 @@ export const api = {
   setPeerLimits: (p: PeerLimitsDTO) => transport.invoke<void>('SetPeerLimits', p),
   setQueuePosition: (infohash: string, pos: number) => transport.invoke<void>('SetQueuePosition', infohash, pos),
   setForceStart: (infohash: string, force: boolean) => transport.invoke<void>('SetForceStart', infohash, force),
+  setSequential: (infohash: string, enabled: boolean) => transport.invoke<void>('SetSequential', infohash, enabled),
   listScheduleRules: () => transport.invoke<ScheduleRuleDTO[]>('ListScheduleRules'),
   createScheduleRule: (r: ScheduleRuleDTO) => transport.invoke<number>('CreateScheduleRule', r),
   updateScheduleRule: (r: ScheduleRuleDTO) => transport.invoke<void>('UpdateScheduleRule', r),

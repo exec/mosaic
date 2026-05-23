@@ -343,6 +343,7 @@ function AuthenticatedApp() {
             tab={store.state.inspectorTab}
             bandwidthRing={store.bandwidthRing}
             bandwidthTick={store.state.bandwidthTick}
+            sequential={store.state.torrents.find((t) => t.id === store.state.inspectorOpenId)?.sequential ?? false}
             onTabChange={(t) => store.setInspectorTab(t)}
             onClose={() => store.closeInspector()}
             onSetFilePriority={async (index, priority) => {
@@ -351,6 +352,15 @@ function AuthenticatedApp() {
               try {
                 await store.setFilePriorities(id, {[index]: priority});
               } catch (err) { toast.error(`Couldn't set file priority — ${userErr(err)}`); }
+            }}
+            onToggleSequential={async () => {
+              const id = store.state.inspectorOpenId;
+              if (!id) return;
+              const t = store.state.torrents.find((x) => x.id === id);
+              if (!t) return;
+              try {
+                await store.setSequential(id, !t.sequential);
+              } catch (err) { toast.error(`Sequential download failed — ${userErr(err)}`); }
             }}
           />
         }

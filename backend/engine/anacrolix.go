@@ -135,14 +135,15 @@ type AnacrolixBackend struct {
 	// Keyed (TorrentID, "ip:port"); guarded by rateMu.
 	prevPeerRates map[TorrentID]map[string]peerRateSample
 
-	// pausedMu guards paused, queuePos, forceStart, scheduledPause. We extend
-	// the existing read-mostly mutex rather than introducing a new one — these
-	// maps are all read together by snapshotFor and written through the same
-	// per-torrent setters, so a single RWMutex keeps the invariants simple.
+	// pausedMu guards paused, queuePos, forceStart, scheduledPause, sequential.
+	// We extend the existing read-mostly mutex rather than introducing a new
+	// one — these maps are all read together by snapshotFor and written through
+	// the same per-torrent setters, so a single RWMutex keeps the invariants simple.
 	pausedMu       sync.RWMutex
 	paused         map[TorrentID]bool
 	queuePos       map[TorrentID]int
 	forceStart     map[TorrentID]bool
+	sequential     map[TorrentID]bool
 	scheduledPause map[TorrentID]bool
 
 	// Verify state — verifying[id] is true while VerifyData is hashing pieces;
@@ -379,6 +380,7 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		paused:           make(map[TorrentID]bool),
 		queuePos:         make(map[TorrentID]int),
 		forceStart:       make(map[TorrentID]bool),
+		sequential:       make(map[TorrentID]bool),
 		scheduledPause:   make(map[TorrentID]bool),
 		verifying:        make(map[TorrentID]bool),
 		expectedComplete: make(map[TorrentID]bool),
@@ -1148,6 +1150,7 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	delete(a.paused, id)
 	delete(a.queuePos, id)
 	delete(a.forceStart, id)
+	delete(a.sequential, id)
 	delete(a.scheduledPause, id)
 	a.pausedMu.Unlock()
 	a.snapshotMu.Lock()
@@ -1228,7 +1231,7 @@ func (a *AnacrolixBackend) List() []Snapshot {
 		if rates != nil {
 			rate = (*rates)[id]
 		}
-		snap := snapshotFor(t, rate, a.paused[id], a.queuePos[id], a.forceStart[id], a.scheduledPause[id], a.verifying[id], a.filesMissing[id])
+		snap := snapshotFor(t, rate, a.paused[id], a.queuePos[id], a.forceStart[id], a.sequential[id], a.scheduledPause[id], a.verifying[id], a.filesMissing[id])
 		out = append(out, snap)
 		if snap.Completed {
 			completed = append(completed, completedFor{id: id, t: t})
@@ -1256,13 +1259,14 @@ func (a *AnacrolixBackend) Snapshot(id TorrentID) (Snapshot, error) {
 	paused := a.paused[id]
 	queuePos := a.queuePos[id]
 	forceStart := a.forceStart[id]
+	sequential := a.sequential[id]
 	queued := a.scheduledPause[id]
 	a.pausedMu.RUnlock()
 	a.verifyMu.RLock()
 	verifying := a.verifying[id]
 	filesMissing := a.filesMissing[id]
 	a.verifyMu.RUnlock()
-	snap := snapshotFor(t, a.rateFor(id), paused, queuePos, forceStart, queued, verifying, filesMissing)
+	snap := snapshotFor(t, a.rateFor(id), paused, queuePos, forceStart, sequential, queued, verifying, filesMissing)
 	return snap, nil
 }
 
@@ -1389,13 +1393,14 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	paused := a.paused[id]
 	queuePos := a.queuePos[id]
 	forceStart := a.forceStart[id]
+	sequential := a.sequential[id]
 	queued := a.scheduledPause[id]
 	a.pausedMu.RUnlock()
 	a.verifyMu.RLock()
 	verifying := a.verifying[id]
 	filesMissing := a.filesMissing[id]
 	a.verifyMu.RUnlock()
-	snap := snapshotFor(t, a.rateFor(id), paused, queuePos, forceStart, queued, verifying, filesMissing)
+	snap := snapshotFor(t, a.rateFor(id), paused, queuePos, forceStart, sequential, queued, verifying, filesMissing)
 	d := Detail{Snapshot: snap}
 
 	if scope.Files {
@@ -1613,7 +1618,7 @@ func pieceProgressOf(t *torrent.Torrent, pc *torrent.PeerConn) float64 {
 // by the caller from the centralized rate cache (see sampleRates) — this
 // function no longer computes or stores rate samples, so it is a pure read
 // of the torrent and is safe to call concurrently from any number of readers.
-func snapshotFor(t *torrent.Torrent, rate rateValue, paused bool, queuePos int, forceStart, queued, verifying, filesMissing bool) Snapshot {
+func snapshotFor(t *torrent.Torrent, rate rateValue, paused bool, queuePos int, forceStart, sequential, queued, verifying, filesMissing bool) Snapshot {
 	stats := t.Stats()
 	name := t.Name()
 	if name == "" {
@@ -1642,6 +1647,7 @@ func snapshotFor(t *torrent.Torrent, rate rateValue, paused bool, queuePos int, 
 		AddedAt:       time.Now(), // engine wrapper does not track AddedAt; persistence does
 		QueuePosition: queuePos,
 		ForceStart:    forceStart,
+		Sequential:    sequential,
 		Queued:        queued,
 		Verifying:     verifying,
 		FilesMissing:  filesMissing,
@@ -1679,6 +1685,61 @@ func (a *AnacrolixBackend) SetForceStart(id TorrentID, force bool) {
 	a.pausedMu.Lock()
 	a.forceStart[id] = force
 	a.pausedMu.Unlock()
+}
+
+// SetSequential enables or disables sequential piece download for a torrent.
+// When enabled, pieces are assigned descending priorities so that earlier
+// pieces have higher urgency — anacrolix then requests them in index order,
+// allowing users to preview/stream media while the download is in progress.
+// When disabled, piece priorities are reset to Normal (rarest-first default).
+//
+// The gradient uses all non-None priority levels (Normal..Now, values 1–5).
+// Pieces are divided evenly into up to 5 buckets; the first bucket gets the
+// highest priority (PiecePriorityNow) and the last gets PiecePriorityNormal.
+// This ensures that even with a large number of pieces the request strategy
+// strongly prefers lower-indexed pieces for the whole file while still allowing
+// anacrolix's internal tie-breaking to handle unavailable / already-complete
+// pieces gracefully.
+func (a *AnacrolixBackend) SetSequential(id TorrentID, enabled bool) {
+	a.pausedMu.Lock()
+	a.sequential[id] = enabled
+	a.pausedMu.Unlock()
+	t, ok := a.find(id)
+	if !ok {
+		return
+	}
+	applySequentialPriorities(t, enabled)
+}
+
+// applySequentialPriorities adjusts per-piece priorities on t to implement
+// sequential (in-order) downloading. It must be called after GotInfo (piece
+// count is valid). Safe to call from any goroutine — Piece.SetPriority takes
+// the client lock internally.
+func applySequentialPriorities(t *torrent.Torrent, sequential bool) {
+	n := t.NumPieces()
+	if n == 0 {
+		return
+	}
+	if !sequential {
+		// Reset to Normal so the default rarest-first strategy takes over.
+		for i := 0; i < n; i++ {
+			t.Piece(i).SetPriority(anacrolix_types.PiecePriorityNormal)
+		}
+		return
+	}
+	// Divide pieces into up to 5 buckets mapped to priority levels
+	// PiecePriorityNow (5) → PiecePriorityNormal (1).
+	const levels = 5 // PiecePriorityNow=5 down to PiecePriorityNormal=1
+	for i := 0; i < n; i++ {
+		// bucket: 0 = earliest (highest priority), levels-1 = latest (lowest)
+		bucket := (i * levels) / n
+		if bucket >= levels {
+			bucket = levels - 1
+		}
+		// prio: levels (Now) for bucket 0, 1 (Normal) for bucket levels-1
+		prio := anacrolix_types.PiecePriority(levels - bucket)
+		t.Piece(i).SetPriority(prio)
+	}
 }
 
 // ScheduledPause is the scheduler's pause channel — independent from the

@@ -254,6 +254,10 @@ func (a *App) SetForceStart(infohash string, force bool) error {
 	return a.svc.SetForceStart(a.ctx, infohash, force)
 }
 
+func (a *App) SetSequential(infohash string, enabled bool) error {
+	return a.svc.SetSequential(a.ctx, infohash, enabled)
+}
+
 func (a *App) ListScheduleRules() ([]api.ScheduleRuleDTO, error) {
 	return a.svc.ListScheduleRules(a.ctx)
 }
