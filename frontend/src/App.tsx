@@ -290,6 +290,7 @@ function AuthenticatedApp() {
             serverFlavor={store.state.serverFlavor}
             currentUser={store.state.currentUser}
             defaultSavePath={store.state.defaultSavePath}
+            watchFolder={store.state.watchFolder}
             categories={store.state.categories}
             tags={store.state.tags}
             limits={store.state.limits}
@@ -305,6 +306,7 @@ function AuthenticatedApp() {
             appVersion={store.state.appVersion}
             desktopIntegration={store.state.desktopIntegration}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
+            onSetWatchFolder={(c) => store.setWatchFolder(c)}
             onSetWebConfig={(c) => store.setWebConfig(c)}
             onSetWebPassword={(p) => store.setWebPassword(p)}
             onRotateAPIKey={() => store.rotateAPIKey()}
