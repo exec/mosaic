@@ -156,6 +156,7 @@ func main() {
 	listenPort := cfg.ListenPort
 	enableDHT := cfg.EnableDHT
 	enableEnc := cfg.EnableEncryption
+	enableUPnP := true // default-on (matches anacrolix's NoDefaultPortForwarding=false)
 	maxPeersPerTorrent := 0
 	if v, _ := settingsDAO.Get(ctx, "peer_listen_port"); v != "" {
 		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
@@ -172,6 +173,9 @@ func main() {
 	}
 	if v, _ := settingsDAO.Get(ctx, "encryption_enabled"); v == "false" {
 		enableEnc = false
+	}
+	if v, _ := settingsDAO.Get(ctx, "upnp_enabled"); v == "false" {
+		enableUPnP = false
 	}
 	preallocateFullFiles := false
 	if v, _ := settingsDAO.Get(ctx, "storage.preallocate_full_files"); v == "true" {
@@ -195,6 +199,7 @@ func main() {
 		ListenPort:           listenPort,
 		EnableDHT:            enableDHT,
 		EnableEncryption:     enableEnc,
+		EnableUPnP:           enableUPnP,
 		MaxPeersPerTorrent:   maxPeersPerTorrent,
 		SnapshotStore:        &verifySnapshotAdapter{store: verifySnaps},
 		ClientVersion:        "Mosaic/" + strings.TrimPrefix(version, "v"),

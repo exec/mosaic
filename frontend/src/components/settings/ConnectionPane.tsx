@@ -60,6 +60,7 @@ export function ConnectionPane(props: Props) {
   const [maxPeers, setMaxPeers] = createSignal(props.peerLimits.max_peers_per_torrent);
   const [dht, setDht] = createSignal(props.peerLimits.dht_enabled);
   const [encryption, setEncryption] = createSignal(props.peerLimits.encryption_enabled);
+  const [upnp, setUpnp] = createSignal(props.peerLimits.upnp_enabled);
 
   // Re-sync when prop changes (initial fetch races)
   createEffect(() => { setDown(props.limits.down_kbps); });
@@ -72,6 +73,7 @@ export function ConnectionPane(props: Props) {
   createEffect(() => { setMaxPeers(props.peerLimits.max_peers_per_torrent); });
   createEffect(() => { setDht(props.peerLimits.dht_enabled); });
   createEffect(() => { setEncryption(props.peerLimits.encryption_enabled); });
+  createEffect(() => { setUpnp(props.peerLimits.upnp_enabled); });
 
   const saveLimits = async () => {
     try {
@@ -100,6 +102,7 @@ export function ConnectionPane(props: Props) {
         max_peers_per_torrent: maxPeers(),
         dht_enabled: dht(),
         encryption_enabled: encryption(),
+        upnp_enabled: upnp(),
       });
       toast.success('Peer settings saved');
     } catch (e) { toast.error(String(e)); }
@@ -153,6 +156,12 @@ export function ConnectionPane(props: Props) {
       <Field label="Protocol encryption" help="MSE/PE header obfuscation. Restart to apply.">
         <label class="inline-flex items-center gap-2 text-sm text-zinc-200">
           <input type="checkbox" checked={encryption()} onChange={(e) => setEncryption(e.currentTarget.checked)} class="accent-accent-500" />
+          Enabled
+        </label>
+      </Field>
+      <Field label="UPnP / NAT-PMP" help="Ask the router to forward the listen port so peers can connect inbound. Restart to apply.">
+        <label class="inline-flex items-center gap-2 text-sm text-zinc-200">
+          <input type="checkbox" checked={upnp()} onChange={(e) => setUpnp(e.currentTarget.checked)} class="accent-accent-500" />
           Enabled
         </label>
       </Field>
