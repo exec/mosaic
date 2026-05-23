@@ -140,7 +140,10 @@ func (e *Engine) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
 }
 
 func (e *Engine) SetGlobalRateLimits(d, u int) error { return e.backend.SetGlobalRateLimits(d, u) }
-func (e *Engine) SetIPBlocklist(r io.Reader) error   { return e.backend.SetIPBlocklist(r) }
+func (e *Engine) SetTorrentRateLimits(id TorrentID, d, u int64) error {
+	return e.backend.SetTorrentRateLimits(id, d, u)
+}
+func (e *Engine) SetIPBlocklist(r io.Reader) error { return e.backend.SetIPBlocklist(r) }
 func (e *Engine) SetQueuePosition(id TorrentID, pos int) {
 	e.backend.SetQueuePosition(id, pos)
 }

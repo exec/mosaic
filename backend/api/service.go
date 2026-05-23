@@ -1564,6 +1564,46 @@ func (s *Service) SetTorrentCategory(ctx context.Context, infohash string, categ
 	return s.torrents.SetCategory(ctx, infohash, categoryID)
 }
 
+// TorrentRateLimitsDTO is the per-torrent bandwidth cap transport shape.
+// Down/Up are in KB/s; 0 means unlimited.
+type TorrentRateLimitsDTO struct {
+	DownKbps int64 `json:"down_kbps"`
+	UpKbps   int64 `json:"up_kbps"`
+}
+
+// GetTorrentRateLimits returns the persisted per-torrent rate limits in KB/s.
+func (s *Service) GetTorrentRateLimits(ctx context.Context, infohash string) (TorrentRateLimitsDTO, error) {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessViewer); err != nil {
+		return TorrentRateLimitsDTO{}, err
+	}
+	rec, err := s.torrents.Get(ctx, infohash)
+	if err != nil {
+		return TorrentRateLimitsDTO{}, err
+	}
+	return TorrentRateLimitsDTO{
+		DownKbps: rec.DownRateLimit / 1024,
+		UpKbps:   rec.UpRateLimit / 1024,
+	}, nil
+}
+
+// SetTorrentRateLimits sets per-torrent download/upload caps. downKbps and
+// upKbps are in KB/s; 0 means unlimited. Changes are persisted and applied
+// to the live engine immediately.
+func (s *Service) SetTorrentRateLimits(ctx context.Context, infohash string, downKbps, upKbps int64) error {
+	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
+		return err
+	}
+	if downKbps < 0 || upKbps < 0 {
+		return fmt.Errorf("rate limits must be >= 0")
+	}
+	downBPS := downKbps * 1024
+	upBPS := upKbps * 1024
+	if err := s.torrents.SetRateLimits(ctx, infohash, downBPS, upBPS); err != nil {
+		return fmt.Errorf("persist rate limits: %w", err)
+	}
+	return s.engine.SetTorrentRateLimits(engine.TorrentID(infohash), downBPS, upBPS)
+}
+
 func (s *Service) SetFilePriorities(ctx context.Context, infohash string, prios map[int]string) error {
 	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
 		return err
@@ -2021,6 +2061,13 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 		if r.Paused {
 			if err := s.engine.Pause(id); err != nil {
 				log.Warn().Err(err).Str("infohash", r.InfoHash).Msg("restore: re-pause failed")
+			}
+		}
+		// Re-apply persisted per-torrent rate limits so the engine enforces
+		// them from the first tick, not just after the user sets them again.
+		if r.DownRateLimit != 0 || r.UpRateLimit != 0 {
+			if err := s.engine.SetTorrentRateLimits(id, r.DownRateLimit, r.UpRateLimit); err != nil {
+				log.Warn().Err(err).Str("infohash", r.InfoHash).Msg("restore: re-apply rate limits failed")
 			}
 		}
 	}
