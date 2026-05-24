@@ -221,18 +221,12 @@ function AuthenticatedApp() {
         view={store.state.view}
         settingsPane={store.state.settingsPane}
         onNavigate={store.setView}
-        onNavigateRSS={() => {
+        onNavigateSettingsPane={(p) => {
           store.setView('settings');
-          store.setSettingsPane('rss');
+          store.setSettingsPane(p);
         }}
-        onNavigateSchedule={() => {
-          store.setView('settings');
-          store.setSettingsPane('schedule');
-        }}
-        onNavigateAbout={() => {
-          store.setView('settings');
-          store.setSettingsPane('about');
-        }}
+        flavor={store.state.serverFlavor}
+        currentUser={store.state.currentUser}
         onLogout={
           store.state.currentUser
             ? async () => {

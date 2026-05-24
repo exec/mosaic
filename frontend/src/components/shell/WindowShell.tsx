@@ -1,6 +1,6 @@
 import {Match, Show, Switch, type JSX} from 'solid-js';
 import type {AppView, Density, StatusFilter, TorrentCounts} from '../../lib/store';
-import type {CategoryDTO, GlobalStatsT, TagDTO, Torrent, WebConfigDTO} from '../../lib/bindings';
+import type {CategoryDTO, GlobalStatsT, ServerFlavor, TagDTO, Torrent, UserDTO, WebConfigDTO} from '../../lib/bindings';
 import type {SettingsPane} from '../settings/SettingsSidebar';
 import {IconRail} from './IconRail';
 import {FilterRail} from './FilterRail';
@@ -17,9 +17,13 @@ type Props = {
   view: AppView;
   settingsPane: SettingsPane;
   onNavigate: (v: AppView) => void;
-  onNavigateRSS: () => void;
-  onNavigateSchedule: () => void;
-  onNavigateAbout: () => void;
+  // Generic settings-pane navigator. Replaces the per-pane callbacks
+  // (onNavigateRSS/Schedule/About) that existed back when the IconRail
+  // only had three settings shortcuts hardcoded; the rail is now
+  // user-customizable so it needs to jump to arbitrary panes.
+  onNavigateSettingsPane: (p: SettingsPane) => void;
+  flavor: ServerFlavor;
+  currentUser: UserDTO | null;
   onLogout?: () => void;
   filteredTorrents: Torrent[];
   stats: GlobalStatsT;
@@ -102,9 +106,9 @@ export function WindowShell(props: Props) {
           view={props.view}
           settingsPane={props.settingsPane}
           onNavigate={props.onNavigate}
-          onNavigateRSS={props.onNavigateRSS}
-          onNavigateSchedule={props.onNavigateSchedule}
-          onNavigateAbout={props.onNavigateAbout}
+          onNavigateSettingsPane={props.onNavigateSettingsPane}
+          flavor={props.flavor}
+          currentUser={props.currentUser}
           onLogout={props.onLogout}
         />
         <div class="flex flex-1 min-w-0 flex-col">
