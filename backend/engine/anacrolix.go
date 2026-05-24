@@ -422,6 +422,10 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	b.rateCache.Store(&empty)
 	b.verifyWg.Add(1)
 	go b.sampleRates(rateSampleInterval)
+	if cfg.SnapshotStore != nil {
+		b.verifyWg.Add(1)
+		go b.periodicCheckpoint(snapshotCheckpointInterval)
+	}
 	return b, nil
 }
 
@@ -481,6 +485,34 @@ func (a *AnacrolixBackend) sampleRates(interval time.Duration) {
 			}
 			a.rateMu.Unlock()
 			a.rateCache.Store(&next)
+		}
+	}
+}
+
+// snapshotCheckpointInterval is how often the background checkpoint goroutine
+// saves per-piece bitmaps for all active torrents. Keeps fast-resume accurate
+// even after an abnormal exit — at worst, up to one interval worth of newly
+// downloaded pieces are re-verified on the next startup.
+const snapshotCheckpointInterval = 5 * time.Minute
+
+// periodicCheckpoint saves fast-resume snapshots for every active torrent at
+// a fixed interval. This covers the crash-recovery case: a clean exit runs
+// the same loop in Close(), but an OOM kill or force-quit skips it. Without
+// this, a long-running download session that ends in a crash re-verifies ALL
+// data on the next launch — potentially many gigabytes — instead of just the
+// small slice downloaded since the last checkpoint.
+func (a *AnacrolixBackend) periodicCheckpoint(interval time.Duration) {
+	defer a.verifyWg.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.engineCtx.Done():
+			return
+		case <-t.C:
+			for _, tor := range a.client.Torrents() {
+				a.saveSnapshotForCheckpoint(idFor(tor), tor)
+			}
 		}
 	}
 }
@@ -728,15 +760,36 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	// applies if no snapshot was ever saved (legacy or first-Add).
 	if a.snapshotStore != nil {
 		if snap, wasComplete, bitmap, ok := a.snapshotStore.LoadPieceBitmap(id); ok {
-			if info := t.Info(); info != nil {
+			if bitmap == nil {
+				log.Printf("verify: snapshot exists but no bitmap for %s — falling through to full hash", id)
+			} else if info := t.Info(); info == nil {
+				log.Printf("verify: snapshot exists but t.Info() is nil for %s — falling through to full hash", id)
+			} else {
 				saveTo := a.saveDirFor(id)
-				if cur, err := computeFileSnapshot(info, saveTo); err == nil && bytes.Equal(snap, cur) {
-					restored := a.restoreBoltFromBitmap(t, bitmap)
-					log.Printf("verify: snapshot match — skipping hash for %s (wasComplete=%v, restored=%d pieces)", id, wasComplete, restored)
+				cur, snapErr := computeFileSnapshot(info, saveTo)
+				if snapErr != nil {
+					log.Printf("verify: computeFileSnapshot error for %s: %v — falling through to full hash", id, snapErr)
+				} else if !bytes.Equal(snap, cur) {
+					log.Printf("verify: file-state mismatch for %s — files changed off-Mosaic; running full hash", id)
+				} else {
 					if wasComplete {
+						// Complete torrent: setCompletionFromPartFiles already set all
+						// pieces to complete in bolt (files exist at the final path with
+						// the right size). No need to replay the bitmap — that would just
+						// be 7000+ redundant bolt View transactions, each confirming what
+						// bolt already knows. Skipping the replay keeps this path at
+						// ~5ms (snapshot load + file stat) vs. 200-800ms.
+						log.Printf("verify: fast-resume %s — skipping hash (complete, no bolt restore needed)", id)
 						a.snapshotMu.Lock()
 						a.snapshotSaved[id] = true
 						a.snapshotMu.Unlock()
+					} else {
+						// Partial torrent: setCompletionFromPartFiles marked pieces for
+						// incomplete files as "not complete" because their .part file is
+						// not at the final path. Replay the saved bitmap so anacrolix
+						// sees the actual per-piece state without re-hashing.
+						restored := a.restoreBoltFromBitmap(t, bitmap)
+						log.Printf("verify: fast-resume %s — skipping hash (partial, restored=%d pieces)", id, restored)
 					}
 					if ctx.Err() == nil {
 						setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
@@ -744,6 +797,8 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 					return
 				}
 			}
+		} else {
+			log.Printf("verify: no snapshot for %s — first-add or recheck; running full hash", id)
 		}
 	}
 

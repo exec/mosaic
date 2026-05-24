@@ -40,23 +40,22 @@ func (s *VerifySnapshots) Get(ctx context.Context, infohash string) ([]byte, boo
 // GetWithBitmap returns Get + the saved piece-completion bitmap. bitmap
 // may be nil even when ok=true (legacy rows or rows saved before piece
 // state was tracked); callers fall back to verify in that case.
+//
+// Both snapshot and bitmap scan into []byte (NOT sql.RawBytes) — RawBytes
+// is only legal with Rows.Scan, where the driver keeps the underlying
+// connection pinned. Row.Scan rejects it ("sql: RawBytes isn't allowed
+// on Row.Scan") and we'd silently lose every fast-resume lookup, sending
+// every torrent back through verifyDataParallel on startup.
 func (s *VerifySnapshots) GetWithBitmap(ctx context.Context, infohash string) (snapshot []byte, wasComplete bool, bitmap []byte, ok bool, err error) {
-	var (
-		wc int
-		bm sql.RawBytes
-	)
+	var wc int
 	err = s.db.SQL().QueryRowContext(ctx,
 		`SELECT snapshot, was_complete, piece_bitmap FROM verify_snapshots WHERE infohash = ?`,
-		infohash).Scan(&snapshot, &wc, &bm)
+		infohash).Scan(&snapshot, &wc, &bitmap)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil, false, nil
 	}
 	if err != nil {
 		return nil, false, nil, false, err
-	}
-	if len(bm) > 0 {
-		bitmap = make([]byte, len(bm))
-		copy(bitmap, bm)
 	}
 	return snapshot, wc == 1, bitmap, true, nil
 }
