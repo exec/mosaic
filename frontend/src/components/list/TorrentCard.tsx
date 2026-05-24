@@ -24,7 +24,7 @@ export function TorrentCard(props: Props) {
 
   return (
     <div
-      class="group rounded-lg border border-white/[.06] bg-white/[.02] p-3 transition-colors duration-150 hover:border-white/[.10] hover:bg-white/[.04]"
+      class="group rounded-lg border border-white/[.06] bg-white/[.02] p-3 transition-all duration-150 hover:-translate-y-px hover:border-white/[.12] hover:bg-white/[.05] hover:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.6)]"
       classList={{'!border-accent-500/40 !bg-accent-500/[.04]': props.selected}}
       onClick={props.onSelect}
     >

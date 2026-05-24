@@ -85,7 +85,7 @@ export function SeedingPane(props: Props) {
               type="number"
               min={0}
               step={0.1}
-              class="w-24 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-right font-mono text-sm tabular-nums text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+              class="w-24 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-right font-mono text-sm tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
               value={ratio()}
               placeholder="e.g. 2.0"
               onInput={(e) => setRatio(e.currentTarget.value)}
@@ -113,7 +113,7 @@ export function SeedingPane(props: Props) {
               <input
                 type="number"
                 min={1}
-                class="w-24 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-right font-mono text-sm tabular-nums text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+                class="w-24 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-right font-mono text-sm tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
                 value={timeMin()}
                 placeholder="minutes"
                 onInput={(e) => setTimeMin(e.currentTarget.value)}

@@ -93,7 +93,7 @@ export function GeneralPane(props: Props) {
         <div class="flex items-center gap-2">
           <input
             type="text"
-            class="flex-1 rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30"
+            class="flex-1 rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
             value={savePath()}
             onInput={(e) => setSavePath(e.currentTarget.value)}
           />
@@ -126,7 +126,7 @@ export function GeneralPane(props: Props) {
         <div class="flex items-center gap-2">
           <input
             type="text"
-            class="flex-1 rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30 disabled:opacity-40"
+            class="flex-1 rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40 disabled:opacity-40"
             value={wfPath()}
             onInput={(e) => setWfPath(e.currentTarget.value)}
             disabled={!wfEnabled()}

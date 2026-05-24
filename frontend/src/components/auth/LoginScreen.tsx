@@ -44,7 +44,7 @@ export function LoginScreen(props: Props) {
             onInput={(e) => setUsername(e.currentTarget.value)}
             autocomplete="username"
             required
-            class="w-full rounded-md border border-white/[.06] bg-white/[.04] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30"
+            class="w-full rounded-md border border-white/[.06] bg-white/[.04] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           />
         </label>
 
@@ -56,7 +56,7 @@ export function LoginScreen(props: Props) {
             onInput={(e) => setPassword(e.currentTarget.value)}
             autocomplete="current-password"
             required
-            class="w-full rounded-md border border-white/[.06] bg-white/[.04] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30"
+            class="w-full rounded-md border border-white/[.06] bg-white/[.04] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           />
         </label>
 

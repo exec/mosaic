@@ -272,6 +272,7 @@ function AuthenticatedApp() {
         onToggleAltSpeed={() => store.toggleAltSpeed()}
         counts={counts()}
         webConfig={store.state.webConfig}
+        dhtEnabled={store.state.peerLimits.dht_enabled}
         onNavigateWebSettings={() => {
           store.setView('settings');
           store.setSettingsPane('web');
@@ -340,6 +341,7 @@ function AuthenticatedApp() {
           <Inspector
             open={store.state.inspectorOpenId !== null}
             detail={store.state.inspectorDetail}
+            downloadRate={store.state.torrents.find((t) => t.id === store.state.inspectorOpenId)?.download_rate ?? 0}
             tab={store.state.inspectorTab}
             bandwidthRing={store.bandwidthRing}
             bandwidthTick={store.state.bandwidthTick}

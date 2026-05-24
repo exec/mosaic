@@ -22,7 +22,7 @@ type Props = {
 
 const sectionClass = 'rounded-lg border border-white/[.06] bg-white/[.01] p-3';
 const labelClass = 'text-[10px] font-semibold uppercase tracking-wider text-zinc-500';
-const inputClass = 'w-full rounded-md border border-white/[.06] bg-black/30 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30';
+const inputClass = 'w-full rounded-md border border-white/[.06] bg-black/30 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40';
 
 export function AddTorrentModal(props: Props) {
   const [source, setSource] = createSignal<Source>(props.initialSource ?? 'magnet');
@@ -87,7 +87,7 @@ export function AddTorrentModal(props: Props) {
       <Dialog.Portal>
         <Dialog.Overlay class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm animate-in fade-in" />
         <div class="fixed inset-0 z-50 grid place-items-center p-4">
-          <Dialog.Content class="w-full max-w-xl rounded-xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl animate-in fade-in zoom-in-95">
+          <Dialog.Content class="w-full max-w-xl rounded-xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl modal-in">
             <form onSubmit={submit} class="flex flex-col gap-3 p-5">
               <div class="flex items-center justify-between">
                 <Dialog.Title class="inline-flex items-center gap-2 text-base font-semibold text-zinc-100">
@@ -122,7 +122,7 @@ export function AddTorrentModal(props: Props) {
 
                 <Show when={source() === 'magnet'}>
                   <textarea
-                    class="mt-3 h-24 w-full resize-none rounded-md border border-white/[.06] bg-black/30 p-3 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30"
+                    class="mt-3 h-24 w-full resize-none rounded-md border border-white/[.06] bg-black/30 p-3 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
                     placeholder="magnet:?xt=urn:btih:..."
                     value={magnet()}
                     onInput={(e) => setMagnet(e.currentTarget.value)}

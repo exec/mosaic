@@ -168,3 +168,23 @@ html[data-theme="mono"] {
 .zoom-in-95 { animation-name: zoom-in-95; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes zoom-in-95 { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+/* Modal dialog content — gentler scale-from-98 (a 580px dialog only travels
+   ~12px on entry instead of the ~29px of zoom-in-95, which feels janky on
+   wide dialogs) plus a 40ms delay so the overlay seats first and the dialog
+   glides in over it. Stagger reads as more premium than a simultaneous fade. */
+.modal-in {
+  animation: modal-in 200ms var(--ease-app) 40ms both;
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Slow "drop here" pulse used on the EmptyState magnet glyph. Much
+   gentler than Tailwind's animate-pulse (which goes 1→0.5 over 1s) —
+   3s breathe between 1 and 0.7 reads as alive, not seizing. */
+@keyframes drop-hint {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.7; }
+}

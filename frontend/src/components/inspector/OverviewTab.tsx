@@ -55,7 +55,7 @@ function RateLimitRow(props: {
           type="number"
           min="0"
           step="1"
-          class="w-20 rounded border border-white/[.06] bg-black/30 px-1.5 py-0.5 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          class="w-20 rounded border border-white/[.06] bg-black/30 px-1.5 py-0.5 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
           placeholder="Unlimited"
           value={input()}
           onInput={(e) => setInput(e.currentTarget.value)}
@@ -80,7 +80,7 @@ function ToggleRow(props: {label: string; description: string; checked: boolean;
         role="switch"
         aria-checked={props.checked}
         onClick={props.onChange}
-        class={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/20 ${props.checked ? 'bg-blue-500' : 'bg-zinc-600'}`}
+        class={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/20 ${props.checked ? 'bg-accent-500' : 'bg-white/10'}`}
       >
         <span
           class={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${props.checked ? 'translate-x-3.5' : 'translate-x-0.5'}`}
@@ -183,7 +183,7 @@ function SeedPolicySection(props: {infohash: string; completed: boolean}) {
               Stop at ratio
               <Show when={ratioEnabled()}>
                 <input type="number" min={0} step={0.1}
-                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none"
                   value={ratio()} placeholder="e.g. 2.0"
                   onInput={(e) => setRatio(e.currentTarget.value)} />
               </Show>
@@ -195,7 +195,7 @@ function SeedPolicySection(props: {infohash: string; completed: boolean}) {
               Stop after
               <Show when={timeEnabled()}>
                 <input type="number" min={1}
-                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none"
                   value={timeMin()} placeholder="minutes"
                   onInput={(e) => setTimeMin(e.currentTarget.value)} />
                 <span class="text-zinc-500">min</span>

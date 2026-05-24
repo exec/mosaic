@@ -8,6 +8,10 @@ type Props = {
   stats: GlobalStatsT;
   queuedCount: number;
   webConfig: WebConfigDTO;
+  // True when the user has DHT enabled in Connection settings. When false
+  // the DHT indicator is hidden entirely — a green "online" pip while the
+  // service is intentionally off is worse than no readout at all.
+  dhtEnabled: boolean;
   onClickWeb: () => void;
 };
 
@@ -33,12 +37,16 @@ export function StatusBar(props: Props) {
   });
   return (
     <footer class="flex h-7 shrink-0 items-center gap-4 border-t border-white/[.04] bg-zinc-950/60 px-3 text-[11px] text-zinc-400">
+      {/* Symmetric arrow treatment: each arrow colors only when its rate is
+          live (> 0). Previously ↓ was always accent-colored while ↑ was
+          always muted, making upload look perpetually secondary even when
+          actively seeding. */}
       <span class="inline-flex items-center gap-1.5">
-        <ArrowDown class="h-3 w-3 text-down" />
+        <ArrowDown class={`h-3 w-3 ${downRate() > 0 ? 'text-down' : 'text-zinc-500'}`} />
         <span class="font-mono tabular-nums">{fmtRate(downRate())}</span>
       </span>
       <span class="inline-flex items-center gap-1.5">
-        <ArrowUp class="h-3 w-3 text-zinc-500" />
+        <ArrowUp class={`h-3 w-3 ${upRate() > 0 ? 'text-seed' : 'text-zinc-500'}`} />
         <span class="font-mono tabular-nums">{fmtRate(upRate())}</span>
       </span>
 
@@ -62,10 +70,18 @@ export function StatusBar(props: Props) {
             <span class="font-mono tabular-nums">Web ON :{props.webConfig.port}</span>
           </button>
         </Show>
-        <span class="inline-flex items-center gap-1.5">
-          <Wifi class="h-3 w-3 text-seed" />
-          <span class="text-zinc-500">DHT online</span>
-        </span>
+        {/* DHT indicator: muted Wifi glyph + a small status dot, matching the
+            torrent-row status-dot vocabulary instead of the previous flat-green
+            icon that pulled the eye disproportionately. Hidden entirely when
+            the user has DHT disabled — a green "online" pip while the service
+            is intentionally off would be misleading. */}
+        <Show when={props.dhtEnabled}>
+          <span class="inline-flex items-center gap-1.5">
+            <Wifi class="h-3 w-3 text-zinc-500" />
+            <span class="h-1.5 w-1.5 rounded-full bg-seed" />
+            <span class="text-zinc-500">DHT</span>
+          </span>
+        </Show>
       </div>
     </footer>
   );

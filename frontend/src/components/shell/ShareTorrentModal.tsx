@@ -16,7 +16,7 @@ type Props = {
 };
 
 const inputClass =
-  'rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 text-sm text-zinc-200 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30';
+  'rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 text-sm text-zinc-200 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40';
 
 export function ShareTorrentModal(props: Props) {
   const [users, setUsers] = createSignal<UserDTO[]>([]);
@@ -85,7 +85,7 @@ export function ShareTorrentModal(props: Props) {
       <Dialog.Portal>
         <Dialog.Overlay class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm animate-in fade-in" />
         <div class="fixed inset-0 z-50 grid place-items-center p-4">
-          <Dialog.Content class="w-full max-w-lg rounded-xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl animate-in fade-in zoom-in-95">
+          <Dialog.Content class="w-full max-w-lg rounded-xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl modal-in">
             <div class="flex flex-col gap-3 p-5">
               <div class="flex items-center justify-between">
                 <Dialog.Title class="inline-flex items-center gap-2 text-base font-semibold text-zinc-100">

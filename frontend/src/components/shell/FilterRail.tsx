@@ -2,6 +2,7 @@ import {For, Show, type Component} from 'solid-js';
 import {ChevronDown, ListFilter, Folder, Tag} from 'lucide-solid';
 import type {StatusFilter, TorrentCounts} from '../../lib/store';
 import type {CategoryDTO, TagDTO} from '../../lib/bindings';
+import type {SettingsPane} from '../settings/SettingsSidebar';
 
 type StatusItem = {id: Exclude<StatusFilter, never>; label: string; key: keyof TorrentCounts};
 
@@ -24,6 +25,10 @@ type Props = {
   onSelect: (s: StatusFilter) => void;
   onSelectCategory: (id: number | null) => void;
   onSelectTag: (id: number | null) => void;
+  // Used by the empty-state inline links so first-time users know where
+  // categories and tags live (otherwise the "No categories yet" message
+  // is a dead end).
+  onNavigateSettingsPane: (p: SettingsPane) => void;
 };
 
 const Section: Component<{icon: typeof ListFilter; title: string; count?: number; children?: any}> = (p) => (
@@ -70,7 +75,18 @@ export function FilterRail(props: Props) {
       <Section icon={Folder} title="Categories">
         <Show
           when={props.categories.length > 0}
-          fallback={<p class="px-2 text-xs text-zinc-600">No categories yet</p>}
+          fallback={
+            <p class="px-2 text-xs text-zinc-600">
+              No categories yet.{' '}
+              <button
+                type="button"
+                onClick={() => props.onNavigateSettingsPane('categories')}
+                class="text-accent-400 hover:underline"
+              >
+                Create one
+              </button>
+            </p>
+          }
         >
           <ul class="flex flex-col gap-px">
             <For each={props.categories}>
@@ -103,7 +119,18 @@ export function FilterRail(props: Props) {
       <Section icon={Tag} title="Tags">
         <Show
           when={props.tags.length > 0}
-          fallback={<p class="px-2 text-xs text-zinc-600">No tags yet</p>}
+          fallback={
+            <p class="px-2 text-xs text-zinc-600">
+              No tags yet.{' '}
+              <button
+                type="button"
+                onClick={() => props.onNavigateSettingsPane('tags')}
+                class="text-accent-400 hover:underline"
+              >
+                Create one
+              </button>
+            </p>
+          }
         >
           <ul class="flex flex-col gap-px">
             <For each={props.tags}>

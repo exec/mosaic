@@ -34,7 +34,7 @@ export function BlocklistPane(props: Props) {
           <label class="text-xs text-zinc-500 mb-1 block">Blocklist URL</label>
           <input
             type="text"
-            class="w-full rounded border border-white/[.06] bg-black/30 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+            class="w-full rounded border border-white/[.06] bg-black/30 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
             value={url()}
             onInput={(e) => setUrl(e.currentTarget.value)}
             placeholder="https://example.com/blocklist.p2p"

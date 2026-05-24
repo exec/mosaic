@@ -5,6 +5,10 @@ import type {DetailDTO} from '../../lib/bindings';
 
 type Props = {
   detail: DetailDTO | null;
+  // Live B/s from the matching Torrent in the list. DetailDTO carries
+  // cumulative totals but not instantaneous rate, so the header pulls
+  // this via the same find-in-store pattern App.tsx uses for `sequential`.
+  downloadRate: number;
   onClose: () => void;
 };
 
@@ -44,9 +48,17 @@ export function InspectorHeader(props: Props) {
       <div class="mt-2 flex items-center justify-between font-mono text-xs tabular-nums text-zinc-500">
         <span>{fmtPercent(props.detail?.progress ?? 0)}</span>
         <span>
-          {props.detail
-            ? `${fmtRate(0)} · ETA ${fmtETA(props.detail.total_bytes - props.detail.bytes_done, 0)}`
-            : '—'}
+          {(() => {
+            const d = props.detail;
+            if (!d) return '—';
+            const remaining = d.total_bytes - d.bytes_done;
+            // Hide the "↓ rate · ETA" half once the torrent is at 100% —
+            // both numbers are meaningless then and the previous code
+            // happily printed "0 B/s · ETA ∞" forever, which read as a bug.
+            if (d.completed || remaining <= 0) return '✓ Complete';
+            if (d.paused) return 'Paused';
+            return `↓ ${fmtRate(props.downloadRate)} · ETA ${fmtETA(remaining, props.downloadRate)}`;
+          })()}
         </span>
       </div>
     </header>

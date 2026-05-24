@@ -90,7 +90,7 @@ function TagForm(props: {
     >
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Name</label>
-        <input class="rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none" value={name()} onInput={(e) => setName(e.currentTarget.value)} autofocus />
+        <input class="rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40" value={name()} onInput={(e) => setName(e.currentTarget.value)} autofocus />
       </div>
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Color</label>

@@ -185,7 +185,7 @@ function RuleForm(props: {
         <label class="text-xs text-zinc-500">Start</label>
         <input
           type="time"
-          class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+          class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           value={start()}
           onInput={(e) => setStart(e.currentTarget.value)}
         />
@@ -194,7 +194,7 @@ function RuleForm(props: {
         <label class="text-xs text-zinc-500">End</label>
         <input
           type="time"
-          class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+          class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           value={end()}
           onInput={(e) => setEnd(e.currentTarget.value)}
         />
@@ -212,7 +212,7 @@ function RuleForm(props: {
           <input
             type="number"
             min="0"
-            class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+            class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-sm tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
             value={down()}
             onInput={(e) => setDown(parseInt(e.currentTarget.value || '0', 10))}
           />
@@ -222,7 +222,7 @@ function RuleForm(props: {
           <input
             type="number"
             min="0"
-            class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+            class="w-32 rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-sm tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
             value={up()}
             onInput={(e) => setUp(parseInt(e.currentTarget.value || '0', 10))}
           />

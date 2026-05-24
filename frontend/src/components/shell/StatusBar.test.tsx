@@ -37,7 +37,7 @@ describe('StatusBar web indicator', () => {
   test('renders "Web ON :{port}" when webConfig.enabled', () => {
     const onClickWeb = vi.fn();
     dispose = render(
-      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={onCfg} onClickWeb={onClickWeb} />,
+      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={onCfg} dhtEnabled={true} onClickWeb={onClickWeb} />,
       host,
     );
     const pill = host.querySelector('[data-testid="statusbar-web"]');
@@ -48,7 +48,7 @@ describe('StatusBar web indicator', () => {
   test('does NOT render the pill when webConfig.enabled is false', () => {
     const onClickWeb = vi.fn();
     dispose = render(
-      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={offCfg} onClickWeb={onClickWeb} />,
+      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={offCfg} dhtEnabled={true} onClickWeb={onClickWeb} />,
       host,
     );
     expect(host.querySelector('[data-testid="statusbar-web"]')).toBeNull();
@@ -58,7 +58,7 @@ describe('StatusBar web indicator', () => {
   test('clicking the pill calls onClickWeb', () => {
     const onClickWeb = vi.fn();
     dispose = render(
-      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={onCfg} onClickWeb={onClickWeb} />,
+      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={onCfg} dhtEnabled={true} onClickWeb={onClickWeb} />,
       host,
     );
     const pill = host.querySelector<HTMLButtonElement>('[data-testid="statusbar-web"]')!;
@@ -74,6 +74,7 @@ describe('StatusBar web indicator', () => {
           stats={emptyStats}
           queuedCount={0}
           webConfig={{...onCfg, port: 9091}}
+          dhtEnabled={true}
           onClickWeb={onClickWeb}
         />
       ),
@@ -82,12 +83,21 @@ describe('StatusBar web indicator', () => {
     expect(host.textContent).toContain('Web ON :9091');
   });
 
-  test('still renders DHT online indicator', () => {
+  test('renders DHT indicator when dht is enabled', () => {
     const onClickWeb = vi.fn();
     dispose = render(
-      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={offCfg} onClickWeb={onClickWeb} />,
+      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={offCfg} dhtEnabled={true} onClickWeb={onClickWeb} />,
       host,
     );
-    expect(host.textContent).toContain('DHT online');
+    expect(host.textContent).toContain('DHT');
+  });
+
+  test('hides DHT indicator when dht is disabled', () => {
+    const onClickWeb = vi.fn();
+    dispose = render(
+      () => <StatusBar stats={emptyStats} queuedCount={0} webConfig={offCfg} dhtEnabled={false} onClickWeb={onClickWeb} />,
+      host,
+    );
+    expect(host.textContent ?? '').not.toContain('DHT');
   });
 });

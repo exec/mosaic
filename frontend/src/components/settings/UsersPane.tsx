@@ -20,7 +20,7 @@ function PaneHeader(props: {title: string; subtitle?: string}) {
 }
 
 const inputClass =
-  'w-full rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent-500/50 focus:outline-none focus:ring-1 focus:ring-accent-500/30';
+  'w-full rounded-md border border-white/[.06] bg-black/30 px-2 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40';
 
 // Permission flags, in display order. Each maps to a UserInput / UserDTO key.
 const PERMS: {key: keyof UserInput & string; label: string; help: string}[] = [

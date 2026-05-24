@@ -425,11 +425,11 @@ function FeedForm(props: {
       </Show>
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Name</label>
-        <input class="rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none" value={name()} onInput={(e) => setName(e.currentTarget.value)} autofocus placeholder="e.g. Ubuntu releases" />
+        <input class="rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40" value={name()} onInput={(e) => setName(e.currentTarget.value)} autofocus placeholder="e.g. Ubuntu releases" />
       </div>
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">URL</label>
-        <input class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none" value={url()} onInput={(e) => setUrl(e.currentTarget.value)} placeholder="https://example.com/rss.xml" />
+        <input class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40" value={url()} onInput={(e) => setUrl(e.currentTarget.value)} placeholder="https://example.com/rss.xml" />
       </div>
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Interval</label>
@@ -437,7 +437,7 @@ function FeedForm(props: {
           <input
             type="number"
             min="1"
-            class="w-24 rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+            class="w-24 rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-sm tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
             value={interval()}
             onInput={(e) => setInterval(parseInt(e.currentTarget.value || '30', 10))}
           />
@@ -512,7 +512,7 @@ function FilterForm(props: {
           Regex <span class="text-rose-400" aria-label="required">*</span>
         </label>
         <input
-          class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+          class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           classList={{'border-rose-500/50': regex().trim() !== '' && !regexValid()}}
           value={regex()}
           onInput={(e) => setRegex(e.currentTarget.value)}
@@ -524,7 +524,7 @@ function FilterForm(props: {
         <label class="text-xs text-zinc-500">Category</label>
         <div class="flex items-center gap-2">
           <select
-            class="w-fit rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+            class="w-fit rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
             value={categoryID() ?? ''}
             onChange={(e) => {
               const v = e.currentTarget.value;
@@ -542,7 +542,7 @@ function FilterForm(props: {
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Save path</label>
         <input
-          class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/50 focus:outline-none"
+          class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           value={savePath()}
           onInput={(e) => setSavePath(e.currentTarget.value)}
           placeholder="Optional — overrides category/default"
