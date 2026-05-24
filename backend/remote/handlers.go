@@ -1508,3 +1508,56 @@ func (h *Handlers) UnshareTorrent(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
+
+// ---- per-torrent rate limits ----
+//
+// The desktop app previously called Service.{Get,Set}TorrentRateLimits via
+// Wails bindings only; surfacing the same operations over REST lets the
+// browser/mosaicd flavor drive them too AND lets the Wails frontend use a
+// single transport path (http_transport routes both flavors through chi).
+
+func (h *Handlers) GetTorrentRateLimits(w http.ResponseWriter, r *http.Request) {
+	l, err := h.svc.GetTorrentRateLimits(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
+}
+
+func (h *Handlers) SetTorrentRateLimits(w http.ResponseWriter, r *http.Request) {
+	var l api.TorrentRateLimitsDTO
+	if err := decodeJSON(w, r, &l); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.SetTorrentRateLimits(r.Context(), chi.URLParam(r, "id"), l.DownKbps, l.UpKbps); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ---- watch folder ----
+//
+// PickWatchFolder (native directory picker) stays Wails-only — there's no
+// sensible remote equivalent (the server can't pop a dialog on the user's
+// machine). The browser flavor's pane already gates that button on
+// isWailsRuntime(). Get/Set are general settings and are exposed here.
+
+func (h *Handlers) GetWatchFolder(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.svc.GetWatchFolder(r.Context()))
+}
+
+func (h *Handlers) SetWatchFolder(w http.ResponseWriter, r *http.Request) {
+	var c api.WatchFolderDTO
+	if err := decodeJSON(w, r, &c); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.SetWatchFolder(r.Context(), c); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}

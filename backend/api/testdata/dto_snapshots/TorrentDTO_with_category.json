@@ -23,6 +23,7 @@
   ],
   "queue_position": 1,
   "force_start": false,
+  "sequential": false,
   "queued": false,
   "verifying": false,
   "files_missing": false,

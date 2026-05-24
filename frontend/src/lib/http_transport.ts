@@ -223,6 +223,23 @@ const ROUTES: Record<string, RouteSpec> = {
     body: ([, p]) => p,
     unwrap: okEnvelope,
   },
+  GetTorrentRateLimits: {
+    method: 'GET',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/rate_limits`,
+  },
+  SetTorrentRateLimits: {
+    method: 'PUT',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/rate_limits`,
+    body: ([, downKbps, upKbps]) => ({down_kbps: downKbps, up_kbps: upKbps}),
+    unwrap: okEnvelope,
+  },
+  GetWatchFolder: {method: 'GET', path: () => '/api/settings/watch_folder'},
+  SetWatchFolder: {
+    method: 'PUT',
+    path: () => '/api/settings/watch_folder',
+    body: ([c]) => c,
+    unwrap: okEnvelope,
+  },
   GetBlocklist: {method: 'GET', path: () => '/api/settings/blocklist'},
   SetBlocklistURL: {
     method: 'PUT',
