@@ -63,7 +63,7 @@ export function WindowShell(props: Props) {
           window is already key. Parley hit this on Tauri and solved it the
           same way. h-7 covers the traffic-lights inset on macOS and sits
           left of WindowControls on Windows + Linux. */}
-      <div class="flex h-7 shrink-0">
+      <div class="relative flex h-7 shrink-0">
         <div
           class="flex-1"
           style={{
@@ -82,6 +82,20 @@ export function WindowShell(props: Props) {
         <Show when={props.frameless}>
           <WindowControls />
         </Show>
+        {/* Centered wordmark. Thin-tracked uppercase Inter with a silver
+            gradient — luxury-brand aesthetic without competing with the
+            content below. pointer-events:none and select-none so it stays
+            invisible to drag / window-control clicks and text selection.
+            The 0.5em right padding offsets letter-spacing's trailing gap
+            so the M..C visually balances around the center axis. */}
+        <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <span
+            class="select-none bg-gradient-to-b from-zinc-200 to-zinc-500 bg-clip-text text-[11px] font-extralight uppercase text-transparent"
+            style={{'letter-spacing': '0.5em', 'padding-left': '0.5em'}}
+          >
+            Mosaic
+          </span>
+        </div>
       </div>
       <div class="flex flex-1 min-h-0">
         <IconRail
