@@ -17,7 +17,10 @@ type Props = {
 export function TopToolbar(props: Props) {
   return (
     <header
-      class="flex h-12 shrink-0 items-center gap-3 border-b border-white/[.04] bg-zinc-950/80 px-3 backdrop-blur-md"
+      // 8px top padding shifts items-center down by ~4px so the search
+      // bar + buttons read as centered in the visible portion of the
+      // row (the top of the toolbar sits under the drag overlay).
+      class="flex h-12 shrink-0 items-center gap-3 border-b border-white/[.04] bg-zinc-950/80 px-3 pt-2 backdrop-blur-md"
       style={{'--wails-draggable': 'drag', '-webkit-app-region': 'drag'}}
     >
       {/* Search + action clusters lift to z-30 (relative + z-30) so they
