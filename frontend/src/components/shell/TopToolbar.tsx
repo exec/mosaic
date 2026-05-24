@@ -20,19 +20,24 @@ export function TopToolbar(props: Props) {
       class="flex h-12 shrink-0 items-center gap-3 border-b border-white/[.04] bg-zinc-950/80 px-3 backdrop-blur-md"
       style={{'--wails-draggable': 'drag', '-webkit-app-region': 'drag'}}
     >
-      {/* Drag affordance — invisible but full-height area; the toolbar IS the drag region */}
-      <div class="relative flex-1 max-w-md" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
+      {/* Search + action clusters lift to z-30 (relative + z-30) so they
+          render ABOVE the WindowShell's drag overlay (z-20) — without
+          this the top half of the search input and buttons would be
+          intercepted by the overlay and clicks would be interpreted as
+          window drags. The toolbar's bare flex padding remains under the
+          overlay, so dragging from empty toolbar space still works. */}
+      <div class="relative z-30 flex-1 max-w-md" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
         <input
           type="text"
           placeholder="Search torrents…"
           value={props.searchQuery}
           onInput={(e) => props.onSearch(e.currentTarget.value)}
-          class="w-full rounded-md border border-white/[.06] bg-white/[.02] py-1.5 pl-8 pr-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent-500/50 focus:bg-white/[.04] focus:outline-none focus:ring-1 focus:ring-accent-500/30"
+          class="w-full rounded-md border border-white/[.06] bg-white/[.02] py-1.5 pl-8 pr-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent-500/60 focus:bg-white/[.04] focus:outline-none focus:ring-2 focus:ring-accent-500/40"
         />
       </div>
 
-      <div class="flex items-center gap-1.5" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
+      <div class="relative z-30 flex items-center gap-1.5" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <Button variant="secondary" onClick={props.onAddTorrent}>
           <FileDown class="h-3.5 w-3.5" />
           .torrent

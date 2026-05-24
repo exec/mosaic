@@ -62,11 +62,17 @@ export function isItemVisible(id: PinnableID, ctx: VisibilityCtx): boolean {
   return !meta?.visible || meta.visible(ctx);
 }
 
-// 'torrents' is non-negotiable; the rest matches the IconRail layout
-// users had pre-customization (Schedule + RSS up top, Settings + About
-// at the bottom) so first-launch looks identical to the old hardcoded
-// rail.
-const DEFAULT_PINS: PinnableID[] = ['torrents', 'schedule', 'rss', 'settings', 'about'];
+// 'torrents' is non-negotiable and anchored at index 0. 'settings' is also
+// non-negotiable but rendered as a fixed bottom-of-rail affordance (NOT
+// stored in this array) because it's a meta-shortcut — losing the entry
+// point to settings is a footgun, and the rail's bottom corner is the
+// conventional home for meta/preferences across desktop apps. Default
+// matches the rail layout pre-customization (Schedule + RSS up top,
+// About also up top now that Settings has its own slot at the bottom)
+// so first-launch is one extra slot in the configurable area, not a
+// missing element.
+const LOCKED_IDS: ReadonlySet<PinnableID> = new Set(['torrents', 'settings']);
+const DEFAULT_PINS: PinnableID[] = ['torrents', 'schedule', 'rss', 'about'];
 const STORAGE_KEY = 'mosaic.sidebar_pins.v1';
 
 function loadInitial(): PinnableID[] {
@@ -75,8 +81,12 @@ function loadInitial(): PinnableID[] {
     if (!raw) return DEFAULT_PINS;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return DEFAULT_PINS;
-    // Filter to known ids; dedupe; force torrents to lead.
-    const known = parsed.filter((id): id is PinnableID => typeof id === 'string' && id in ITEM_REGISTRY);
+    // Filter to known ids; drop 'settings' (it's been promoted to a fixed
+    // bottom-corner slot — leftover entries from the previous schema
+    // shouldn't conjure a second Settings icon up top); dedupe; force
+    // torrents to lead.
+    const known = parsed.filter((id): id is PinnableID =>
+      typeof id === 'string' && id in ITEM_REGISTRY && id !== 'settings');
     const dedup = Array.from(new Set(known));
     const rest = dedup.filter((id) => id !== 'torrents');
     return ['torrents', ...rest];
@@ -97,12 +107,24 @@ function persist(next: PinnableID[]) {
 }
 
 function applyInvariants(input: PinnableID[]): PinnableID[] {
-  const dedup = Array.from(new Set(input));
+  // Strip any locked id that snuck in via caller, dedupe, force torrents
+  // to lead. Locked ids (torrents, settings) are NEVER in the user array
+  // — torrents is rendered explicitly at index 0, settings as a fixed
+  // bottom-corner slot.
+  const dedup = Array.from(new Set(input.filter((id) => id !== 'settings')));
   const rest = dedup.filter((id) => id !== 'torrents');
   return ['torrents', ...rest];
 }
 
 export const sidebarPins = pinsSignal;
+
+// True for ids that the UI must NEVER let the user unpin (torrents,
+// settings). Used by IconRail to disable drag + context-menu unpin on
+// those rows, and by SettingsSidebar to hide the pin toggle if either
+// id ever appears as a "pane" (it doesn't today, but cheap guard).
+export function isLocked(id: PinnableID): boolean {
+  return LOCKED_IDS.has(id);
+}
 
 export function setPins(next: PinnableID[]) {
   const final = applyInvariants(next);
@@ -111,21 +133,23 @@ export function setPins(next: PinnableID[]) {
 }
 
 export function isPinned(id: PinnableID): boolean {
+  if (isLocked(id)) return true; // Always pinned by structural rule.
   return pinsSignal().includes(id);
 }
 
 export function pinItem(id: PinnableID) {
+  if (isLocked(id)) return; // Already "pinned" by structural rule.
   if (isPinned(id)) return;
   setPins([...pinsSignal(), id]);
 }
 
 export function unpinItem(id: PinnableID) {
-  if (id === 'torrents') return; // Locked.
+  if (isLocked(id)) return; // Locked.
   setPins(pinsSignal().filter((x) => x !== id));
 }
 
 export function togglePin(id: PinnableID) {
-  if (id === 'torrents') return;
+  if (isLocked(id)) return;
   if (isPinned(id)) unpinItem(id);
   else pinItem(id);
 }

@@ -10,6 +10,7 @@ import {
   unpinItem,
   reorderPins,
   isItemVisible,
+  isLocked,
   ITEM_REGISTRY,
   type PinnableID,
 } from '../../lib/sidebar_pins';
@@ -93,7 +94,7 @@ export function IconRail(props: Props) {
 
   const Btn: Component<{id: PinnableID; idx: number}> = (p) => {
     const meta = ITEM_REGISTRY[p.id];
-    const draggable = p.id !== 'torrents';
+    const draggable = !isLocked(p.id);
     const isDragging = () => draggingIdx() === p.idx;
     const showIndicatorAbove = () => dropIdx() === p.idx && dropAbove() && draggingIdx() !== null && draggingIdx() !== p.idx;
     const showIndicatorBelow = () => dropIdx() === p.idx && !dropAbove() && draggingIdx() !== null && draggingIdx() !== p.idx;
@@ -119,6 +120,11 @@ export function IconRail(props: Props) {
         }}
         onDragOver={(e) => {
           if (draggingIdx() == null) return;
+          // Locked rows (Settings at idx -1) reject drops outright — no
+          // preventDefault, no dropIdx update, no indicator. Without this
+          // the user could drag an item over Settings and see a drop
+          // indicator on a row that doesn't actually accept the move.
+          if (isLocked(p.id)) return;
           // preventDefault enables drop. Without it the browser refuses.
           e.preventDefault();
           if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
@@ -136,6 +142,7 @@ export function IconRail(props: Props) {
           }
         }}
         onDrop={(e) => {
+          if (isLocked(p.id)) return;
           e.preventDefault();
           commitDrop();
         }}
@@ -145,10 +152,10 @@ export function IconRail(props: Props) {
             want it to sit ABOVE this row or BELOW it depending on which
             half the mouse is in. */}
         <Show when={showIndicatorAbove()}>
-          <span class="pointer-events-none absolute -top-0.5 left-1 right-1 h-0.5 rounded-full bg-accent-500" />
+          <span class="pointer-events-none absolute -top-0.5 left-2 right-2 h-[3px] rounded-full bg-accent-500 shadow-[0_0_6px_var(--color-accent-500)]" />
         </Show>
         <Show when={showIndicatorBelow()}>
-          <span class="pointer-events-none absolute -bottom-0.5 left-1 right-1 h-0.5 rounded-full bg-accent-500" />
+          <span class="pointer-events-none absolute -bottom-0.5 left-2 right-2 h-[3px] rounded-full bg-accent-500 shadow-[0_0_6px_var(--color-accent-500)]" />
         </Show>
         <Tooltip label={meta.label} placement="right">
           <button
@@ -157,7 +164,7 @@ export function IconRail(props: Props) {
             class="relative grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-all duration-150 hover:text-zinc-200"
             classList={{
               '!text-zinc-100': isActive(p.id),
-              'opacity-30': isDragging(),
+              'opacity-50': isDragging(),
             }}
           >
             <meta.icon class="h-4 w-4" />
@@ -169,8 +176,9 @@ export function IconRail(props: Props) {
       </div>
     );
 
-    // Torrents has no unpin option, so it skips the context menu wrapper.
-    if (p.id === 'torrents') return button;
+    // Locked ids (torrents, settings) skip the context menu wrapper —
+    // there's no unpin action to offer.
+    if (isLocked(p.id)) return button;
 
     return (
       <ContextMenu trigger={button}>
@@ -186,19 +194,21 @@ export function IconRail(props: Props) {
       class="flex h-full w-12 flex-col items-center border-r border-white/[.04] bg-white/[.01] pt-10 pb-3"
       style={{'--wails-draggable': 'drag', '-webkit-app-region': 'drag'}}
     >
-      {/* Single flat list now — the old top/bottom split made sense when
-          the rail was hardcoded (nav vs settings), but user-pinned items
-          don't carry that semantic split, and forcing them into one
-          group is much simpler for drag/drop reordering. Logout still
-          pins to the very bottom because it's a session-level action,
-          not a navigation target. */}
+      {/* Top group: torrents (locked at idx 0) + everything the user has
+          pinned, in order. Draggable + context-menu-unpinnable. */}
       <div class="flex flex-1 flex-col gap-1" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <For each={visiblePins()}>
           {(id, idx) => <Btn id={id} idx={idx()} />}
         </For>
       </div>
-      <Show when={props.onLogout}>
-        <div class="flex flex-col" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
+      {/* Bottom group: Settings (always; structurally locked) and Logout
+          (web flavor only). Settings is rendered through Btn so it picks
+          up the same active-state vocabulary (text-zinc-100 + accent
+          edge bar) as the top group, but isLocked() suppresses its drag
+          handle and context menu so the user can't move or unpin it. */}
+      <div class="flex flex-col gap-1" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
+        <Btn id="settings" idx={-1} />
+        <Show when={props.onLogout}>
           <Tooltip label="Sign out" placement="right">
             <button
               type="button"
@@ -208,8 +218,8 @@ export function IconRail(props: Props) {
               <LogOut class="h-4 w-4" />
             </button>
           </Tooltip>
-        </div>
-      </Show>
+        </Show>
+      </div>
     </nav>
   );
 }

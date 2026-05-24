@@ -15,6 +15,8 @@ const SpeedTab = lazy(() => import('./SpeedTab').then((m) => ({default: m.SpeedT
 type Props = {
   open: boolean;
   detail: DetailDTO | null;
+  // Live download rate from the matching Torrent in the list — see header.
+  downloadRate: number;
   tab: InspectorTab;
   bandwidthRing: BandwidthRing;
   bandwidthTick: number;
@@ -28,8 +30,11 @@ type Props = {
 export function Inspector(props: Props) {
   return (
     <Show when={props.open}>
-      <aside class="flex h-full w-[420px] shrink-0 flex-col border-l border-white/[.04] bg-white/[.01] backdrop-blur-sm animate-in fade-in">
-        <InspectorHeader detail={props.detail} onClose={props.onClose} />
+      {/* pt-7 keeps the header (title + close X) below the drag overlay at
+          the top of the window. Background paints to the top edge so the
+          inspector visually extends top-to-bottom like the side rails. */}
+      <aside class="flex h-full w-[420px] shrink-0 flex-col border-l border-white/[.04] bg-white/[.01] backdrop-blur-sm animate-in fade-in pt-7">
+        <InspectorHeader detail={props.detail} downloadRate={props.downloadRate} onClose={props.onClose} />
         <div class="border-b border-white/[.04] px-3 py-2">
           <InspectorTabs active={props.tab} onChange={props.onTabChange} />
         </div>

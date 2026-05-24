@@ -1,5 +1,5 @@
 import {For, createMemo} from 'solid-js';
-import {Sliders, Palette, Wifi, Globe, Users, Download, MonitorSmartphone, Calendar, Shield, Rss, Folder, Tag, Info, TrendingUp, Pin, PinOff} from 'lucide-solid';
+import {Sliders, Palette, Wifi, Globe, Users, Download, MonitorSmartphone, Calendar, Shield, Rss, Folder, Tag, Info, TrendingUp, Pin} from 'lucide-solid';
 import {isWailsRuntime} from '../../lib/runtime';
 import type {ServerFlavor, UserDTO} from '../../lib/bindings';
 import {canChangeSettings, canManageRSS, canManageCatTags} from '../../lib/permissions';
@@ -97,7 +97,10 @@ export function SettingsSidebar(props: Props) {
                       'opacity-0 group-hover/row:opacity-100': !pinned(),
                     }}
                   >
-                    {pinned() ? <Pin class="h-3 w-3 fill-current" /> : <PinOff class="h-3 w-3" />}
+                    {/* Same icon in both states — pinned = filled, unpinned =
+                        outline. PinOff (slashed pin) read as "this is the unpin
+                        action" rather than "this is currently unpinned." */}
+                    <Pin class="h-3 w-3" classList={{'fill-current': pinned()}} />
                   </button>
                 </Tooltip>
               </li>

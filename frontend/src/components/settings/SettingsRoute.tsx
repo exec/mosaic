@@ -82,7 +82,10 @@ export function SettingsRoute(props: Props) {
         flavor={props.serverFlavor}
         currentUser={props.currentUser}
       />
-      <div class="flex-1 overflow-auto">
+      {/* pt-7 keeps each pane's content below the drag overlay at the top
+          of the window. SettingsSidebar above paints to the top edge so
+          the drag overlay sits cleanly over its empty pt-10 strip. */}
+      <div class="flex-1 overflow-auto pt-7">
         <Switch>
           <Match when={props.pane === 'general'}>
             <GeneralPane

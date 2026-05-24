@@ -48,6 +48,7 @@ type Props = {
   // All torrent badge tallies, computed once per tick in App.tsx.
   counts: TorrentCounts;
   webConfig: WebConfigDTO;
+  dhtEnabled: boolean;
   onNavigateWebSettings: () => void;
   children: JSX.Element; // the main pane (TorrentList)
   inspector?: JSX.Element;
@@ -56,51 +57,11 @@ type Props = {
 
 export function WindowShell(props: Props) {
   return (
-    <div class="flex h-full flex-col">
-      {/* Always-on top drag row. Wails's native drag uses the
-          `--wails-draggable: drag` custom property; we also keep
-          -webkit-app-region:drag for WKWebView's title-bar inset, plus an
-          explicit onMouseDown that calls window.WailsInvoke('drag') —
-          without the imperative path, focused-window drags get dropped on
-          macOS because Wails's default `deferDragToMouseMove` flag waits
-          for a follow-up mousemove that doesn't always arrive when the
-          window is already key. Parley hit this on Tauri and solved it the
-          same way. h-7 covers the traffic-lights inset on macOS and sits
-          left of WindowControls on Windows + Linux. */}
-      <div class="relative flex h-7 shrink-0">
-        <div
-          class="flex-1"
-          style={{
-            '--wails-draggable': 'drag',
-            '-webkit-app-region': 'drag',
-          }}
-          onMouseDown={(e) => {
-            if (e.button !== 0) return;
-            try {
-              (window as any).WailsInvoke?.('drag');
-            } catch {
-              // browser mode or non-Wails host — no-op
-            }
-          }}
-        />
-        <Show when={props.frameless}>
-          <WindowControls />
-        </Show>
-        {/* Centered wordmark. Thin-tracked uppercase Inter with a silver
-            gradient — luxury-brand aesthetic without competing with the
-            content below. pointer-events:none and select-none so it stays
-            invisible to drag / window-control clicks and text selection.
-            The 0.5em right padding offsets letter-spacing's trailing gap
-            so the M..C visually balances around the center axis. */}
-        <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <span
-            class="select-none bg-gradient-to-b from-zinc-200 to-zinc-500 bg-clip-text text-[11px] font-extralight uppercase text-transparent"
-            style={{'letter-spacing': '0.5em', 'padding-left': '0.5em'}}
-          >
-            Mosaic
-          </span>
-        </div>
-      </div>
+    // `relative` anchors the absolutely-positioned drag overlay below.
+    // The body row fills the entire window now so sidebars paint
+    // edge-to-edge top → bottom; the drag bar sits over the top h-7
+    // strip via z-index instead of stealing layout space.
+    <div class="relative flex h-full flex-col">
       <div class="flex flex-1 min-h-0">
         <IconRail
           view={props.view}
@@ -124,26 +85,42 @@ export function WindowShell(props: Props) {
               onSelect={props.onStatusFilter}
               onSelectCategory={props.onSelectCategory}
               onSelectTag={props.onSelectTag}
+              onNavigateSettingsPane={props.onNavigateSettingsPane}
             />
           </Show>
+          {/* Sidebars (IconRail, FilterRail, SettingsSidebar inside
+              settings panes) already have their own pt-10 — their
+              backgrounds paint to the top edge while interactive content
+              sits below the drag strip. For non-sidebar content (torrent
+              list, settings pane content) we add pt-7 just inside `<main>`
+              so TopToolbar / pane headers don't get covered by the drag
+              overlay. */}
           <main class="flex flex-1 min-w-0 flex-col">
             <Switch>
               <Match when={props.view === 'torrents'}>
-                <TopToolbar
-                  searchQuery={props.searchQuery}
-                  onSearch={props.onSearchQuery}
-                  onAddMagnet={props.onAddMagnet}
-                  onAddTorrent={props.onAddTorrent}
-                  density={props.density}
-                  onDensityChange={props.onDensityChange}
-                  altSpeedActive={props.altSpeedActive}
-                  onToggleAltSpeed={props.onToggleAltSpeed}
-                />
-                <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
-                  <div class="h-full overflow-auto">
-                    {props.children}
-                  </div>
-                </DropZone>
+                {/* TopToolbar extends to the very top — its background
+                    paints up into the drag-overlay zone, matching how the
+                    sidebars do it. Interactive children inside the toolbar
+                    (search input, buttons) opt out of dragging via
+                    -webkit-app-region: no-drag AND lift to z-30 so the
+                    drag overlay (z-20) doesn't intercept their clicks. */}
+                <div class="flex flex-1 min-h-0 flex-col">
+                  <TopToolbar
+                    searchQuery={props.searchQuery}
+                    onSearch={props.onSearchQuery}
+                    onAddMagnet={props.onAddMagnet}
+                    onAddTorrent={props.onAddTorrent}
+                    density={props.density}
+                    onDensityChange={props.onDensityChange}
+                    altSpeedActive={props.altSpeedActive}
+                    onToggleAltSpeed={props.onToggleAltSpeed}
+                  />
+                  <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
+                    <div class="h-full overflow-auto">
+                      {props.children}
+                    </div>
+                  </DropZone>
+                </div>
               </Match>
               <Match when={props.view === 'settings'}>
                 {props.settings}
@@ -156,9 +133,58 @@ export function WindowShell(props: Props) {
           stats={props.stats}
           queuedCount={props.counts.queued}
           webConfig={props.webConfig}
+          dhtEnabled={props.dhtEnabled}
           onClickWeb={props.onNavigateWebSettings}
         />
         </div>
+      </div>
+
+      {/* Drag overlay — absolute, z-20, h-7. Sits ON TOP of sidebars and
+          main content so the window's top edge is always draggable
+          regardless of what's painted below. Wails's native drag uses the
+          `--wails-draggable` custom property; we also keep
+          -webkit-app-region:drag for WKWebView's title-bar inset, plus an
+          explicit onMouseDown that calls window.WailsInvoke('drag') —
+          without the imperative path, focused-window drags get dropped on
+          macOS because Wails's default `deferDragToMouseMove` flag waits
+          for a follow-up mousemove that doesn't always arrive when the
+          window is already key. Parley hit this on Tauri and solved it the
+          same way. h-7 covers the traffic-lights inset on macOS and hosts
+          WindowControls on Windows + Linux. */}
+      <div class="absolute inset-x-0 top-0 z-20 flex h-7">
+        <div
+          class="flex-1"
+          style={{
+            '--wails-draggable': 'drag',
+            '-webkit-app-region': 'drag',
+          }}
+          onMouseDown={(e) => {
+            if (e.button !== 0) return;
+            try {
+              (window as any).WailsInvoke?.('drag');
+            } catch {
+              // browser mode or non-Wails host — no-op
+            }
+          }}
+        />
+        <Show when={props.frameless}>
+          <WindowControls />
+        </Show>
+        {/* Centered wordmark — see hidden-on-macOS reasoning below. */}
+        <Show when={props.frameless}>
+          <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <span
+              class="select-none bg-gradient-to-b from-zinc-200 to-zinc-500 bg-clip-text text-[11px] font-light uppercase text-transparent"
+              style={{
+                'letter-spacing': '0.42em',
+                'padding-left': '0.42em',
+                filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.05))',
+              }}
+            >
+              Mosaic
+            </span>
+          </div>
+        </Show>
       </div>
     </div>
   );
