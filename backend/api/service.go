@@ -511,6 +511,29 @@ func (s *Service) PollFeedNow(ctx context.Context, feedID int) error {
 	return s.rssPoller.PollNow(ctx, feedID)
 }
 
+// GetFeedItems fetches the feed live and returns all its browsable items.
+func (s *Service) GetFeedItems(ctx context.Context, feedID int) ([]FeedItemDTO, error) {
+	if !CallerFrom(ctx).CanManageRSS() {
+		return nil, ErrForbidden
+	}
+	if s.rssPoller == nil {
+		return nil, fmt.Errorf("rss poller not attached")
+	}
+	return s.rssPoller.GetFeedItems(ctx, feedID)
+}
+
+// AddFeedItem adds a torrent from a URL (magnet URI or direct .torrent link)
+// sourced from a feed item. Uses the default save path when savePath is empty.
+func (s *Service) AddFeedItem(ctx context.Context, torrentURL, savePath string) (string, error) {
+	if !CallerFrom(ctx).CanAddTorrents() {
+		return "", ErrForbidden
+	}
+	if s.rssPoller == nil {
+		return "", fmt.Errorf("rss poller not attached")
+	}
+	return s.rssPoller.AddFeedItem(ctx, torrentURL, savePath)
+}
+
 // AppVersion returns the build-time version string the Service was attached
 // with. Empty string if AttachUpdater was never called.
 func (s *Service) AppVersion() string {
@@ -2205,6 +2228,14 @@ func (s *Service) setBoolSetting(ctx context.Context, key string, b bool) error 
 		v = "true"
 	}
 	return s.settings.Set(ctx, key, v)
+}
+
+// FeedItemDTO is a single item from a live-fetched RSS feed.
+type FeedItemDTO struct {
+	GUID       string `json:"guid"`
+	Title      string `json:"title"`
+	PubDate    string `json:"pub_date"`
+	TorrentURL string `json:"torrent_url"` // magnet: URI or https://…torrent; empty if unresolvable
 }
 
 // FeedDTO is the transport shape for an RSS/Atom feed subscription.

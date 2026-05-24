@@ -293,6 +293,13 @@ const ROUTES: Record<string, RouteSpec> = {
     unwrap: okEnvelope,
   },
   DeleteFeed: {method: 'DELETE', path: ([id]) => `/api/feeds/${id}`, unwrap: okEnvelope},
+  GetFeedItems: {method: 'GET', path: ([feedID]) => `/api/feeds/${feedID}/items`},
+  AddFeedItem: {
+    method: 'POST',
+    path: () => '/api/torrents/url',
+    body: ([torrentURL, savePath]) => ({url: torrentURL, save_path: savePath}),
+    unwrap: okEnvelope,
+  },
   ListFiltersByFeed: {method: 'GET', path: ([feedID]) => `/api/feeds/${feedID}/filters`},
   CreateFilter: {
     method: 'POST',

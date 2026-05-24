@@ -1,7 +1,7 @@
 import {createSignal, For, Show} from 'solid-js';
-import {Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight, RefreshCw} from 'lucide-solid';
+import {Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight, RefreshCw, Download, Loader} from 'lucide-solid';
 import {toast} from 'solid-sonner';
-import type {CategoryDTO, FeedDTO, FilterDTO} from '../../lib/bindings';
+import type {CategoryDTO, FeedDTO, FeedItemDTO, FilterDTO} from '../../lib/bindings';
 import {userErr} from '../../lib/errors';
 import {Button} from '../ui/Button';
 
@@ -13,11 +13,17 @@ type Props = {
   onUpdateFeed: (f: FeedDTO) => Promise<void>;
   onDeleteFeed: (id: number) => Promise<void>;
   onPollFeed: (id: number) => Promise<void>;
+  onGetFeedItems: (feedID: number) => Promise<FeedItemDTO[]>;
+  onAddFeedItem: (torrentURL: string) => Promise<void>;
   onLoadFilters: (feedID: number) => Promise<void>;
   onCreateFilter: (f: FilterDTO) => Promise<void>;
   onUpdateFilter: (f: FilterDTO) => Promise<void>;
   onDeleteFilter: (feedID: number, id: number) => Promise<void>;
 };
+
+const FEED_PRESETS: {name: string; url: string; interval_min: number}[] = [
+  {name: 'FOSS Torrents', url: 'https://fosstorrents.com/feed/torrents.xml', interval_min: 60},
+];
 
 function fmtLastPolled(unix: number): string {
   if (!unix) return 'Never';
@@ -37,6 +43,10 @@ export function RSSPane(props: Props) {
   const [creatingFilterFor, setCreatingFilterFor] = createSignal<number | null>(null);
   const [pollingFeedID, setPollingFeedID] = createSignal<number | null>(null);
   const [editingFilterID, setEditingFilterID] = createSignal<number | null>(null);
+  // items keyed by feedID; undefined = not yet loaded, null = loading
+  const [itemsByFeed, setItemsByFeed] = createSignal<Record<number, FeedItemDTO[] | null>>({});
+  const [filtersExpanded, setFiltersExpanded] = createSignal<Set<number>>(new Set());
+  const [downloadingURL, setDownloadingURL] = createSignal<string | null>(null);
 
   const toggleExpand = async (feedID: number) => {
     const next = new Set(expanded());
@@ -44,9 +54,39 @@ export function RSSPane(props: Props) {
       next.delete(feedID);
     } else {
       next.add(feedID);
-      try { await props.onLoadFilters(feedID); } catch (e) { toast.error(userErr(e)); }
+      // Kick off items fetch if not already loaded
+      if (itemsByFeed()[feedID] === undefined) {
+        setItemsByFeed((prev) => ({...prev, [feedID]: null})); // null = loading
+        try {
+          const items = await props.onGetFeedItems(feedID);
+          setItemsByFeed((prev) => ({...prev, [feedID]: items}));
+        } catch (e) {
+          setItemsByFeed((prev) => ({...prev, [feedID]: []}));
+          toast.error(`Couldn't load items — ${userErr(e)}`);
+        }
+      }
+      try { await props.onLoadFilters(feedID); } catch { /* non-fatal */ }
     }
     setExpanded(next);
+  };
+
+  const toggleFilters = (feedID: number) => {
+    const next = new Set(filtersExpanded());
+    if (next.has(feedID)) { next.delete(feedID); } else { next.add(feedID); }
+    setFiltersExpanded(next);
+  };
+
+  const handleDownload = async (item: FeedItemDTO) => {
+    if (!item.torrent_url) { toast.error('No torrent URL for this item'); return; }
+    setDownloadingURL(item.torrent_url);
+    try {
+      await props.onAddFeedItem(item.torrent_url);
+      toast.success(`Added "${item.title}"`);
+    } catch (e) {
+      toast.error(`Couldn't add torrent — ${userErr(e)}`);
+    } finally {
+      setDownloadingURL(null);
+    }
   };
 
   return (
@@ -153,98 +193,163 @@ export function RSSPane(props: Props) {
 
                     <Show when={expanded().has(feed.id)}>
                       <div class="ml-6 mb-2 border-l border-white/[.04] pl-3">
-                        <div class="flex items-center justify-between py-1.5">
-                          <span class="text-xs uppercase tracking-wide text-zinc-500">Filters</span>
-                          <Button variant="ghost" onClick={() => setCreatingFilterFor(feed.id)}>
-                            <Plus class="h-3 w-3" />
-                            Add filter
-                          </Button>
-                        </div>
 
-                        <Show when={creatingFilterFor() === feed.id}>
-                          <FilterForm
-                            initial={{id: 0, feed_id: feed.id, regex: '', category_id: null, save_path: '', enabled: true}}
-                            categories={props.categories}
-                            onCancel={() => setCreatingFilterFor(null)}
-                            onSubmit={async (next) => {
-                              try {
-                                await props.onCreateFilter(next);
-                                setCreatingFilterFor(null);
-                                toast.success('Filter added');
-                              } catch (e) { toast.error(userErr(e)); }
-                            }}
-                          />
+                        {/* ── Items browser ── */}
+                        <Show when={itemsByFeed()[feed.id] === null}>
+                          <div class="flex items-center gap-2 py-3 text-xs text-zinc-500">
+                            <Loader class="h-3 w-3 animate-spin" />
+                            Loading items…
+                          </div>
+                        </Show>
+                        <Show when={itemsByFeed()[feed.id] !== null && itemsByFeed()[feed.id] !== undefined}>
+                          <Show when={(itemsByFeed()[feed.id] ?? []).length === 0}>
+                            <p class="py-3 text-xs text-zinc-500">No items found in this feed.</p>
+                          </Show>
+                          <ul class="flex flex-col divide-y divide-white/[.03]">
+                            <For each={itemsByFeed()[feed.id] ?? []}>
+                              {(item) => (
+                                <li class="flex items-center justify-between gap-3 py-1.5 px-1 hover:bg-white/[.02]">
+                                  <div class="flex flex-col min-w-0">
+                                    <span class="text-xs text-zinc-200 truncate" title={item.title}>{item.title}</span>
+                                    <Show when={item.pub_date}>
+                                      <span class="text-[10px] text-zinc-600">{item.pub_date}</span>
+                                    </Show>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    disabled={!item.torrent_url || downloadingURL() === item.torrent_url}
+                                    title={item.torrent_url ? 'Download' : 'No torrent URL'}
+                                    class="shrink-0 grid h-6 w-6 place-items-center rounded text-zinc-500 hover:bg-accent-500/20 hover:text-accent-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                    onClick={() => handleDownload(item)}
+                                  >
+                                    <Show when={downloadingURL() === item.torrent_url} fallback={<Download class="h-3 w-3" />}>
+                                      <Loader class="h-3 w-3 animate-spin" />
+                                    </Show>
+                                  </button>
+                                </li>
+                              )}
+                            </For>
+                          </ul>
                         </Show>
 
-                        <Show when={(props.filtersByFeed[feed.id] ?? []).length === 0 && creatingFilterFor() !== feed.id}>
-                          <p class="py-3 text-xs text-zinc-500">No filters. Items in this feed won't auto-add until you create one.</p>
-                        </Show>
+                        {/* ── Auto-download filters (collapsible) ── */}
+                        <button
+                          type="button"
+                          class="flex items-center gap-1.5 mt-3 py-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                          onClick={() => toggleFilters(feed.id)}
+                        >
+                          <Show when={filtersExpanded().has(feed.id)} fallback={<ChevronRight class="h-3 w-3" />}>
+                            <ChevronDown class="h-3 w-3" />
+                          </Show>
+                          Auto-download filters
+                          <Show when={(props.filtersByFeed[feed.id] ?? []).length > 0}>
+                            <span class="rounded-full bg-white/[.06] px-1.5 py-0 text-[10px] text-zinc-400">
+                              {(props.filtersByFeed[feed.id] ?? []).length}
+                            </span>
+                          </Show>
+                        </button>
 
-                        <ul class="flex flex-col gap-px">
-                          <For each={props.filtersByFeed[feed.id] ?? []}>
-                            {(fil) => (
-                              <li>
-                                <Show
-                                  when={editingFilterID() === fil.id}
-                                  fallback={
-                                    <div class="flex items-center justify-between py-1.5 px-1 hover:bg-white/[.02]">
-                                      <div class="flex items-center gap-2 min-w-0">
-                                        <span
-                                          class="h-1.5 w-1.5 rounded-full shrink-0"
-                                          classList={{'bg-seed': fil.enabled, 'bg-zinc-600': !fil.enabled}}
-                                        />
-                                        <span class="font-mono text-xs text-zinc-200 truncate" title={fil.regex}>{fil.regex || '(no regex)'}</span>
-                                        <Show when={fil.category_id !== null}>
-                                          <span class="inline-flex items-center gap-1 rounded bg-white/[.04] px-1.5 py-0.5 text-[10px] text-zinc-300">
+                        <Show when={filtersExpanded().has(feed.id)}>
+                          <div class="mt-1 border-l border-white/[.04] pl-3">
+                            <div class="flex items-center justify-between py-1">
+                              <span class="text-[10px] uppercase tracking-wide text-zinc-600">
+                                Regex filters — matched items auto-add on poll
+                              </span>
+                              <Button variant="ghost" onClick={() => setCreatingFilterFor(feed.id)}>
+                                <Plus class="h-3 w-3" />
+                                Add filter
+                              </Button>
+                            </div>
+
+                            <Show when={creatingFilterFor() === feed.id}>
+                              <FilterForm
+                                initial={{id: 0, feed_id: feed.id, regex: '', category_id: null, save_path: '', enabled: true}}
+                                categories={props.categories}
+                                onCancel={() => setCreatingFilterFor(null)}
+                                onSubmit={async (next) => {
+                                  try {
+                                    await props.onCreateFilter(next);
+                                    setCreatingFilterFor(null);
+                                    toast.success('Filter added');
+                                  } catch (e) { toast.error(userErr(e)); }
+                                }}
+                              />
+                            </Show>
+
+                            <Show when={(props.filtersByFeed[feed.id] ?? []).length === 0 && creatingFilterFor() !== feed.id}>
+                              <p class="py-2 text-xs text-zinc-500">
+                                No filters yet. Use <code class="font-mono bg-white/[.04] px-1 rounded">.*</code> to auto-add everything, or a regex like <code class="font-mono bg-white/[.04] px-1 rounded">(?i)ubuntu.*amd64</code> to match specific items.
+                              </p>
+                            </Show>
+
+                            <ul class="flex flex-col gap-px">
+                              <For each={props.filtersByFeed[feed.id] ?? []}>
+                                {(fil) => (
+                                  <li>
+                                    <Show
+                                      when={editingFilterID() === fil.id}
+                                      fallback={
+                                        <div class="flex items-center justify-between py-1.5 px-1 hover:bg-white/[.02]">
+                                          <div class="flex items-center gap-2 min-w-0">
                                             <span
-                                              class="h-1.5 w-1.5 rounded-full"
-                                              style={{background: props.categories.find((c) => c.id === fil.category_id)?.color ?? '#71717a'}}
+                                              class="h-1.5 w-1.5 rounded-full shrink-0"
+                                              classList={{'bg-seed': fil.enabled, 'bg-zinc-600': !fil.enabled}}
                                             />
-                                            {props.categories.find((c) => c.id === fil.category_id)?.name ?? `#${fil.category_id}`}
-                                          </span>
-                                        </Show>
-                                        <Show when={fil.save_path}>
-                                          <span class="font-mono text-[10px] text-zinc-500 truncate" title={fil.save_path}>{fil.save_path}</span>
-                                        </Show>
-                                      </div>
-                                      <div class="flex gap-1 shrink-0">
-                                        <button class="grid h-6 w-6 place-items-center rounded text-zinc-500 hover:bg-white/[.04] hover:text-zinc-100" onClick={() => setEditingFilterID(fil.id)} title="Edit">
-                                          <Pencil class="h-3 w-3" />
-                                        </button>
-                                        <button
-                                          class="grid h-6 w-6 place-items-center rounded text-zinc-500 hover:bg-rose-500/20 hover:text-rose-300"
-                                          onClick={async () => {
-                                            if (!confirm('Delete this filter?')) return;
-                                            try {
-                                              await props.onDeleteFilter(feed.id, fil.id);
-                                              toast.success('Filter deleted');
-                                            } catch (e) { toast.error(userErr(e)); }
-                                          }}
-                                          title="Delete"
-                                        >
-                                          <Trash2 class="h-3 w-3" />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  }
-                                >
-                                  <FilterForm
-                                    initial={fil}
-                                    categories={props.categories}
-                                    onCancel={() => setEditingFilterID(null)}
-                                    onSubmit={async (next) => {
-                                      try {
-                                        await props.onUpdateFilter(next);
-                                        setEditingFilterID(null);
-                                        toast.success('Filter updated');
-                                      } catch (e) { toast.error(userErr(e)); }
-                                    }}
-                                  />
-                                </Show>
-                              </li>
-                            )}
-                          </For>
-                        </ul>
+                                            <span class="font-mono text-xs text-zinc-200 truncate" title={fil.regex}>{fil.regex || '(no regex)'}</span>
+                                            <Show when={fil.category_id !== null}>
+                                              <span class="inline-flex items-center gap-1 rounded bg-white/[.04] px-1.5 py-0.5 text-[10px] text-zinc-300">
+                                                <span
+                                                  class="h-1.5 w-1.5 rounded-full"
+                                                  style={{background: props.categories.find((c) => c.id === fil.category_id)?.color ?? '#71717a'}}
+                                                />
+                                                {props.categories.find((c) => c.id === fil.category_id)?.name ?? `#${fil.category_id}`}
+                                              </span>
+                                            </Show>
+                                            <Show when={fil.save_path}>
+                                              <span class="font-mono text-[10px] text-zinc-500 truncate" title={fil.save_path}>{fil.save_path}</span>
+                                            </Show>
+                                          </div>
+                                          <div class="flex gap-1 shrink-0">
+                                            <button class="grid h-6 w-6 place-items-center rounded text-zinc-500 hover:bg-white/[.04] hover:text-zinc-100" onClick={() => setEditingFilterID(fil.id)} title="Edit">
+                                              <Pencil class="h-3 w-3" />
+                                            </button>
+                                            <button
+                                              class="grid h-6 w-6 place-items-center rounded text-zinc-500 hover:bg-rose-500/20 hover:text-rose-300"
+                                              onClick={async () => {
+                                                if (!confirm('Delete this filter?')) return;
+                                                try {
+                                                  await props.onDeleteFilter(feed.id, fil.id);
+                                                  toast.success('Filter deleted');
+                                                } catch (e) { toast.error(userErr(e)); }
+                                              }}
+                                              title="Delete"
+                                            >
+                                              <Trash2 class="h-3 w-3" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      }
+                                    >
+                                      <FilterForm
+                                        initial={fil}
+                                        categories={props.categories}
+                                        onCancel={() => setEditingFilterID(null)}
+                                        onSubmit={async (next) => {
+                                          try {
+                                            await props.onUpdateFilter(next);
+                                            setEditingFilterID(null);
+                                            toast.success('Filter updated');
+                                          } catch (e) { toast.error(userErr(e)); }
+                                        }}
+                                      />
+                                    </Show>
+                                  </li>
+                                )}
+                              </For>
+                            </ul>
+                          </div>
+                        </Show>
+
                       </div>
                     </Show>
                   </div>
@@ -299,6 +404,25 @@ function FeedForm(props: {
         });
       }}
     >
+      <Show when={props.initial.id === 0 && FEED_PRESETS.length > 0}>
+        <div class="grid grid-cols-[80px_1fr] items-center gap-2">
+          <span class="text-xs text-zinc-500">Quick add</span>
+          <div class="flex flex-wrap gap-1.5">
+            <For each={FEED_PRESETS}>
+              {(preset) => (
+                <button
+                  type="button"
+                  class="rounded border border-white/[.08] bg-white/[.03] px-2 py-0.5 text-xs text-zinc-300 hover:border-accent-500/40 hover:bg-accent-500/10 hover:text-accent-300 transition-colors"
+                  onClick={() => { setName(preset.name); setUrl(preset.url); setInterval(preset.interval_min); }}
+                >
+                  {preset.name}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+        <div class="border-t border-white/[.04]" />
+      </Show>
       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
         <label class="text-xs text-zinc-500">Name</label>
         <input class="rounded border border-white/[.06] bg-black/30 px-2 py-1 text-sm text-zinc-100 focus:border-accent-500/50 focus:outline-none" value={name()} onInput={(e) => setName(e.currentTarget.value)} autofocus placeholder="e.g. Ubuntu releases" />

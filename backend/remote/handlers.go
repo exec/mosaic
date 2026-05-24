@@ -3,6 +3,7 @@ package remote
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -1156,6 +1157,40 @@ func (h *Handlers) DeleteFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.DeleteFilter(r.Context(), id); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) GetFeedItems(w http.ResponseWriter, r *http.Request) {
+	feedID, err := strconv.Atoi(chi.URLParam(r, "feedID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	items, err := h.svc.GetFeedItems(r.Context(), feedID)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (h *Handlers) AddFeedItem(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL      string `json:"url"`
+		SavePath string `json:"save_path"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+	if body.URL == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("url is required"))
+		return
+	}
+	_, err := h.svc.AddFeedItem(r.Context(), body.URL, body.SavePath)
+	if err != nil {
 		writeServiceErr(w, err)
 		return
 	}

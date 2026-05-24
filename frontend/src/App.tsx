@@ -333,6 +333,8 @@ function AuthenticatedApp() {
             onUpdateFeed={(f) => store.updateFeed(f)}
             onDeleteFeed={(id) => store.deleteFeed(id)}
             onPollFeed={(id) => store.pollFeed(id)}
+            onGetFeedItems={(feedID) => api.getFeedItems(feedID)}
+            onAddFeedItem={(url) => api.addFeedItem(url, '')}
             onLoadFiltersForFeed={(feedID) => store.refreshFiltersForFeed(feedID)}
             onCreateFilter={(f) => store.createFilter(f)}
             onUpdateFilter={(f) => store.updateFilter(f)}

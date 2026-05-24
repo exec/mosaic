@@ -124,6 +124,13 @@ export type BlocklistDTO = {
   error?: string;
 };
 
+export type FeedItemDTO = {
+  guid: string;
+  title: string;
+  pub_date: string; // "YYYY-MM-DD" or ""
+  torrent_url: string; // magnet: URI or https://…torrent; "" if unresolvable
+};
+
 export type FeedDTO = {
   id: number;
   url: string;
@@ -334,6 +341,8 @@ export const api = {
   updateFeed: (f: FeedDTO) => transport.invoke<void>('UpdateFeed', f),
   deleteFeed: (id: number) => transport.invoke<void>('DeleteFeed', id),
   pollFeedNow: (id: number) => transport.invoke<void>('PollFeedNow', id),
+  getFeedItems: (feedID: number) => transport.invoke<FeedItemDTO[]>('GetFeedItems', feedID),
+  addFeedItem: (torrentURL: string, savePath: string) => transport.invoke<void>('AddFeedItem', torrentURL, savePath),
   listFiltersByFeed: (feedID: number) => transport.invoke<FilterDTO[]>('ListFiltersByFeed', feedID),
   createFilter: (f: FilterDTO) => transport.invoke<number>('CreateFilter', f),
   updateFilter: (f: FilterDTO) => transport.invoke<void>('UpdateFilter', f),

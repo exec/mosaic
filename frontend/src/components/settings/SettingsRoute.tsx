@@ -65,6 +65,8 @@ type Props = {
   onUpdateFeed: (f: FeedDTO) => Promise<void>;
   onDeleteFeed: (id: number) => Promise<void>;
   onPollFeed: (id: number) => Promise<void>;
+  onGetFeedItems: (feedID: number) => Promise<import('../../lib/bindings').FeedItemDTO[]>;
+  onAddFeedItem: (torrentURL: string) => Promise<void>;
   onLoadFiltersForFeed: (feedID: number) => Promise<void>;
   onCreateFilter: (f: FilterDTO) => Promise<void>;
   onUpdateFilter: (f: FilterDTO) => Promise<void>;
@@ -160,6 +162,8 @@ export function SettingsRoute(props: Props) {
               onUpdateFeed={props.onUpdateFeed}
               onDeleteFeed={props.onDeleteFeed}
               onPollFeed={props.onPollFeed}
+              onGetFeedItems={props.onGetFeedItems}
+              onAddFeedItem={props.onAddFeedItem}
               onLoadFilters={props.onLoadFiltersForFeed}
               onCreateFilter={props.onCreateFilter}
               onUpdateFilter={props.onUpdateFilter}

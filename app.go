@@ -316,6 +316,15 @@ func (a *App) PollFeedNow(id int) error {
 	return a.svc.PollFeedNow(a.ctx, id)
 }
 
+func (a *App) GetFeedItems(feedID int) ([]api.FeedItemDTO, error) {
+	return a.svc.GetFeedItems(a.ctx, feedID)
+}
+
+func (a *App) AddFeedItem(torrentURL, savePath string) error {
+	_, err := a.svc.AddFeedItem(a.ctx, torrentURL, savePath)
+	return err
+}
+
 func (a *App) ListFiltersByFeed(feedID int) ([]api.FilterDTO, error) {
 	return a.svc.ListFiltersByFeed(a.ctx, feedID)
 }

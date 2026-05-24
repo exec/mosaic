@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -168,18 +169,35 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 			if !re.MatchString(item.Title) {
 				continue
 			}
-			magnet := extractMagnet(item)
-			if magnet == "" {
+
+			var id string
+			if magnet := extractMagnet(item); magnet != "" {
+				tid, addErr := p.svc.AddMagnet(ctx, magnet, fil.SavePath)
+				if addErr != nil {
+					log.Warn().Err(addErr).Str("title", item.Title).Msg("rss: add magnet failed")
+					continue
+				}
+				id = string(tid)
+			} else if torrentURL := extractTorrentURL(item); torrentURL != "" {
+				blob, fetchErr := p.fetchTorrentFile(ctx, torrentURL)
+				if fetchErr != nil {
+					log.Warn().Err(fetchErr).Str("title", item.Title).Str("url", torrentURL).Msg("rss: fetch torrent file failed")
+					continue
+				}
+				tid, addErr := p.svc.AddTorrentBytes(ctx, blob, fil.SavePath)
+				if addErr != nil {
+					log.Warn().Err(addErr).Str("title", item.Title).Msg("rss: add torrent bytes failed")
+					continue
+				}
+				id = string(tid)
+			} else {
+				// No torrent source found — mark seen so we don't retry forever.
 				p.markSeen(f.ID, key)
 				break
 			}
-			id, err := p.svc.AddMagnet(ctx, magnet, fil.SavePath)
-			if err != nil {
-				log.Warn().Err(err).Str("title", item.Title).Msg("rss: add magnet failed")
-				continue
-			}
+
 			if fil.CategoryID != nil {
-				if cerr := p.svc.SetTorrentCategory(ctx, string(id), fil.CategoryID); cerr != nil {
+				if cerr := p.svc.SetTorrentCategory(ctx, id, fil.CategoryID); cerr != nil {
 					log.Warn().Err(cerr).Str("title", item.Title).Int("category", *fil.CategoryID).Msg("rss: assign category failed")
 				}
 			}
@@ -271,4 +289,111 @@ func extractMagnet(item *gofeed.Item) string {
 
 func isMagnet(s string) bool {
 	return strings.HasPrefix(s, "magnet:")
+}
+
+// extractTorrentURL returns the first URL that looks like a direct .torrent
+// file download. Checked in order: item.Link, enclosure URLs (type
+// application/x-bittorrent or .torrent suffix).
+func extractTorrentURL(item *gofeed.Item) string {
+	if isTorrentURL(item.Link) {
+		return item.Link
+	}
+	for _, enc := range item.Enclosures {
+		if enc == nil {
+			continue
+		}
+		if enc.Type == "application/x-bittorrent" || isTorrentURL(enc.URL) {
+			return enc.URL
+		}
+	}
+	return ""
+}
+
+func isTorrentURL(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "http") && strings.Contains(lower, ".torrent")
+}
+
+// fetchTorrentFile downloads a .torrent file and returns its bytes. Uses the
+// same safe HTTP client as feed polling (SSRF mitigations apply).
+func (p *RSSPoller) fetchTorrentFile(ctx context.Context, url string) ([]byte, error) {
+	return fetchTorrentBytes(ctx, p.httpC, url)
+}
+
+func fetchTorrentBytes(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	if _, err := validateFetchURL(url); err != nil {
+		return nil, fmt.Errorf("rss: refusing to fetch torrent %q: %w", url, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("rss: HTTP %d fetching torrent", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB cap
+}
+
+// GetFeedItems fetches the feed live and returns all its items with their
+// resolved torrent URLs (magnet or .torrent link). Used by the UI browser.
+func (p *RSSPoller) GetFeedItems(ctx context.Context, feedID int) ([]FeedItemDTO, error) {
+	f, err := p.feeds.Get(ctx, feedID)
+	if err != nil {
+		return nil, fmt.Errorf("rss: load feed %d: %w", feedID, err)
+	}
+	if _, err := validateFetchURL(f.URL); err != nil {
+		return nil, fmt.Errorf("rss: invalid feed URL: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", f.URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.httpC.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("rss: HTTP %d", resp.StatusCode)
+	}
+	feed, err := p.parser.Parse(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FeedItemDTO, 0, len(feed.Items))
+	for _, item := range feed.Items {
+		dto := FeedItemDTO{
+			GUID:  item.GUID,
+			Title: item.Title,
+		}
+		if item.PublishedParsed != nil {
+			dto.PubDate = item.PublishedParsed.UTC().Format("2006-01-02")
+		}
+		if m := extractMagnet(item); m != "" {
+			dto.TorrentURL = m
+		} else if t := extractTorrentURL(item); t != "" {
+			dto.TorrentURL = t
+		}
+		out = append(out, dto)
+	}
+	return out, nil
+}
+
+// AddFeedItem adds a torrent from a URL (magnet URI or direct .torrent link).
+func (p *RSSPoller) AddFeedItem(ctx context.Context, torrentURL, savePath string) (string, error) {
+	if isMagnet(torrentURL) {
+		id, err := p.svc.AddMagnet(ctx, torrentURL, savePath)
+		return string(id), err
+	}
+	blob, err := fetchTorrentBytes(ctx, p.httpC, torrentURL)
+	if err != nil {
+		return "", err
+	}
+	id, err := p.svc.AddTorrentBytes(ctx, blob, savePath)
+	return string(id), err
 }
