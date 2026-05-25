@@ -109,232 +109,47 @@ else
     echo "==> codesign skipped (APPLE_DEVELOPER_ID unset) — UNSIGNED dev build"
 fi
 
-echo "==> free disk before hdiutil (macos-14 runners are tight ~14GB free)"
-# hdiutil's UDZO format needs scratch ~= 2x the .app while compressing. The
-# go module + build caches accumulate ~5–8GB by this point on a cold runner;
-# clear what we don't need anymore so we don't trip 'No space left'. Three
-# v0.1.* runs in a row failed here.
+echo "==> free disk before DMG step (macos-14 runners are tight ~14GB free)"
+# The Go module + build caches accumulate ~5–8GB by this point on a cold
+# runner; clear what we don't need anymore so create-dmg's hdiutil scratch
+# space doesn't trip 'No space left'.
 df -h / 2>/dev/null | tail -1 || true
 go clean -cache 2>/dev/null || true
 go clean -modcache 2>/dev/null || true
 rm -rf /tmp/go-link-* /tmp/go-build* 2>/dev/null || true
 df -h / 2>/dev/null | tail -1 || true
 
-# ─── DMG layout ────────────────────────────────────────────────────────────
-# Stage the contents: Mosaic.app, an /Applications symlink, and a hidden
-# .background dir with the gradient PNG. AppleScript later positions the two
-# visible icons and points the window at the background.
-echo "==> stage DMG contents"
-DMG_STAGE="$(mktemp -d)/dmg-stage"
-mkdir -p "${DMG_STAGE}/.background"
-cp -R "${APP}" "${DMG_STAGE}/Mosaic.app"
-ln -s /Applications "${DMG_STAGE}/Applications"
+# ─── DMG via sindresorhus/create-dmg ───────────────────────────────────────
+# create-dmg auto-generates a clean drag-to-Applications layout (default
+# background + arrow, Applications symlink, custom .VolumeIcon.icns derived
+# from the app's icon). We previously rolled this by hand with AppleScript +
+# hdiutil, and after with dmgbuild + a custom Swift-rendered background — both
+# died on modern macOS Finder's TCC / alias-resolution behaviour. The tool
+# writes a proper .DS_Store (bwsp + icvp) without any AppleScript dance, so
+# CI runners and local macs render the same window. Trade-off accepted: we
+# give up the bespoke purple gradient + drawn arrow in exchange for a layout
+# that actually works on every macOS version we ship for.
+echo "==> install create-dmg"
+# create-dmg is a Node.js CLI. The macos runners ship Node by default; if
+# absent we'd need 'brew install create-dmg', but global npm install is the
+# more portable option for CI.
+npm install --global create-dmg 2>&1 | tail -5
 
-echo "==> generate background image (Swift + CoreGraphics)"
-# 1320×880 pixels = 2x the 660×440 logical window. Renders crisp on Retina,
-# downscales cleanly on non-Retina. All drawing coords below are in PIXELS
-# (not points) because we draw straight into an NSBitmapImageRep.
-BG_PNG="${DMG_STAGE}/.background/bg.png"
-SWIFT_SRC="$(mktemp).swift"
-cat > "${SWIFT_SRC}" <<'SWIFT'
-import AppKit
-
-let out = CommandLine.arguments[1]
-let w = 1320
-let h = 880
-
-guard let rep = NSBitmapImageRep(
-    bitmapDataPlanes: nil,
-    pixelsWide: w, pixelsHigh: h,
-    bitsPerSample: 8, samplesPerPixel: 4,
-    hasAlpha: true, isPlanar: false,
-    colorSpaceName: .deviceRGB,
-    bytesPerRow: 0, bitsPerPixel: 0
-) else { fputs("bitmap alloc failed\n", stderr); exit(1) }
-
-NSGraphicsContext.saveGraphicsState()
-NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-guard let ctx = NSGraphicsContext.current?.cgContext else { exit(1) }
-
-// Diagonal gradient: near-black top-left → muted purple bottom-right.
-let colors = [
-    NSColor(srgbRed: 0.035, green: 0.030, blue: 0.075, alpha: 1).cgColor,
-    NSColor(srgbRed: 0.165, green: 0.090, blue: 0.305, alpha: 1).cgColor,
-] as CFArray
-let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                          colors: colors, locations: [0, 1])!
-ctx.drawLinearGradient(gradient,
-                       start: CGPoint(x: 0, y: CGFloat(h)),
-                       end:   CGPoint(x: CGFloat(w), y: 0),
-                       options: [])
-
-// Soft radial highlight near the upper-left so the gradient doesn't look flat.
-let glowColors = [
-    NSColor(srgbRed: 0.35, green: 0.20, blue: 0.60, alpha: 0.18).cgColor,
-    NSColor(srgbRed: 0.35, green: 0.20, blue: 0.60, alpha: 0.0).cgColor,
-] as CFArray
-let glow = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                      colors: glowColors, locations: [0, 1])!
-ctx.drawRadialGradient(glow,
-                       startCenter: CGPoint(x: CGFloat(w) * 0.25, y: CGFloat(h) * 0.85),
-                       startRadius: 0,
-                       endCenter:   CGPoint(x: CGFloat(w) * 0.25, y: CGFloat(h) * 0.85),
-                       endRadius:   CGFloat(w) * 0.5,
-                       options:     [])
-
-// Icons sit at logical (160, 220) and (500, 220) → pixel (320, 440) and (1000, 440).
-// (Cocoa origin is bottom-left.) The icons are 96pt → 192px; arrow goes from
-// just right of the app icon to just left of the Applications icon.
-let arrowStartX: CGFloat = 480
-let arrowEndX:   CGFloat = 840
-let arrowY:      CGFloat = CGFloat(h) - 440   // mirror "y from top" → Cocoa Y
-
-let path = CGMutablePath()
-path.move(to: CGPoint(x: arrowStartX, y: arrowY))
-path.addLine(to: CGPoint(x: arrowEndX, y: arrowY))
-// Arrowhead — two short strokes from the tip
-path.move(to: CGPoint(x: arrowEndX, y: arrowY))
-path.addLine(to: CGPoint(x: arrowEndX - 28, y: arrowY + 18))
-path.move(to: CGPoint(x: arrowEndX, y: arrowY))
-path.addLine(to: CGPoint(x: arrowEndX - 28, y: arrowY - 18))
-
-// Soft dark shadow behind the arrow so it pops on any background sample.
-ctx.saveGState()
-ctx.setShadow(offset: CGSize(width: 0, height: -2), blur: 8, color: NSColor.black.withAlphaComponent(0.45).cgColor)
-ctx.setStrokeColor(NSColor.white.cgColor)
-ctx.setLineWidth(7)
-ctx.setLineCap(.round)
-ctx.setLineJoin(.round)
-ctx.addPath(path)
-ctx.strokePath()
-ctx.restoreGState()
-
-// Caption below the icons.
-let caption = "Drag Mosaic into Applications to install"
-let para = NSMutableParagraphStyle()
-para.alignment = .center
-let shadow = NSShadow()
-shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
-shadow.shadowOffset = NSSize(width: 0, height: -2)
-shadow.shadowBlurRadius = 8
-let attrs: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: 30, weight: .semibold),
-    .foregroundColor: NSColor.white,
-    .paragraphStyle: para,
-    .kern: 0.5,
-    .shadow: shadow,
-]
-let attrStr = NSAttributedString(string: caption, attributes: attrs)
-// Place caption a bit higher in the canvas so it remains visible even when
-// Finder opens the window slightly shorter than the bg.png's native size.
-let textRect = CGRect(x: 0, y: 150, width: CGFloat(w), height: 60)
-attrStr.draw(in: textRect)
-
-NSGraphicsContext.restoreGraphicsState()
-
-guard let data = rep.representation(using: .png, properties: [:]) else {
-    fputs("png encode failed\n", stderr); exit(1)
-}
-try data.write(to: URL(fileURLWithPath: out))
-SWIFT
-swift "${SWIFT_SRC}" "${BG_PNG}"
-rm -f "${SWIFT_SRC}"
-
-# Defensive: detach any leftover /Volumes/Mosaic from a previous run on the
-# same runner. macos-14 runners reuse host state across jobs and a
-# half-cleaned-up disk image surfaces as `hdiutil: create failed - Resource
-# busy`. -force ignores "not attached" errors.
+# Defensive: detach any leftover /Volumes/Mosaic from a previous CI run.
 hdiutil detach "/Volumes/${VOLNAME}" -force 2>/dev/null || true
 
-# hdiutil's auto-sizing from -srcfolder undershoots on universal builds and
-# fails copying into the mounted image with the very-misleading 'No space
-# left on device'. Compute 3x source size (in MB) + 100MB padding so the
-# UDRW/UDZO container has plenty of room. Took five v0.1.* runs to nail down.
-APP_SIZE_MB=$(du -sm "${APP}" | awk '{print $1}')
-DMG_SIZE_MB=$((APP_SIZE_MB * 3 + 100))
-
-echo "==> create writable DMG (UDRW) for layout pass"
-DMG_TMP="$(mktemp -d)/Mosaic-stage.dmg"
-for attempt in 1 2 3; do
-    if hdiutil create \
-        -volname "${VOLNAME}" \
-        -srcfolder "${DMG_STAGE}" \
-        -ov -format UDRW \
-        -size "${DMG_SIZE_MB}m" \
-        "${DMG_TMP}"; then
-        break
-    fi
-    if [[ $attempt -eq 3 ]]; then
-        echo "==> hdiutil create failed after 3 attempts" >&2
-        exit 1
-    fi
-    echo "==> hdiutil attempt ${attempt} failed, detaching + retrying after 5s" >&2
-    hdiutil detach "/Volumes/${VOLNAME}" -force 2>/dev/null || true
-    sleep 5
-done
-
-echo "==> mount + apply Finder layout"
-MOUNT_OUT=$(hdiutil attach -readwrite -noverify -noautoopen "${DMG_TMP}")
-MOUNT_PATH=$(echo "${MOUNT_OUT}" | tail -1 | awk '{print $3}')
-echo "    mounted at ${MOUNT_PATH}"
-
-# Give Finder a moment to notice the mount before AppleScript talks to it.
-sleep 2
-
-# The bounds {x1, y1, x2, y2} are screen coords. 660×440 window centered
-# vertically near the top of the screen. icon size 96 matches Big Sur+ default;
-# positions place the .app on the left and the Applications symlink on the
-# right with the arrow flowing between them on the generated background.
-# A few things are load-bearing for the layout to actually persist:
-#   * `eject` (not `close`) — `close` only closes the window; the .DS_Store
-#     write happens on volume eject. With `close + hdiutil detach -force` the
-#     bounds/icon-position records intermittently never make it to disk,
-#     leaving Finder to render the window at its default ~520×360 size where
-#     the arrow and caption are off-screen.
-#   * a long `delay` — Finder writes .DS_Store records asynchronously after
-#     `update without registering applications`. Anything under ~4s loses the
-#     race on busy CI runners.
-#   * `background color` AS WELL AS `background picture` — Finder uses the
-#     declared background color (not the pixels of the picture) to pick icon
-#     label text contrast. Without an explicit dark color the system defaults
-#     to light-mode behaviour and renders the "Mosaic" / "Applications"
-#     labels in black, which is unreadable on the gradient.
-osascript <<APPLESCRIPT
-tell application "Finder"
-    tell disk "${VOLNAME}"
-        open
-        set current view of container window to icon view
-        set toolbar visible of container window to false
-        set statusbar visible of container window to false
-        set sidebar width of container window to 0
-        set the bounds of container window to {400, 120, 1060, 560}
-        set viewOptions to the icon view options of container window
-        set arrangement of viewOptions to not arranged
-        set icon size of viewOptions to 96
-        set text size of viewOptions to 13
-        -- 16-bit RGB ≈ #0F0A22 (matches the gradient's darkest point). The
-        -- picture overlays this; the value is purely a hint to Finder for
-        -- label-text contrast picking.
-        set background color of viewOptions to {3840, 2560, 8704}
-        set background picture of viewOptions to file ".background:bg.png"
-        set position of item "Mosaic.app" of container window to {160, 220}
-        set position of item "Applications" of container window to {500, 220}
-        update without registering applications
-        delay 5
-        eject
-    end tell
-end tell
-APPLESCRIPT
-
-# `eject` already unmounted the volume; the explicit detach below is a
-# defensive no-op for older macOS where AppleScript eject doesn't fully
-# clean up the BSD device node.
-sync
-hdiutil detach "${MOUNT_PATH}" -force 2>/dev/null || true
-
-echo "==> convert writable -> compressed UDZO"
-hdiutil convert "${DMG_TMP}" -format UDZO -imagekey zlib-level=9 -ov -o "${DMG_OUT}"
-rm -f "${DMG_TMP}"
+echo "==> build DMG via create-dmg"
+# create-dmg names the output "<AppName> <Version>.dmg" using CFBundleVersion
+# from Info.plist. We move it to our release-asset naming convention after.
+# --overwrite: clobber any prior file at the same path (re-runs on the same
+#              runner without this fail loudly).
+# --no-code-sign: signing is handled below if APPLE_DEVELOPER_ID is set; we
+#              keep the existing flow rather than splitting it between tools.
+DMG_TMP_DIR="$(mktemp -d)"
+create-dmg --overwrite --no-code-sign "${APP}" "${DMG_TMP_DIR}"
+CREATED_DMG=$(ls "${DMG_TMP_DIR}"/*.dmg | head -1)
+[ -n "${CREATED_DMG}" ] || { echo "create-dmg produced no .dmg"; exit 1; }
+mv "${CREATED_DMG}" "${DMG_OUT}"
 
 if [[ -n "${APPLE_DEVELOPER_ID:-}" ]]; then
     echo "==> codesign DMG"
