@@ -488,10 +488,19 @@ func (s *Service) SetWatchFolder(ctx context.Context, c WatchFolderDTO) error {
 	return nil
 }
 
-// AppVersion returns the build-time version string the Service was attached
-// with. Empty string if AttachUpdater was never called.
+// AppVersion returns the build-time version string the Service was set with.
+// Empty string if neither SetAppVersion nor AttachUpdater has been called.
 func (s *Service) AppVersion() string {
 	return s.appVersion
+}
+
+// SetAppVersion records the build-time version on the Service so AppVersion()
+// (and the /api/version endpoint behind it) can return it even when the
+// updater isn't wired — notably in the daemon, where auto-update is
+// intentionally not attached. AttachUpdater also writes this field, so calling
+// SetAppVersion before AttachUpdater is safe and the values will match.
+func (s *Service) SetAppVersion(version string) {
+	s.appVersion = version
 }
 
 // UpdaterEnabled reports whether the auto-update goroutine should run. The

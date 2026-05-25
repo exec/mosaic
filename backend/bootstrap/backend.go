@@ -180,6 +180,11 @@ func Init(ctx context.Context, cfg Config) (*Backend, func(), error) {
 		sched,
 		cfg.EngineConfig.DefaultSavePath,
 	)
+	// Set the build version up-front so AppVersion() / /api/version /
+	// the SPA's About pane all see it regardless of whether the updater
+	// is wired (the daemon never wires it). Desktop's AttachUpdater
+	// later writes the same value into this field; no conflict.
+	svc.SetAppVersion(cfg.AppVersion)
 
 	if err := svc.RestoreOnStartup(ctx); err != nil {
 		log.Warn().Err(err).Msg("restore on startup")
