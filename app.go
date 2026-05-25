@@ -14,6 +14,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"mosaic/backend/api"
+	"mosaic/backend/bootstrap"
 	"mosaic/backend/engine"
 	"mosaic/backend/platform"
 	"mosaic/backend/remote"
@@ -24,7 +25,7 @@ import (
 // frontend via the auto-generated bindings in frontend/wailsjs/.
 type App struct {
 	svc *api.Service
-	hub *remote.Hub // optional fan-out for browser clients; nil-safe
+	hub *remote.Hub // for the per-user tick goroutine started in startup()
 	ctx context.Context
 
 	// quitFully is set by QuitFully so the OnBeforeClose hook in main.go
@@ -44,7 +45,11 @@ func (a *App) startup(ctx context.Context) {
 	// the a.svc.* calls below inherit it without per-call plumbing; Wails
 	// runtime calls ignore the extra context value.
 	a.ctx = api.WithCaller(ctx, api.SystemCaller)
-	go a.streamTicks(a.ctx)
+	// Two tick goroutines: one drives the embedded SPA via Wails events,
+	// the other drives connected browser clients via the shared per-user
+	// hub stream. The hub goroutine is a no-op when no one is connected.
+	go a.streamWailsEvents(a.ctx)
+	go bootstrap.StreamTicks(a.ctx, a.svc, a.hub)
 	// macOS routes Finder-clicked .torrent files and browser-clicked magnet:
 	// URLs through Apple Events, not argv. Register NSAppleEventManager
 	// handlers that funnel both into HandleLaunchArgs. No-op on other OSes.
@@ -569,7 +574,13 @@ func (a *App) SetTorrentSeedPolicy(infohash string, p api.SeedPolicyDTO) error {
 	return a.svc.SetTorrentSeedPolicy(a.ctx, infohash, p)
 }
 
-func (a *App) streamTicks(ctx context.Context) {
+// streamWailsEvents emits state snapshots to the embedded SPA via Wails
+// events. The companion bootstrap.StreamTicks goroutine, started alongside
+// this one in startup(), handles the per-user hub fan-out for connected
+// browser clients. seedCheck is wedged in here because it's a periodic
+// service-level operation rather than a publish, and there's no better
+// place for it.
+func (a *App) streamWailsEvents(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
 	inspector := time.NewTicker(1 * time.Second)
@@ -591,9 +602,6 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "torrents:tick", rows)
-			if a.hub != nil {
-				a.hub.PublishTorrents(rows)
-			}
 		case <-stats.C:
 			s, err := a.svc.GlobalStats(ctx)
 			if err != nil {
@@ -601,9 +609,6 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "stats:tick", s)
-			if a.hub != nil {
-				a.hub.PublishStats(s)
-			}
 		case <-inspector.C:
 			detail, err := a.svc.DetailForFocus(ctx)
 			if err != nil {
@@ -614,9 +619,6 @@ func (a *App) streamTicks(ctx context.Context) {
 				continue
 			}
 			wailsruntime.EventsEmit(ctx, "inspector:tick", detail)
-			if a.hub != nil {
-				a.hub.PublishInspector(*detail)
-			}
 		}
 	}
 }

@@ -44,7 +44,7 @@ func newPollerForTest(t *testing.T) (*RSSPoller, *Service, *persistence.Feeds, *
 	// own DB, but tests only assert on the engine list (not the categories).
 	feeds, filters := newRSSDAOs(t)
 	p := &RSSPoller{
-		svc:      svc,
+		adder:    svc,
 		feeds:    feeds,
 		filters:  filters,
 		parser:   gofeed.NewParser(),

@@ -19,8 +19,12 @@ import (
 // RSSPoller fetches each enabled feed at its configured interval, parses items,
 // matches their titles against per-feed regex filters, and on first match adds
 // the resolved magnet URI as a torrent (optionally tagged with a category).
+//
+// Adds happen via the narrow TorrentAdder interface rather than *Service, so
+// the poller can be tested without a real Service and has no compile-time
+// dependency on the rest of the api surface.
 type RSSPoller struct {
-	svc     *Service
+	adder   TorrentAdder
 	feeds   *persistence.Feeds
 	filters *persistence.Filters
 	parser  *gofeed.Parser
@@ -36,9 +40,9 @@ const rssSeenCap = 1000
 
 // NewRSSPoller starts a goroutine that ticks every 60 seconds and polls feeds
 // whose LastPolled + IntervalMin has elapsed. Call Close() to stop the poller.
-func NewRSSPoller(svc *Service, feeds *persistence.Feeds, filters *persistence.Filters) *RSSPoller {
+func NewRSSPoller(adder TorrentAdder, feeds *persistence.Feeds, filters *persistence.Filters) *RSSPoller {
 	p := &RSSPoller{
-		svc: svc, feeds: feeds, filters: filters,
+		adder: adder, feeds: feeds, filters: filters,
 		parser:   gofeed.NewParser(),
 		httpC:    safeHTTPClient(30 * time.Second),
 		seenByID: make(map[int]map[string]struct{}),
@@ -172,7 +176,7 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 
 			var id string
 			if magnet := extractMagnet(item); magnet != "" {
-				tid, addErr := p.svc.AddMagnet(ctx, magnet, fil.SavePath)
+				tid, addErr := p.adder.AddMagnet(ctx, magnet, fil.SavePath)
 				if addErr != nil {
 					log.Warn().Err(addErr).Str("title", item.Title).Msg("rss: add magnet failed")
 					continue
@@ -184,7 +188,7 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 					log.Warn().Err(fetchErr).Str("title", item.Title).Str("url", torrentURL).Msg("rss: fetch torrent file failed")
 					continue
 				}
-				tid, addErr := p.svc.AddTorrentBytes(ctx, blob, fil.SavePath)
+				tid, addErr := p.adder.AddTorrentBytes(ctx, blob, fil.SavePath)
 				if addErr != nil {
 					log.Warn().Err(addErr).Str("title", item.Title).Msg("rss: add torrent bytes failed")
 					continue
@@ -197,7 +201,7 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 			}
 
 			if fil.CategoryID != nil {
-				if cerr := p.svc.SetTorrentCategory(ctx, id, fil.CategoryID); cerr != nil {
+				if cerr := p.adder.SetTorrentCategory(ctx, id, fil.CategoryID); cerr != nil {
 					log.Warn().Err(cerr).Str("title", item.Title).Int("category", *fil.CategoryID).Msg("rss: assign category failed")
 				}
 			}
@@ -387,13 +391,13 @@ func (p *RSSPoller) GetFeedItems(ctx context.Context, feedID int) ([]FeedItemDTO
 // AddFeedItem adds a torrent from a URL (magnet URI or direct .torrent link).
 func (p *RSSPoller) AddFeedItem(ctx context.Context, torrentURL, savePath string) (string, error) {
 	if isMagnet(torrentURL) {
-		id, err := p.svc.AddMagnet(ctx, torrentURL, savePath)
+		id, err := p.adder.AddMagnet(ctx, torrentURL, savePath)
 		return string(id), err
 	}
 	blob, err := fetchTorrentBytes(ctx, p.httpC, torrentURL)
 	if err != nil {
 		return "", err
 	}
-	id, err := p.svc.AddTorrentBytes(ctx, blob, savePath)
+	id, err := p.adder.AddTorrentBytes(ctx, blob, savePath)
 	return string(id), err
 }

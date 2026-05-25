@@ -12,23 +12,22 @@ import (
 )
 
 // WatchFolder polls a directory every 5 seconds for new .torrent files and
-// adds them to the engine via the Service. It is attached to the Service via
-// AttachWatchFolder and started/stopped from app.go's startup / shutdown path,
-// following the same lifecycle pattern as the RSSPoller.
+// adds them via a TorrentAdder. It is attached to the Service via
+// AttachWatchFolder so that SetWatchFolder can (re)start the polling loop
+// when the user changes the configuration.
 type WatchFolder struct {
-	svc  *Service
-	mu   sync.Mutex
-	stop chan struct{}
-	done chan struct{}
+	adder TorrentAdder
+	mu    sync.Mutex
+	stop  chan struct{}
+	done  chan struct{}
 }
 
 // NewWatchFolder creates a WatchFolder watcher that polls every 5 s. It does
 // NOT start polling automatically — call Start(path, deleteAfterAdd) once the
-// persisted config is known (e.g. from main.go after RestoreOnStartup). If the
-// configured path is empty or absent the watcher does nothing until restarted
-// with a non-empty path.
-func NewWatchFolder(svc *Service) *WatchFolder {
-	return &WatchFolder{svc: svc}
+// persisted config is known. If the configured path is empty or absent the
+// watcher does nothing until restarted with a non-empty path.
+func NewWatchFolder(adder TorrentAdder) *WatchFolder {
+	return &WatchFolder{adder: adder}
 }
 
 // Start (re)starts the polling loop with a new path and deleteAfterAdd flag.
@@ -119,7 +118,7 @@ func (w *WatchFolder) poll(ctx context.Context, dir string, deleteAfterAdd bool)
 			log.Warn().Err(err).Str("path", path).Msg("watch_folder: read file failed")
 			continue
 		}
-		id, err := w.svc.AddTorrentBytes(ctx, blob, "")
+		id, err := w.adder.AddTorrentBytes(ctx, blob, "")
 		if err != nil {
 			log.Warn().Err(err).Str("path", path).Msg("watch_folder: AddTorrentBytes failed")
 			continue

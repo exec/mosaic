@@ -15,7 +15,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -24,18 +23,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"mosaic/backend/api"
+	"mosaic/backend/bootstrap"
 	"mosaic/backend/config"
-	"mosaic/backend/engine"
 	"mosaic/backend/logging"
-	"mosaic/backend/persistence"
 	"mosaic/backend/platform"
 	"mosaic/backend/remote"
 )
@@ -104,18 +100,25 @@ func main() {
 	// of that should be readable by other local accounts — narrow to 0700
 	// so the dir is only traversable by the user the daemon runs as.
 	// (The desktop Wails app uses a separate code path and stays at 0755.)
-	// Chmod after MkdirAll because MkdirAll does NOT tighten permissions
-	// on a pre-existing dir, and most upgrades will hit the "already
-	// exists with mode 0755 from a prior install" branch.
 	for _, d := range []string{paths.ConfigDir, paths.DataDir, paths.LogDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
-			// Best-effort: MkdirAll failure isn't fatal here; downstream
-			// open()s on the dir's contents will surface the real error.
 			log.Warn().Err(err).Str("dir", d).Msg("mosaicd: mkdir failed")
 		}
 		if err := os.Chmod(d, 0o700); err != nil && !os.IsNotExist(err) {
 			log.Warn().Err(err).Str("dir", d).Msg("mosaicd: chmod 0700 failed (multi-user host: other accounts may be able to read the data dir)")
 		}
+	}
+
+	// Pre-create the engine state dir with 0700 so the daemon's piece-
+	// completion bolt and verify-snapshot files aren't world-readable on a
+	// shared host. bootstrap.Init would otherwise MkdirAll it at 0o755 via
+	// the anacrolix backend.
+	engineDir := filepath.Join(paths.DataDir, "engine")
+	if err := os.MkdirAll(engineDir, 0o700); err != nil {
+		log.Warn().Err(err).Str("dir", engineDir).Msg("mosaicd: mkdir engine dir failed")
+	}
+	if err := os.Chmod(engineDir, 0o700); err != nil && !os.IsNotExist(err) {
+		log.Warn().Err(err).Str("dir", engineDir).Msg("mosaicd: chmod engine dir 0700 failed")
 	}
 
 	debug := os.Getenv("MOSAIC_DEBUG") == "1"
@@ -143,106 +146,28 @@ func main() {
 	// full privileges. Per-request contexts derived from HTTP handlers
 	// overwrite this with the authenticated caller in AuthGate.
 	ctx = api.WithCaller(ctx, api.SystemCaller)
-	db, err := persistence.Open(ctx, filepath.Join(paths.DataDir, "mosaic.db"))
+
+	// Serve the SPA from disk (os.DirFS) rather than embedding it in the
+	// binary. The .deb / .rpm package ships dist/ at /usr/share/mosaicd/dist
+	// which is what --assets-dir defaults to — this is more idiomatic for
+	// Linux packaging and lets sysadmins patch the assets without rebuilding.
+	staticFS, err := openAssetsDir(*flagAssetsDir)
 	if err != nil {
-		log.Fatal().Err(err).Msg("open db")
-	}
-	defer db.Close()
-
-	// Persisted connection settings (Settings → Connection → Peers) override
-	// the YAML/CLI defaults for the current run. Read directly from settings
-	// table since the Service hasn't been constructed yet at this point.
-	settingsDAO := persistence.NewSettings(db)
-	listenPort := cfg.ListenPort
-	enableDHT := cfg.EnableDHT
-	enableEnc := cfg.EnableEncryption
-	enableUPnP := true // default-on (matches anacrolix's NoDefaultPortForwarding=false)
-	maxPeersPerTorrent := 0
-	if v, _ := settingsDAO.Get(ctx, "peer_listen_port"); v != "" {
-		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
-			listenPort = n
-		}
-	}
-	if v, _ := settingsDAO.Get(ctx, "peers_max_per_torrent"); v != "" {
-		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
-			maxPeersPerTorrent = n
-		}
-	}
-	if v, _ := settingsDAO.Get(ctx, "dht_enabled"); v == "false" {
-		enableDHT = false
-	}
-	if v, _ := settingsDAO.Get(ctx, "encryption_enabled"); v == "false" {
-		enableEnc = false
-	}
-	if v, _ := settingsDAO.Get(ctx, "upnp_enabled"); v == "false" {
-		enableUPnP = false
-	}
-	preallocateFullFiles := false
-	if v, _ := settingsDAO.Get(ctx, "storage.preallocate_full_files"); v == "true" {
-		preallocateFullFiles = true
+		log.Fatal().Err(err).Str("dir", *flagAssetsDir).Msg("open assets dir")
 	}
 
-	// Pre-create the engine state dir with 0700 so the daemon's piece-
-	// completion bolt and verify-snapshot files aren't world-readable on a
-	// shared host. NewAnacrolixBackend would otherwise MkdirAll it at 0o755.
-	engineDir := filepath.Join(paths.DataDir, "engine")
-	if err := os.MkdirAll(engineDir, 0o700); err != nil {
-		log.Warn().Err(err).Str("dir", engineDir).Msg("mosaicd: mkdir engine dir failed")
-	}
-	if err := os.Chmod(engineDir, 0o700); err != nil && !os.IsNotExist(err) {
-		log.Warn().Err(err).Str("dir", engineDir).Msg("mosaicd: chmod engine dir 0700 failed")
-	}
-
-	verifySnaps := persistence.NewVerifySnapshots(db)
-	backend, err := engine.NewAnacrolixBackend(engine.AnacrolixConfig{
-		DataDir:              engineDir,
-		ListenPort:           listenPort,
-		EnableDHT:            enableDHT,
-		EnableEncryption:     enableEnc,
-		EnableUPnP:           enableUPnP,
-		MaxPeersPerTorrent:   maxPeersPerTorrent,
-		SnapshotStore:        &verifySnapshotAdapter{store: verifySnaps},
-		ClientVersion:        "Mosaic/" + strings.TrimPrefix(version, "v"),
-		PreallocateFullFiles: preallocateFullFiles,
+	// ---- Shared backend stack ----
+	back, cleanup, err := bootstrap.Init(ctx, bootstrap.Config{
+		DataDir:      paths.DataDir,
+		AppVersion:   version,
+		EngineConfig: cfg,
+		AssetsFS:     staticFS,
+		Flavor:       remote.FlavorDaemon,
 	})
 	if err != nil {
-		log.Fatal().Err(err).Msg("open engine backend")
+		log.Fatal().Err(err).Msg("bootstrap init")
 	}
-	defer backend.Close()
-
-	eng := engine.NewEngine(backend, 500*time.Millisecond)
-	defer eng.Close()
-
-	sched := engine.NewScheduler(eng, 0, 0, 2*time.Second) // 0/0 = unlimited until user sets
-	defer sched.Close()
-
-	scheduleRules := persistence.NewScheduleRules(db)
-	feeds := persistence.NewFeeds(db)
-	filters := persistence.NewFilters(db)
-	svc := api.NewService(eng,
-		persistence.NewTorrents(db),
-		persistence.NewCategories(db),
-		persistence.NewTags(db),
-		settingsDAO,
-		scheduleRules,
-		feeds,
-		filters,
-		persistence.NewUsers(db),
-		persistence.NewTorrentAccess(db),
-		persistence.NewTorrentTrackers(db),
-		sched,
-		cfg.DefaultSavePath)
-	if err := svc.RestoreOnStartup(ctx); err != nil {
-		log.Warn().Err(err).Msg("restore on startup")
-	}
-	// Migrate any pre-0009 plaintext API key into the admin user's hashed key.
-	if err := svc.ReconcileLegacyAPIKey(ctx); err != nil {
-		log.Warn().Err(err).Msg("reconcile legacy api key")
-	}
-	scheduleEngine := api.NewScheduleEngine(svc, scheduleRules, time.Local)
-	defer scheduleEngine.Close()
-	rssPoller := api.NewRSSPoller(svc, feeds, filters)
-	defer rssPoller.Close()
+	defer cleanup()
 
 	// First-run bootstrap. mosaicd is useless without a running web interface,
 	// so if the user (or a fresh DB) has it disabled we flip it on for THIS
@@ -254,7 +179,7 @@ func main() {
 	//
 	// --port and --bind-all also bypass persistence — same rationale, plus
 	// it matches how other server daemons treat their CLI flags (per-launch).
-	web := svc.GetWebConfig(ctx)
+	web := back.Svc.GetWebConfig(ctx)
 	if !web.Enabled {
 		web.Enabled = true
 		log.Warn().Msg("mosaicd: web interface was disabled in stored config — forcing on for this run only (not persisted)")
@@ -268,49 +193,16 @@ func main() {
 
 	// Ephemeral password (qBittorrent-nox pattern). If the operator has
 	// never set a password via the web UI, mint a fresh one on every boot
-	// and dump it to stdout so journald captures it. Once the operator
-	// logs in and changes the password from Settings → Users, the
-	// service flips a "user set" flag and we stop rotating.
-	if err := mintEphemeralPasswordIfNeeded(ctx, svc, web); err != nil {
+	// and dump it to stdout so journald captures it.
+	if err := mintEphemeralPasswordIfNeeded(ctx, back.Svc, web); err != nil {
 		log.Fatal().Err(err).Msg("mint ephemeral password")
 	}
 
-	// Optional HTTPS+WS remote interface. Reads its enabled/port/bind state
-	// from settings; restarts whenever SetWebConfig fires the change hook.
-	//
-	// We serve the SPA from disk (os.DirFS) rather than embedding it in the
-	// binary. The .deb / .rpm package ships dist/ at /usr/share/mosaicd/dist
-	// which is what --assets-dir defaults to — this is more idiomatic for
-	// Linux packaging and lets sysadmins patch the assets without rebuilding.
-	staticFS, err := openAssetsDir(*flagAssetsDir)
-	if err != nil {
-		log.Fatal().Err(err).Str("dir", *flagAssetsDir).Msg("open assets dir")
-	}
-
-	// The Hub's broadcast bus (Hub.Run) is started by remote.Server.Start for
-	// both flavors, so Hub.PublishUpdate fans out correctly in the daemon. The
-	// per-user tick path used by streamTicks (PublishTorrentsRawTo etc.) is
-	// separate from the bus and delivers straight to each user's connections.
-	hub := remote.NewHub()
-	defer hub.Close()
-	sessions := remote.NewSessionStore()
-	svc.AttachSessionRevoker(sessions)
-	svc.AttachWSRevoker(hub)
-	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir, remote.FlavorDaemon)
-	defer remoteSrv.Stop()
-	// Runtime web-config changes (operator flips port via Settings) are
-	// logged but non-fatal — the daemon stays alive on the previous
-	// listener. Bootstrap is different: see below.
-	svc.OnWebConfigChange(func(c api.WebConfigDTO) {
-		if err := remoteSrv.Apply(c); err != nil {
-			log.Error().Err(err).Int("port", c.Port).Msg("mosaicd: web config change failed")
-		}
-	})
 	// Apply our locally-mutated web config (which may have force-enabled or
 	// applied --port / --bind-all overrides on top of the persisted state)
 	// rather than re-reading from the DB — otherwise our in-memory overrides
 	// would be lost the moment the server starts.
-	if err := remoteSrv.Apply(web); err != nil {
+	if err := back.Server.Apply(web); err != nil {
 		// mosaicd is useless without its web interface, so bind failure
 		// at bootstrap is fatal. The most common cause in practice is a
 		// port collision (qBittorrent-nox / Transmission / another
@@ -333,20 +225,20 @@ func main() {
 	if web.BindAll {
 		host = "0.0.0.0"
 	}
-	go streamTicks(ctx, svc, hub)
+	go bootstrap.StreamTicks(ctx, back.Svc, back.Hub)
 
 	log.Info().Str("url", fmt.Sprintf("%s://%s:%d", scheme, host, web.Port)).Str("version", version).Msg("mosaicd: ready")
 
 	// Block until SIGINT / SIGTERM. systemd sends SIGTERM on `systemctl stop`;
-	// the deferred Close()s above unwind the stack in reverse declaration order
-	// (rss → schedule → remote → hub → sched → eng → backend → db → log) which
-	// matches the dependency graph.
+	// the deferred cleanup() above unwinds the bootstrap-owned resources in
+	// reverse construction order (server → hub → watchfolder → rss → schedule
+	// → service → scheduler → engine → backend → db).
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-stop
 	cancelCtx()
-	// Brief grace so the streamTicks goroutine sees ctx.Done before the
-	// deferred Close()s start tearing down the hub + DB underneath it.
+	// Brief grace so the StreamTicks goroutine sees ctx.Done before the
+	// deferred cleanup() starts tearing down the hub + DB underneath it.
 	// Without this, a tick that started ~1µs before SIGTERM can race the
 	// hub.Close()/db.Close() defers and trip a "send on closed channel"
 	// or DB-after-Close error in the logs. 200ms is much shorter than any
@@ -435,176 +327,6 @@ func mintEphemeralPasswordIfNeeded(ctx context.Context, svc *api.Service, web ap
 	fmt.Fprintln(os.Stdout, "===========================================================================")
 	fmt.Fprintln(os.Stdout, "")
 	return nil
-}
-
-// streamTicks polls the service at regular intervals and pushes state
-// snapshots to connected WebSocket clients. Unlike the desktop app's ticker,
-// mosaicd is multi-user: each tick is published *per connected user* so one
-// user never receives another's torrents/stats/inspector data.
-//
-// The torrents and stats ticks build their caller-independent state ONCE per
-// tick (engine snapshot + torrents.List + tags join) and then fan it out:
-// admins all receive a byte-identical DTO list, so it is assembled — and JSON-
-// encoded — a single time; non-admins are an access-filtered reduction of the
-// same shared snapshot. Pre-v0.7.x every connected user triggered a full
-// independent torrents.List + tags join + engine walk + sort, N× redundant
-// work for output that was identical across all admins.
-//
-// torrents:tick fires every 1s (matching stats:tick) and a user's frame is
-// skipped entirely when its serialized payload is byte-identical to the one we
-// last sent that user — a paused, fully-seeding library produces no traffic.
-// The frontend reconciles by id and tolerates a missing frame; a newly
-// connected user has no prior fingerprint so always gets a first frame.
-func streamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
-	torrents := time.NewTicker(1 * time.Second)
-	stats := time.NewTicker(1 * time.Second)
-	inspector := time.NewTicker(1 * time.Second)
-	defer torrents.Stop()
-	defer stats.Stop()
-	defer inspector.Stop()
-
-	// lastTorrentsFrame fingerprints (sha256 of the encoded payload) the most
-	// recent torrents:tick we actually sent each user, so an unchanged frame
-	// can be skipped. Entries for users who disconnect are pruned each tick so
-	// a reconnecting client is treated as new and gets a fresh first frame.
-	lastTorrentsFrame := make(map[int][32]byte)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-torrents.C:
-			uids := hub.ConnectedUserIDs()
-			if len(uids) == 0 {
-				// Nobody connected: drop all fingerprints so the next
-				// connection is unconditionally sent a first frame.
-				if len(lastTorrentsFrame) > 0 {
-					lastTorrentsFrame = make(map[int][32]byte)
-				}
-				continue
-			}
-			tick, err := svc.BuildTorrentTickSnapshot(ctx)
-			if err != nil {
-				log.Warn().Err(err).Msg("streamTicks: torrents snapshot failed; clients will see stale state this tick")
-				continue
-			}
-			// Admins all see the same unfiltered list — compute and encode it
-			// once, lazily, the first time we encounter an admin, then reuse
-			// the identical bytes for every other admin.
-			var adminFrame []byte
-			adminComputed := false
-			seen := make(map[int]struct{}, len(uids))
-			for _, uid := range uids {
-				seen[uid] = struct{}{}
-				caller, err := svc.CallerForUserID(ctx, uid)
-				if err != nil {
-					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: caller lookup failed; skipping this user's torrents frame")
-					continue
-				}
-				var frame []byte
-				if caller.SeesAllTorrents() {
-					if !adminComputed {
-						rows, err := svc.ListTorrentsFromSnapshot(api.WithCaller(ctx, caller), tick)
-						if err != nil {
-							log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: admin torrents-list failed")
-							continue
-						}
-						adminFrame = remote.EncodeTorrentsFrame(rows)
-						adminComputed = true
-					}
-					frame = adminFrame
-				} else {
-					rows, err := svc.ListTorrentsFromSnapshot(api.WithCaller(ctx, caller), tick)
-					if err != nil {
-						log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: per-user torrents-list failed")
-						continue
-					}
-					frame = remote.EncodeTorrentsFrame(rows)
-				}
-				if frame == nil {
-					continue
-				}
-				// Skip the send when this user's payload is unchanged since
-				// the last tick. A user with no fingerprint yet (just
-				// connected) always passes.
-				fp := sha256.Sum256(frame)
-				if prev, ok := lastTorrentsFrame[uid]; ok && prev == fp {
-					continue
-				}
-				lastTorrentsFrame[uid] = fp
-				hub.PublishTorrentsRawTo(uid, frame)
-			}
-			// Forget users who have since disconnected.
-			for uid := range lastTorrentsFrame {
-				if _, ok := seen[uid]; !ok {
-					delete(lastTorrentsFrame, uid)
-				}
-			}
-		case <-stats.C:
-			uids := hub.ConnectedUserIDs()
-			if len(uids) == 0 {
-				continue
-			}
-			// One engine walk for the tick; per-user stats are a filtered
-			// reduction of this shared slice.
-			snaps := svc.EngineSnapshots()
-			var adminStats api.GlobalStats
-			adminComputed := false
-			for _, uid := range uids {
-				caller, err := svc.CallerForUserID(ctx, uid)
-				if err != nil {
-					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: caller lookup failed; skipping this user's stats frame")
-					continue
-				}
-				if caller.SeesAllTorrents() {
-					if !adminComputed {
-						adminStats, err = svc.GlobalStatsFromSnapshot(api.WithCaller(ctx, caller), snaps)
-						if err != nil {
-							log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: admin stats failed")
-							continue
-						}
-						adminComputed = true
-					}
-					hub.PublishStatsTo(uid, adminStats)
-					continue
-				}
-				st, err := svc.GlobalStatsFromSnapshot(api.WithCaller(ctx, caller), snaps)
-				if err != nil {
-					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: per-user stats failed")
-					continue
-				}
-				hub.PublishStatsTo(uid, st)
-			}
-		case <-inspector.C:
-			// Inspector detail is genuinely per-user — each user's focused
-			// torrent differs — so this path stays per-user.
-			for _, uid := range hub.ConnectedUserIDs() {
-				uctx, err := userCtx(ctx, svc, uid)
-				if err != nil {
-					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: caller lookup failed; skipping this user's inspector frame")
-					continue
-				}
-				detail, err := svc.DetailForFocus(uctx)
-				if err != nil {
-					log.Warn().Err(err).Int("user_id", uid).Msg("streamTicks: inspector detail failed")
-					continue
-				}
-				if detail != nil {
-					hub.PublishInspectorTo(uid, *detail)
-				}
-			}
-		}
-	}
-}
-
-// userCtx builds a caller-scoped context for a connected user, so per-user
-// tick computations are filtered to what that user is allowed to see.
-func userCtx(ctx context.Context, svc *api.Service, userID int) (context.Context, error) {
-	caller, err := svc.CallerForUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	return api.WithCaller(ctx, caller), nil
 }
 
 // randomPassword returns a 32-byte URL-safe random password (~256 bits of

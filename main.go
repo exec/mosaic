@@ -7,9 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
@@ -19,11 +16,10 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"mosaic/backend/api"
+	"mosaic/backend/bootstrap"
 	"mosaic/backend/config"
-	"mosaic/backend/engine"
 	"mosaic/backend/logging"
 	"mosaic/backend/notifications"
-	"mosaic/backend/persistence"
 	"mosaic/backend/platform"
 	"mosaic/backend/remote"
 	"mosaic/backend/tray"
@@ -75,150 +71,38 @@ func main() {
 	// startup hook (RestoreOnStartup, GetWebConfig, GetDesktopIntegration,
 	// PauseAll / ResumeAll from the tray, etc.) is a trusted system operation.
 	ctx := api.WithCaller(context.Background(), api.SystemCaller)
-	db, err := persistence.Open(ctx, filepath.Join(paths.DataDir, "mosaic.db"))
-	if err != nil {
-		log.Fatal().Err(err).Msg("open db")
-	}
-	defer db.Close()
 
-	// Persisted connection settings (Settings → Connection → Peers) override
-	// the YAML/CLI defaults for the current run. Read directly from settings
-	// table since the Service hasn't been constructed yet at this point.
-	settingsDAO := persistence.NewSettings(db)
-	listenPort := cfg.ListenPort
-	enableDHT := cfg.EnableDHT
-	enableEnc := cfg.EnableEncryption
-	enableUPnP := true // default-on (matches anacrolix's NoDefaultPortForwarding=false)
-	maxPeersPerTorrent := 0
-	if v, _ := settingsDAO.Get(ctx, "peer_listen_port"); v != "" {
-		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
-			listenPort = n
-		}
-	}
-	if v, _ := settingsDAO.Get(ctx, "peers_max_per_torrent"); v != "" {
-		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
-			maxPeersPerTorrent = n
-		}
-	}
-	if v, _ := settingsDAO.Get(ctx, "dht_enabled"); v == "false" {
-		enableDHT = false
-	}
-	if v, _ := settingsDAO.Get(ctx, "encryption_enabled"); v == "false" {
-		enableEnc = false
-	}
-	if v, _ := settingsDAO.Get(ctx, "upnp_enabled"); v == "false" {
-		enableUPnP = false
-	}
-	preallocateFullFiles := false
-	if v, _ := settingsDAO.Get(ctx, "storage.preallocate_full_files"); v == "true" {
-		preallocateFullFiles = true
-	}
-
-	verifySnaps := persistence.NewVerifySnapshots(db)
-	backend, err := engine.NewAnacrolixBackend(engine.AnacrolixConfig{
-		DataDir:              filepath.Join(paths.DataDir, "engine"),
-		ListenPort:           listenPort,
-		EnableDHT:            enableDHT,
-		EnableEncryption:     enableEnc,
-		EnableUPnP:           enableUPnP,
-		MaxPeersPerTorrent:   maxPeersPerTorrent,
-		SnapshotStore:        &verifySnapshotAdapter{store: verifySnaps},
-		ClientVersion:        "Mosaic/" + strings.TrimPrefix(version, "v"),
-		PreallocateFullFiles: preallocateFullFiles,
-	})
-	if err != nil {
-		log.Fatal().Err(err).Msg("open engine backend")
-	}
-	defer backend.Close()
-
-	// Persist the actual listening port if the engine had to fall back to
-	// an OS-picked ephemeral (because the configured port collided with
-	// another BitTorrent client on the same machine — Deluge / qBittorrent
-	// both default into 6881-6889). Without this the next launch would
-	// race for 6881 again, lose, and pick a *different* random port —
-	// which means the user's router port-forward never matches and they
-	// stay invisible to inbound peers across restarts. Writing back makes
-	// the chosen port sticky.
-	if actual := backend.ListenPort(); actual > 0 && actual != listenPort {
-		log.Info().Int("configured", listenPort).Int("actual", actual).Msg("listen port fell back to OS-picked; persisting")
-		if err := settingsDAO.Set(ctx, "peer_listen_port", strconv.Itoa(actual)); err != nil {
-			log.Warn().Err(err).Msg("persist fallback listen port failed")
-		}
-	}
-
-	eng := engine.NewEngine(backend, 500*time.Millisecond)
-	defer eng.Close()
-
-	sched := engine.NewScheduler(eng, 0, 0, 2*time.Second) // 0/0 = unlimited until user sets
-	defer sched.Close()
-
-	scheduleRules := persistence.NewScheduleRules(db)
-	feeds := persistence.NewFeeds(db)
-	filters := persistence.NewFilters(db)
-	svc := api.NewService(eng,
-		persistence.NewTorrents(db),
-		persistence.NewCategories(db),
-		persistence.NewTags(db),
-		settingsDAO,
-		scheduleRules,
-		feeds,
-		filters,
-		persistence.NewUsers(db),
-		persistence.NewTorrentAccess(db),
-		persistence.NewTorrentTrackers(db),
-		sched,
-		cfg.DefaultSavePath)
-	if err := svc.RestoreOnStartup(ctx); err != nil {
-		log.Warn().Err(err).Msg("restore on startup")
-	}
-	// Migrate any pre-0009 plaintext API key into the admin user's hashed key.
-	if err := svc.ReconcileLegacyAPIKey(ctx); err != nil {
-		log.Warn().Err(err).Msg("reconcile legacy api key")
-	}
-	scheduleEngine := api.NewScheduleEngine(svc, scheduleRules, time.Local)
-	defer scheduleEngine.Close()
-	rssPoller := api.NewRSSPoller(svc, feeds, filters)
-	defer rssPoller.Close()
-	svc.AttachRSSPoller(rssPoller)
-
-	watchFolder := api.NewWatchFolder(svc)
-	defer watchFolder.Stop()
-	svc.AttachWatchFolder(watchFolder)
-	// Start the watcher with persisted config (if enabled).
-	wfCfg := svc.GetWatchFolder(ctx)
-	if wfCfg.Enabled && wfCfg.Path != "" {
-		watchFolder.Start(wfCfg.Path, wfCfg.DeleteAfterAdd)
-	}
-
-	// Optional HTTPS+WS remote interface. Reads its enabled/port/bind state
-	// from settings; restarts whenever SetWebConfig fires the change hook.
 	staticFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		log.Fatal().Err(err).Msg("embed sub frontend/dist")
 	}
-	hub := remote.NewHub()
-	defer hub.Close()
-	sessions := remote.NewSessionStore()
-	svc.AttachSessionRevoker(sessions)
-	svc.AttachWSRevoker(hub)
-	remoteSrv := remote.NewServer(svc, hub, sessions, staticFS, paths.DataDir, remote.FlavorDesktop)
-	defer remoteSrv.Stop()
+
+	// ---- Shared backend stack ----
+	back, cleanup, err := bootstrap.Init(ctx, bootstrap.Config{
+		DataDir:      paths.DataDir,
+		AppVersion:   version,
+		EngineConfig: cfg,
+		AssetsFS:     staticFS,
+		Flavor:       remote.FlavorDesktop,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("bootstrap init")
+	}
+	defer cleanup()
+
+	svc := back.Svc
+
 	// The remote interface is optional in the GUI — the user has the
 	// native window even if the web surface fails to bind. Log loudly
 	// (so the user can see it in support output) but don't crash; the
 	// SPA's Settings → Web Interface pane will show "enabled" with no
 	// listener, which is the existing path for "you tried to enable
 	// it but the port was taken."
-	svc.OnWebConfigChange(func(c api.WebConfigDTO) {
-		if err := remoteSrv.Apply(c); err != nil {
-			log.Warn().Err(err).Int("port", c.Port).Msg("remote: web config change failed (port likely in use)")
-		}
-	})
-	if err := remoteSrv.Apply(svc.GetWebConfig(ctx)); err != nil {
+	if err := back.Server.Apply(svc.GetWebConfig(ctx)); err != nil {
 		log.Warn().Err(err).Msg("remote: bootstrap failed (port likely in use) — desktop UI is unaffected")
 	}
 
-	app := NewApp(svc, hub)
+	app := NewApp(svc, back.Hub)
 
 	// Linux second-instance listener. Bound here (after the early-forward
 	// check has returned false, so we know we're the first instance) so any
@@ -250,7 +134,7 @@ func main() {
 		NotifyOnError:    desktopCfg.NotifyOnError,
 		NotifyOnUpdate:   desktopCfg.NotifyOnUpdate,
 	})
-	notifSub.Start(ctx, eng)
+	notifSub.Start(ctx, back.Eng)
 	defer notifSub.Stop()
 	svc.AttachUpdateInstalledNotifier(notifSub)
 
@@ -321,8 +205,8 @@ func main() {
 		},
 		OnAvailable: func(info updater.Info) {
 			dto := svc.MakeUpdateInfoDTO(info)
-			if hub != nil {
-				hub.PublishUpdate(dto)
+			if back.Hub != nil {
+				back.Hub.PublishUpdate(dto)
 			}
 			app.NotifyUpdateAvailable(dto)
 		},
