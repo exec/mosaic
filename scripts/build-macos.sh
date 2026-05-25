@@ -55,15 +55,23 @@ wails build \
     -skipbindings \
     -skipembedcreate
 
-# wails always outputs <outputfilename>.app from wails.json (here: mosaic.app).
-# Rename to Mosaic.app so Finder shows the brand name; the inner binary at
-# Contents/MacOS/mosaic stays lowercase for the auto-updater (see comment in
-# the tarball block at the bottom of this file).
-WAILS_APP="${BIN_DIR}/mosaic.app"
+# Locate whatever .app wails dropped. Different wails versions name it from
+# either `outputfilename` (lowercase "mosaic.app") or `info.productName`
+# (capital "Mosaic.app"); the macOS filesystem is case-insensitive by default
+# so both resolve to the same inode, but a blind `mv mosaic.app Mosaic.app`
+# after an `rm -rf Mosaic.app` self-destructs (the rm removes the source
+# inode since the names alias). Resolve the actual on-disk basename via ls
+# and only rename when it differs.
 APP="${BIN_DIR}/Mosaic.app"
-if [[ -d "${WAILS_APP}" ]]; then
-    rm -rf "${APP}"
-    mv "${WAILS_APP}" "${APP}"
+WAILS_OUT=$(ls -d "${BIN_DIR}"/*.app 2>/dev/null | head -1)
+if [[ -z "${WAILS_OUT}" ]]; then
+    echo "build-macos.sh: no .app found in ${BIN_DIR}" >&2
+    exit 1
+fi
+WAILS_BASENAME=$(basename "${WAILS_OUT}")
+if [[ "${WAILS_BASENAME}" != "Mosaic.app" ]]; then
+    # Case-only rename on case-insensitive APFS — rename(2) handles it directly.
+    mv "${WAILS_OUT}" "${APP}"
 fi
 
 DMG_OUT="${BIN_DIR}/Mosaic-${VERSION}-darwin-universal.dmg"
