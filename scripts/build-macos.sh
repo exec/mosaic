@@ -198,25 +198,36 @@ path.addLine(to: CGPoint(x: arrowEndX - 28, y: arrowY + 18))
 path.move(to: CGPoint(x: arrowEndX, y: arrowY))
 path.addLine(to: CGPoint(x: arrowEndX - 28, y: arrowY - 18))
 
-ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.75).cgColor)
-ctx.setLineWidth(5)
+// Soft dark shadow behind the arrow so it pops on any background sample.
+ctx.saveGState()
+ctx.setShadow(offset: CGSize(width: 0, height: -2), blur: 8, color: NSColor.black.withAlphaComponent(0.45).cgColor)
+ctx.setStrokeColor(NSColor.white.cgColor)
+ctx.setLineWidth(7)
 ctx.setLineCap(.round)
 ctx.setLineJoin(.round)
 ctx.addPath(path)
 ctx.strokePath()
+ctx.restoreGState()
 
 // Caption below the icons.
 let caption = "Drag Mosaic into Applications to install"
 let para = NSMutableParagraphStyle()
 para.alignment = .center
+let shadow = NSShadow()
+shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
+shadow.shadowOffset = NSSize(width: 0, height: -2)
+shadow.shadowBlurRadius = 8
 let attrs: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: 26, weight: .medium),
-    .foregroundColor: NSColor.white.withAlphaComponent(0.72),
+    .font: NSFont.systemFont(ofSize: 30, weight: .semibold),
+    .foregroundColor: NSColor.white,
     .paragraphStyle: para,
     .kern: 0.5,
+    .shadow: shadow,
 ]
 let attrStr = NSAttributedString(string: caption, attributes: attrs)
-let textRect = CGRect(x: 0, y: 120, width: CGFloat(w), height: 50)
+// Place caption a bit higher in the canvas so it remains visible even when
+// Finder opens the window slightly shorter than the bg.png's native size.
+let textRect = CGRect(x: 0, y: 150, width: CGFloat(w), height: 60)
 attrStr.draw(in: textRect)
 
 NSGraphicsContext.restoreGraphicsState()
@@ -274,6 +285,20 @@ sleep 2
 # vertically near the top of the screen. icon size 96 matches Big Sur+ default;
 # positions place the .app on the left and the Applications symlink on the
 # right with the arrow flowing between them on the generated background.
+# A few things are load-bearing for the layout to actually persist:
+#   * `eject` (not `close`) — `close` only closes the window; the .DS_Store
+#     write happens on volume eject. With `close + hdiutil detach -force` the
+#     bounds/icon-position records intermittently never make it to disk,
+#     leaving Finder to render the window at its default ~520×360 size where
+#     the arrow and caption are off-screen.
+#   * a long `delay` — Finder writes .DS_Store records asynchronously after
+#     `update without registering applications`. Anything under ~4s loses the
+#     race on busy CI runners.
+#   * `background color` AS WELL AS `background picture` — Finder uses the
+#     declared background color (not the pixels of the picture) to pick icon
+#     label text contrast. Without an explicit dark color the system defaults
+#     to light-mode behaviour and renders the "Mosaic" / "Applications"
+#     labels in black, which is unreadable on the gradient.
 osascript <<APPLESCRIPT
 tell application "Finder"
     tell disk "${VOLNAME}"
@@ -287,19 +312,25 @@ tell application "Finder"
         set arrangement of viewOptions to not arranged
         set icon size of viewOptions to 96
         set text size of viewOptions to 13
+        -- 16-bit RGB ≈ #0F0A22 (matches the gradient's darkest point). The
+        -- picture overlays this; the value is purely a hint to Finder for
+        -- label-text contrast picking.
+        set background color of viewOptions to {3840, 2560, 8704}
         set background picture of viewOptions to file ".background:bg.png"
         set position of item "Mosaic.app" of container window to {160, 220}
         set position of item "Applications" of container window to {500, 220}
         update without registering applications
-        delay 1
-        close
+        delay 5
+        eject
     end tell
 end tell
 APPLESCRIPT
 
-# Make the .DS_Store reflect what we just set, then unmount.
+# `eject` already unmounted the volume; the explicit detach below is a
+# defensive no-op for older macOS where AppleScript eject doesn't fully
+# clean up the BSD device node.
 sync
-hdiutil detach "${MOUNT_PATH}" -force 2>/dev/null || hdiutil detach "${MOUNT_PATH}" || true
+hdiutil detach "${MOUNT_PATH}" -force 2>/dev/null || true
 
 echo "==> convert writable -> compressed UDZO"
 hdiutil convert "${DMG_TMP}" -format UDZO -imagekey zlib-level=9 -ov -o "${DMG_OUT}"
