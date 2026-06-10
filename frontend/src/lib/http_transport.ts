@@ -125,6 +125,18 @@ const ROUTES: Record<string, RouteSpec> = {
     body: ([infohash, enabled]) => ({infohash, enabled}),
     unwrap: okEnvelope,
   },
+  AddTracker: {
+    method: 'POST',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/trackers`,
+    body: ([, url]) => ({url}),
+    unwrap: okEnvelope,
+  },
+  RemoveTracker: {
+    method: 'DELETE',
+    path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/trackers`,
+    body: ([, url]) => ({url}),
+    unwrap: okEnvelope,
+  },
 
   // Stats / inspector
   GlobalStats: {method: 'GET', path: () => '/api/stats'},
