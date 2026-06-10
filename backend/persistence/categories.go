@@ -68,11 +68,12 @@ func (c *Categories) Update(ctx context.Context, cat Category) error {
 	return err
 }
 
-// Delete removes a category, detaching any torrents still assigned to it.
-// torrents.category_id REFERENCES categories(id) with no ON DELETE action and
-// foreign_keys is on, so deleting an in-use category would otherwise fail
-// with an FK violation. Both statements run in one transaction so a failed
-// delete can't leave torrents detached from a category that still exists.
+// Delete removes a category, detaching any torrents and RSS filters still
+// assigned to it. Both torrents.category_id and rss_filters.category_id
+// REFERENCE categories(id) with no ON DELETE action and foreign_keys is on,
+// so deleting an in-use category would otherwise fail with an FK violation.
+// All statements run in one transaction so a failed delete can't leave rows
+// detached from a category that still exists.
 func (c *Categories) Delete(ctx context.Context, id int) error {
 	tx, err := c.db.SQL().BeginTx(ctx, nil)
 	if err != nil {
@@ -80,6 +81,9 @@ func (c *Categories) Delete(ctx context.Context, id int) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `UPDATE torrents SET category_id = NULL WHERE category_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE rss_filters SET category_id = NULL WHERE category_id = ?`, id); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM categories WHERE id = ?`, id); err != nil {
