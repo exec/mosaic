@@ -236,6 +236,14 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-stop
+	// A second SIGINT/SIGTERM during teardown force-exits. If engine or DB
+	// shutdown ever hangs, a foreground operator shouldn't have to reach for
+	// SIGKILL — at that point skipping the remaining defers is the lesser evil.
+	go func() {
+		s := <-stop
+		log.Warn().Str("signal", s.String()).Msg("mosaicd: second signal, forcing exit")
+		os.Exit(1)
+	}()
 	cancelCtx()
 	// Brief grace so the StreamTicks goroutine sees ctx.Done before the
 	// deferred cleanup() starts tearing down the hub + DB underneath it.
