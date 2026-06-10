@@ -293,21 +293,30 @@ func main() {
 		if !trayAvailable {
 			return false
 		}
-		if app.ctx != nil {
-			wailsruntime.WindowHide(app.ctx)
+		if hideCtx := app.context(); hideCtx != nil {
+			// Mark hidden BEFORE hiding so streamWailsEvents stops emitting
+			// tick events nobody can see; ShowWindow flips it back.
+			app.setWindowVisible(false)
+			wailsruntime.WindowHide(hideCtx)
 		}
 		return true
 	}
 
+	// StartHidden honors the desktop.start_minimized preference. The
+	// frontend still mounts and connects to the WS / fetches state on
+	// load — only the OS window is hidden until the user opens it from
+	// the tray.
+	startHidden := desktopCfg.StartMinimized && desktopCfg.TrayEnabled && trayAvailable && goruntime.GOOS != "darwin"
+	if startHidden {
+		// Suppress Wails tick emission until the tray shows the window.
+		app.setWindowVisible(false)
+	}
+
 	opts := &options.App{
-		Title:  "Mosaic",
-		Width:  1200,
-		Height: 800,
-		// StartHidden honors the desktop.start_minimized preference. The
-		// frontend still mounts and connects to the WS / fetches state on
-		// load — only the OS window is hidden until the user opens it from
-		// the tray.
-		StartHidden: desktopCfg.StartMinimized && desktopCfg.TrayEnabled && trayAvailable && goruntime.GOOS != "darwin",
+		Title:       "Mosaic",
+		Width:       1200,
+		Height:      800,
+		StartHidden: startHidden,
 		// On macOS, X button hides the app (Cmd+H equivalent) at the AppKit
 		// layer instead of triggering OnBeforeClose. Dock-click auto-unhides.
 		// Cmd+Q and dock right-click → Quit still terminate cleanly via the
@@ -339,14 +348,15 @@ func main() {
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "io.github.exec.mosaic",
 			OnSecondInstanceLaunch: func(d options.SecondInstanceData) {
-				if app.ctx != nil {
-					wailsruntime.WindowUnminimise(app.ctx)
-					wailsruntime.WindowShow(app.ctx)
-				}
+				app.ShowWindow()
 				go app.HandleLaunchArgs(d.Args)
 			},
 		},
 		OnStartup: app.startup,
+		// OnShutdown cancels the tick goroutines and grants a short grace so
+		// in-flight ticks drain before the deferred cleanup above closes the
+		// hub/engine/DB they're reading — see App.shutdown.
+		OnShutdown: app.shutdown,
 		Bind: []any{
 			app,
 		},
@@ -357,8 +367,10 @@ func main() {
 	if goruntime.GOOS == "windows" || goruntime.GOOS == "linux" {
 		opts.Frameless = true
 	}
-	err = wails.Run(opts)
-	if err != nil {
-		log.Fatal().Err(err).Msg("wails run")
+	// log.Fatal would os.Exit and skip every deferred teardown above
+	// (engine, DB, tray, listener) — log the error and fall off main so
+	// the defers run.
+	if err := wails.Run(opts); err != nil {
+		log.Error().Err(err).Msg("wails run")
 	}
 }
