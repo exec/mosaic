@@ -264,6 +264,25 @@ func TestService_QueuePosition(t *testing.T) {
 	require.Equal(t, 7, rows[0].QueuePosition)
 }
 
+// TestService_PauseResume_PersistsPausedColumn pins that Pause/Resume write
+// the paused column — RestoreOnStartup reads it to re-pause torrents the user
+// paused last session.
+func TestService_PauseResume_PersistsPausedColumn(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := sysCtx()
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:pp", "")
+
+	require.NoError(t, svc.Pause(ctx, id))
+	rec, err := svc.torrents.Get(ctx, string(id))
+	require.NoError(t, err)
+	require.True(t, rec.Paused)
+
+	require.NoError(t, svc.Resume(ctx, id))
+	rec, err = svc.torrents.Get(ctx, string(id))
+	require.NoError(t, err)
+	require.False(t, rec.Paused)
+}
+
 func TestService_GlobalStats(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := sysCtx()

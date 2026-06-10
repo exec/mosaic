@@ -991,14 +991,29 @@ func (s *Service) Pause(ctx context.Context, id engine.TorrentID) error {
 	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
 		return err
 	}
-	return s.engine.Pause(id)
+	if err := s.engine.Pause(id); err != nil {
+		return err
+	}
+	// Persist so the pause survives a restart (RestoreOnStartup re-pauses
+	// from the paused column). Log-don't-fail: the engine state is already
+	// applied and a DB hiccup shouldn't surface as a failed pause.
+	if err := s.torrents.SetPaused(ctx, string(id), true); err != nil {
+		log.Warn().Err(err).Str("id", string(id)).Msg("Pause: persist paused state failed")
+	}
+	return nil
 }
 
 func (s *Service) Resume(ctx context.Context, id engine.TorrentID) error {
 	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
 		return err
 	}
-	return s.engine.Resume(id)
+	if err := s.engine.Resume(id); err != nil {
+		return err
+	}
+	if err := s.torrents.SetPaused(ctx, string(id), false); err != nil {
+		log.Warn().Err(err).Str("id", string(id)).Msg("Resume: persist paused state failed")
+	}
+	return nil
 }
 
 func (s *Service) Recheck(ctx context.Context, id engine.TorrentID) error {
@@ -1012,26 +1027,34 @@ func (s *Service) Recheck(ctx context.Context, id engine.TorrentID) error {
 // individual torrents are logged but don't abort the loop — best-effort
 // semantics so a single missing/dead torrent can't strand the rest.
 // Used by the system-tray "Pause all" item.
-func (s *Service) PauseAll(_ context.Context) {
+func (s *Service) PauseAll(ctx context.Context) {
 	for _, snap := range s.engine.List() {
 		if snap.Paused {
 			continue
 		}
 		if err := s.engine.Pause(snap.ID); err != nil {
 			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("PauseAll: pause failed")
+			continue
+		}
+		if err := s.torrents.SetPaused(ctx, string(snap.ID), true); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("PauseAll: persist paused state failed")
 		}
 	}
 }
 
 // ResumeAll is the mirror of PauseAll. Used by the system-tray "Resume all"
 // item when the engine is in the globally-paused state.
-func (s *Service) ResumeAll(_ context.Context) {
+func (s *Service) ResumeAll(ctx context.Context) {
 	for _, snap := range s.engine.List() {
 		if !snap.Paused {
 			continue
 		}
 		if err := s.engine.Resume(snap.ID); err != nil {
 			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("ResumeAll: resume failed")
+			continue
+		}
+		if err := s.torrents.SetPaused(ctx, string(snap.ID), false); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("ResumeAll: persist paused state failed")
 		}
 	}
 }
@@ -1114,8 +1137,29 @@ func (s *Service) BuildTorrentTickSnapshot(ctx context.Context) (TorrentTickSnap
 	if err != nil {
 		return TorrentTickSnapshot{}, err
 	}
+	snaps := s.engine.List()
+	// Persist completed_at the first time we observe a torrent complete.
+	// Every flavor's tick path funnels through here, so this is the one
+	// choke point where the service sees the completion transition. The
+	// record's nil check keeps the write to exactly once per torrent —
+	// RestoreOnStartup reads the column to arm missing-files detection, and
+	// the inspector surfaces it as DetailDTO.CompletedAt.
+	now := time.Now()
+	for _, snap := range snaps {
+		rec, ok := byHash[string(snap.ID)]
+		if !ok || !snap.Completed || rec.CompletedAt != nil {
+			continue
+		}
+		if err := s.torrents.SetCompletedAt(ctx, string(snap.ID), now); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("tick: persist completed_at failed")
+			continue
+		}
+		t := now
+		rec.CompletedAt = &t
+		byHash[string(snap.ID)] = rec
+	}
 	return TorrentTickSnapshot{
-		snaps:      s.engine.List(),
+		snaps:      snaps,
 		byHash:     byHash,
 		tagsByHash: tagsByHash,
 	}, nil
@@ -1357,7 +1401,8 @@ func (s *Service) DetailForFocus(ctx context.Context) (*DetailDTO, error) {
 	if err != nil {
 		return nil, err
 	}
-	dto := detailToDTO(d, s.lookupAddedAt(ctx, f.id))
+	addedAt, completedAt := s.lookupRecordTimes(ctx, f.id)
+	dto := detailToDTO(d, addedAt, completedAt)
 	return &dto, nil
 }
 
@@ -1376,15 +1421,15 @@ func scopeForTabs(tabs []string) engine.DetailScope {
 	return scope
 }
 
-func (s *Service) lookupAddedAt(ctx context.Context, id engine.TorrentID) time.Time {
+func (s *Service) lookupRecordTimes(ctx context.Context, id engine.TorrentID) (time.Time, *time.Time) {
 	rec, err := s.torrents.Get(ctx, string(id))
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, nil
 	}
-	return rec.AddedAt
+	return rec.AddedAt, rec.CompletedAt
 }
 
-func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
+func detailToDTO(d engine.Detail, addedAt time.Time, completedAt *time.Time) DetailDTO {
 	snap := d.Snapshot
 	prog := 0.0
 	if snap.TotalBytes > 0 {
@@ -1407,6 +1452,9 @@ func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
 		Paused:       snap.Paused,
 		Completed:    snap.Completed,
 		FilesMissing: snap.FilesMissing,
+	}
+	if completedAt != nil {
+		dto.CompletedAt = completedAt.Unix()
 	}
 	for _, f := range d.Files {
 		fp := 0.0
