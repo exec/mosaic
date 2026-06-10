@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"mosaic/backend/persistence"
 )
@@ -181,9 +182,24 @@ func (s *Service) ListFiltersByFeed(ctx context.Context, feedID int) ([]FilterDT
 	return out, nil
 }
 
+// validateFilterRegex rejects patterns that won't compile. The poller
+// compiles each filter per poll and skips (with a log) any that fail — so an
+// invalid pattern stored here would be accepted silently and simply never
+// match. The message prefix is registered in remote/handlers.go's
+// userFacingValidationPrefixes so the SPA gets a 400 with the parse error.
+func validateFilterRegex(pattern string) error {
+	if _, err := regexp.Compile(pattern); err != nil {
+		return fmt.Errorf("filter regex is invalid: %v", err)
+	}
+	return nil
+}
+
 func (s *Service) CreateFilter(ctx context.Context, dto FilterDTO) (int, error) {
 	if !CallerFrom(ctx).CanManageRSS() {
 		return 0, ErrForbidden
+	}
+	if err := validateFilterRegex(dto.Regex); err != nil {
+		return 0, err
 	}
 	return s.filters.Create(ctx, persistence.Filter{
 		FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,
@@ -194,6 +210,9 @@ func (s *Service) CreateFilter(ctx context.Context, dto FilterDTO) (int, error) 
 func (s *Service) UpdateFilter(ctx context.Context, dto FilterDTO) error {
 	if !CallerFrom(ctx).CanManageRSS() {
 		return ErrForbidden
+	}
+	if err := validateFilterRegex(dto.Regex); err != nil {
+		return err
 	}
 	return s.filters.Update(ctx, persistence.Filter{
 		ID: dto.ID, FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,

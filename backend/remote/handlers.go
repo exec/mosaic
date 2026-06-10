@@ -431,6 +431,7 @@ var userFacingValidationPrefixes = []string{
 	"max peers per torrent must be ",
 	"no blocklist URL configured",
 	"rss poller not attached",
+	"filter regex is invalid",
 	"URL is empty",
 	"URL has no host",
 	"URL scheme must be http or https",
