@@ -1445,10 +1445,13 @@ func (h *Handlers) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("bad user id"))
 		return
 	}
-	// Rate-limit keyed by the *target* user id so a compromised admin
-	// session can't grind through a password-reset oracle for a victim
-	// account.
-	if !h.passwordLimiter.allow(id) {
+	// Rate-limit keyed by the ACTING caller, not the target. The limiter
+	// runs before the service's admin check, so a target-keyed bucket let
+	// any authenticated user drain a victim's bucket (shared with
+	// ChangeMyPassword) just by spamming this endpoint and eating the 403s.
+	// Caller-keyed, the pre-authorization charge only ever costs the abuser
+	// their own budget, while still throttling a compromised admin session.
+	if !h.passwordLimiter.allow(api.CallerFrom(r.Context()).UserID) {
 		w.Header().Set("Retry-After", strconv.Itoa(loginRetryAfterSecs))
 		writeErr(w, http.StatusTooManyRequests, errors.New("too many password attempts"))
 		return
