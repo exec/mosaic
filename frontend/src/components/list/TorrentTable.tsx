@@ -93,7 +93,12 @@ export function TorrentTable(props: Props) {
   });
 
   return (
-    <div class="overflow-auto" ref={scrollEl}>
+    // h-full constrains this element to the pane so IT is the scrollport
+    // (mirroring CardList). Without the height cap the div grows to content
+    // height, the ancestor scrolls instead, the virtualizer sees a viewport
+    // equal to the full list and renders every row, and the sticky header
+    // sticks to the wrong scroll container.
+    <div class="h-full overflow-auto" ref={scrollEl}>
       <table class="w-full text-sm">
         <thead class="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-md text-xs font-medium uppercase tracking-wider text-zinc-500">
           <For each={table.getHeaderGroups()}>
