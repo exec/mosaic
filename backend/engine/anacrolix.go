@@ -141,6 +141,14 @@ type AnacrolixBackend struct {
 	// Keyed (TorrentID, "ip:port"); guarded by rateMu.
 	prevPeerRates map[TorrentID]map[string]peerRateSample
 
+	// maxConnsPerTorrent is the user-configured per-torrent established-conn
+	// cap (anacrolix's default of 80 when the setting is 0/unset). Initialized
+	// from AnacrolixConfig.MaxPeersPerTorrent, updated by
+	// ApplyPerTorrentMaxPeers, and read by Resume / ScheduledPause's re-enable
+	// path — pre-fix both hardcoded SetMaxEstablishedConns(80), so any
+	// pause/resume cycle or scheduler churn silently reset a user's cap to 80.
+	maxConnsPerTorrent atomic.Int64
+
 	// pausedMu guards paused, queuePos, forceStart, scheduledPause, sequential.
 	// We extend the existing read-mostly mutex rather than introducing a new
 	// one — these maps are all read together by snapshotFor and written through
@@ -177,6 +185,15 @@ type AnacrolixBackend struct {
 	perLimitMu     sync.RWMutex
 	perTorrentDown map[TorrentID]int64 // bytes/sec, 0=unlimited
 	perTorrentUp   map[TorrentID]int64 // bytes/sec, 0=unlimited
+	// limiterRunning marks torrents with a live runPerTorrentLimiter
+	// goroutine. SetTorrentRateLimits sets it (under perLimitMu) before
+	// spawning; the goroutine clears it (under the same lock, re-checking
+	// the limits) before exiting on the both-limits-zero path. Pre-fix the
+	// "needs a goroutine" test compared against the previous limit values,
+	// so a clear-to-(0,0) followed by a non-zero set within one 500ms tick
+	// could spawn a second limiter while the first never observed the (0,0)
+	// state — two goroutines then fought over Allow/DisallowDataDownload.
+	limiterRunning map[TorrentID]bool
 
 	// pieceCompletion is the shared bolt-backed piece-completion store
 	// rooted in cfg.DataDir, so anacrolix's "is this piece valid"
@@ -203,6 +220,15 @@ type AnacrolixBackend struct {
 	// fast-resume path.
 	snapshotMu    sync.Mutex
 	snapshotSaved map[TorrentID]bool
+	// snapshotInflight marks ids with a List()-spawned saveSnapshotIfComplete
+	// goroutine currently running; snapshotRetryAt is the earliest next
+	// attempt after a failed write. Pre-fix List() spawned one goroutine per
+	// completed torrent per tick unconditionally — snapshotSaved is only set
+	// on a SUCCESSFUL write, so a persistent failure (read-only engine dir,
+	// full disk) leaked N goroutines several times a second forever, each
+	// taking the client lock. Both guarded by snapshotMu.
+	snapshotInflight map[TorrentID]bool
+	snapshotRetryAt  map[TorrentID]time.Time
 
 	// onError is the engine-side hook for surfacing per-torrent errors
 	// (out-of-disk-space being the canonical case). Wired by Engine via
@@ -253,9 +279,13 @@ type rateValue struct {
 
 // peerRateSample is a single tick's worth of per-peer cumulative data
 // counters. The next tick's rate is (current - sample) / (now - at).
+// rate is the rate computed AT this sample, kept so back-to-back
+// DetailedSnapshot calls (dt below minPeerRateSampleInterval) can reuse
+// it instead of resampling — see the scope.Peers block in DetailedSnapshot.
 type peerRateSample struct {
 	at   time.Time
 	down int64
+	rate int64
 }
 
 // NewAnacrolixBackend opens a torrent.Client with our config.
@@ -405,8 +435,11 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		expectedComplete: make(map[TorrentID]bool),
 		filesMissing:     make(map[TorrentID]bool),
 		snapshotSaved:    make(map[TorrentID]bool),
+		snapshotInflight: make(map[TorrentID]bool),
+		snapshotRetryAt:  make(map[TorrentID]time.Time),
 		perTorrentDown:   make(map[TorrentID]int64),
 		perTorrentUp:     make(map[TorrentID]int64),
+		limiterRunning:   make(map[TorrentID]bool),
 		dlLim:          dlLim,
 		ulLim:          ulLim,
 		ipBlock:        ipBlock,
@@ -415,6 +448,11 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 		engineCancel:         engineCancel,
 		preallocateFullFiles: cfg.PreallocateFullFiles,
 	}
+	conns := cfg.MaxPeersPerTorrent
+	if conns <= 0 {
+		conns = 80 // anacrolix default
+	}
+	b.maxConnsPerTorrent.Store(int64(conns))
 	// Publish an empty cache up front so the first List() before the sampler's
 	// first tick reads a non-nil map (every torrent → 0 B/s) instead of
 	// nil-dereferencing.
@@ -433,6 +471,13 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 // matches the pre-v0.7.x engine ticker that used to (racily) drive sampling,
 // so observed rate granularity is unchanged.
 const rateSampleInterval = 500 * time.Millisecond
+
+// minPeerRateSampleInterval is the floor below which DetailedSnapshot reuses
+// the previous per-peer sample (and its computed rate) instead of resampling.
+// Per-peer rates can't go through the central sampler — they're only worth
+// computing while someone has the Peers tab focused — so back-to-back calls
+// from multiple consumers are de-conflicted by this minimum-dt guard instead.
+const minPeerRateSampleInterval = 250 * time.Millisecond
 
 // sampleRates is the ONE goroutine that owns prevRates. Every tick it walks
 // the live torrents, computes each torrent's down/up rate from the delta
@@ -1144,7 +1189,7 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 	if !ok {
 		return errors.New("not found")
 	}
-	t.SetMaxEstablishedConns(80)
+	t.SetMaxEstablishedConns(int(a.maxConnsPerTorrent.Load()))
 	a.pausedMu.Lock()
 	a.paused[id] = false
 	delete(a.scheduledPause, id)
@@ -1166,11 +1211,13 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 // ApplyPerTorrentMaxPeers updates SetMaxEstablishedConns on every running
 // torrent. Used when the user changes the "max peers per torrent" setting.
 // Already-paused torrents keep their cap of 0 (we set it to 0 to pause);
-// resuming will pick up the new cap.
+// the new cap is stored in maxConnsPerTorrent so Resume (and the
+// scheduler's re-enable path) restore it instead of a hardcoded default.
 func (a *AnacrolixBackend) ApplyPerTorrentMaxPeers(n int) error {
 	if n <= 0 {
 		n = 80 // anacrolix default
 	}
+	a.maxConnsPerTorrent.Store(int64(n))
 	a.pausedMu.RLock()
 	paused := make(map[TorrentID]bool, len(a.paused))
 	for id, v := range a.paused {
@@ -1206,9 +1253,11 @@ func (a *AnacrolixBackend) Recheck(id TorrentID) error {
 	}
 	// Clear the in-memory dedup so saveSnapshotIfComplete re-runs after the
 	// recheck finishes (it's the same write the original goroutine did
-	// inline pre-v0.4.4).
+	// inline pre-v0.4.4). The retry-backoff stamp goes too — a user-driven
+	// recheck should attempt the save immediately.
 	a.snapshotMu.Lock()
 	delete(a.snapshotSaved, id)
+	delete(a.snapshotRetryAt, id)
 	a.snapshotMu.Unlock()
 	a.setVerifying(id, true)
 	a.verifyWg.Add(1)
@@ -1246,6 +1295,7 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	a.pausedMu.Unlock()
 	a.snapshotMu.Lock()
 	delete(a.snapshotSaved, id)
+	delete(a.snapshotRetryAt, id)
 	a.snapshotMu.Unlock()
 	a.rateMu.Lock()
 	delete(a.prevRates, id)
@@ -1311,9 +1361,9 @@ func (a *AnacrolixBackend) List() []Snapshot {
 	out := make([]Snapshot, 0, len(ts))
 	// Collect newly-completed ids inside the locked region; persist their
 	// fast-resume snapshots in goroutines after the locks are released so
-	// the file I/O doesn't block the tick. saveSnapshotIfComplete dedupes
-	// against snapshotSaved, so subsequent ticks observe completion as a
-	// no-op until Recheck or Remove clears the flag.
+	// the file I/O doesn't block the tick. spawnSnapshotSave dedupes against
+	// snapshotSaved / the in-flight guard, so subsequent ticks observe
+	// completion as a no-op until Recheck or Remove clears the flag.
 	var completed []completedFor
 	// Rates come from the centralized sampler's immutable cache — this loop
 	// only reads, never mutates prevRates, so concurrent List() calls (one
@@ -1329,16 +1379,47 @@ func (a *AnacrolixBackend) List() []Snapshot {
 		}
 		snap := snapshotFor(t, rate, a.paused[id], a.queuePos[id], a.forceStart[id], a.sequential[id], a.scheduledPause[id], a.verifying[id], a.filesMissing[id])
 		out = append(out, snap)
-		if snap.Completed {
+		if snap.Completed && a.snapshotStore != nil {
 			completed = append(completed, completedFor{id: id, t: t})
 		}
 	}
 	a.verifyMu.RUnlock()
 	a.pausedMu.RUnlock()
 	for _, c := range completed {
-		go a.saveSnapshotIfComplete(c.id, c.t)
+		a.spawnSnapshotSave(c.id, c.t)
 	}
 	return out
+}
+
+// snapshotSaveRetryBackoff is how long spawnSnapshotSave waits after a failed
+// snapshot write before trying that torrent again.
+const snapshotSaveRetryBackoff = 30 * time.Second
+
+// spawnSnapshotSave runs saveSnapshotIfComplete on a goroutine, at most one
+// in flight per torrent. List() used to `go saveSnapshotIfComplete(...)` for
+// every completed torrent on every tick; snapshotSaved is only set on a
+// successful write, so a persistently failing snapshot store spawned N
+// goroutines several times per second forever, each taking the client lock.
+// Failures back off for snapshotSaveRetryBackoff before the next attempt.
+func (a *AnacrolixBackend) spawnSnapshotSave(id TorrentID, t *torrent.Torrent) {
+	a.snapshotMu.Lock()
+	if a.snapshotSaved[id] || a.snapshotInflight[id] || time.Now().Before(a.snapshotRetryAt[id]) {
+		a.snapshotMu.Unlock()
+		return
+	}
+	a.snapshotInflight[id] = true
+	a.snapshotMu.Unlock()
+	go func() {
+		a.saveSnapshotIfComplete(id, t)
+		a.snapshotMu.Lock()
+		delete(a.snapshotInflight, id)
+		if a.snapshotSaved[id] {
+			delete(a.snapshotRetryAt, id)
+		} else {
+			a.snapshotRetryAt[id] = time.Now().Add(snapshotSaveRetryBackoff)
+		}
+		a.snapshotMu.Unlock()
+	}()
 }
 
 type completedFor struct {
@@ -1542,17 +1623,30 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 			peerStats := pc.Stats()
 			cumDown := peerStats.ConnStats.BytesReadUsefulData.Int64()
 			var dlRate int64
+			sample := peerRateSample{at: now, down: cumDown}
 			if !complete {
 				if prev, ok := prevPeers[peerKey]; ok {
-					if dt := now.Sub(prev.at).Seconds(); dt > 0 {
-						dlRate = int64(float64(cumDown-prev.down) / dt)
+					if dt := now.Sub(prev.at); dt < minPeerRateSampleInterval {
+						// A second consumer called back-to-back (two web users
+						// focused on the same torrent each get a per-user
+						// DetailForFocus tick): dt is microseconds, so a fresh
+						// delta would read as 0 B/s or spike — the same
+						// multi-reader hazard the torrent-level sampler fixed
+						// centrally (see sampleRates). Reuse the previously
+						// computed rate and keep the old sample so the next
+						// real tick still has a meaningful dt.
+						dlRate = prev.rate
+						sample = prev
+					} else if secs := dt.Seconds(); secs > 0 {
+						dlRate = int64(float64(cumDown-prev.down) / secs)
 						if dlRate < 0 {
 							dlRate = 0
 						}
+						sample.rate = dlRate
 					}
 				}
 			}
-			nextPeers[peerKey] = peerRateSample{at: now, down: cumDown}
+			nextPeers[peerKey] = sample
 			d.Peers = append(d.Peers, PeerEntry{
 				IP:           ip,
 				Port:         port,
@@ -1785,15 +1879,26 @@ func (a *AnacrolixBackend) SetTorrentRateLimits(id TorrentID, downBPS, upBPS int
 		upBPS = 0
 	}
 	a.perLimitMu.Lock()
-	prev := a.perTorrentDown[id] != 0 || a.perTorrentUp[id] != 0
 	a.perTorrentDown[id] = downBPS
 	a.perTorrentUp[id] = upBPS
-	needsStart := !prev && (downBPS != 0 || upBPS != 0)
+	// Lifecycle is tracked via limiterRunning, NOT the previous limit values:
+	// a clear-to-(0,0) followed by a non-zero set within one tick leaves the
+	// old goroutine alive (it never observes the transient 0,0), so spawning
+	// another would race it. The goroutine clears the flag under perLimitMu
+	// with a limits re-check before exiting, so set-after-clear either reuses
+	// the live limiter or deterministically starts a fresh one.
+	needsStart := (downBPS != 0 || upBPS != 0) && !a.limiterRunning[id]
+	if needsStart {
+		a.limiterRunning[id] = true
+	}
 	a.perLimitMu.Unlock()
 
 	if needsStart {
 		t, ok := a.find(id)
 		if !ok {
+			a.perLimitMu.Lock()
+			delete(a.limiterRunning, id)
+			a.perLimitMu.Unlock()
 			return errors.New("not found")
 		}
 		a.verifyWg.Add(1)
@@ -1862,8 +1967,22 @@ func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent
 		upLimit := a.perTorrentUp[id]
 		a.perLimitMu.RUnlock()
 
-		// Both limits cleared — re-enable and exit.
+		// Both limits cleared — re-enable and exit. Confirm under the write
+		// lock and clear limiterRunning atomically with the re-check: a
+		// SetTorrentRateLimits that re-set non-zero limits between our
+		// RLock read and here must either be observed (keep running) or
+		// happen strictly after the flag is cleared (spawns a fresh
+		// limiter). Without the re-check this goroutine could exit just as
+		// the setter saw it as still-running and skipped the spawn,
+		// leaving the torrent unlimited.
 		if downLimit == 0 && upLimit == 0 {
+			a.perLimitMu.Lock()
+			if a.perTorrentDown[id] != 0 || a.perTorrentUp[id] != 0 {
+				a.perLimitMu.Unlock()
+				continue
+			}
+			delete(a.limiterRunning, id)
+			a.perLimitMu.Unlock()
 			if dlBlocked {
 				t.AllowDataDownload()
 			}
@@ -2056,7 +2175,7 @@ func applySequentialPriorities(t *torrent.Torrent, sequential bool) {
 }
 
 // ScheduledPause is the scheduler's pause channel — independent from the
-// user's manual Pause. It uses the same SetMaxEstablishedConns(0/80) trick
+// user's manual Pause. It uses the same SetMaxEstablishedConns(0/cap) trick
 // the manual Pause uses, but writes only the scheduledPause map flag so
 // snapshots can distinguish "user-paused" from "queue-held".
 //
@@ -2086,7 +2205,7 @@ func (a *AnacrolixBackend) ScheduledPause(id TorrentID, paused bool) {
 	if paused {
 		t.SetMaxEstablishedConns(0)
 	} else {
-		t.SetMaxEstablishedConns(80)
+		t.SetMaxEstablishedConns(int(a.maxConnsPerTorrent.Load()))
 	}
 	a.pausedMu.Lock()
 	a.scheduledPause[id] = paused
