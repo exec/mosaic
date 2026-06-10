@@ -18,9 +18,20 @@ type ScheduleEngine struct {
 	location *time.Location
 
 	mu          sync.RWMutex
-	lastApplied int // rule ID we last applied (0 = none/cleared)
+	lastApplied appliedRule // rule + limits we last applied (zero = none/cleared)
 
 	stop chan struct{}
+}
+
+// appliedRule is the change-detection key for tick: the active rule's ID plus
+// the limit values we applied for it. Keying on ID alone meant editing the
+// currently-active rule's limits did nothing until the rule deactivated and
+// reactivated — the edited values weren't re-applied because "same rule".
+type appliedRule struct {
+	id       int
+	downKbps int
+	upKbps   int
+	altOnly  bool
 }
 
 func NewScheduleEngine(svc *Service, rules *persistence.ScheduleRules, loc *time.Location) *ScheduleEngine {
@@ -68,7 +79,7 @@ func (se *ScheduleEngine) tick(ctx context.Context) {
 		if r.DaysMask&dayBit == 0 {
 			continue
 		}
-		if minutes < r.StartMin || minutes >= r.EndMin {
+		if !ruleWindowContains(r.StartMin, r.EndMin, minutes) {
 			continue
 		}
 		active = r
@@ -76,15 +87,15 @@ func (se *ScheduleEngine) tick(ctx context.Context) {
 	}
 
 	se.mu.Lock()
-	prevID := se.lastApplied
-	nextID := 0
+	prev := se.lastApplied
+	var next appliedRule
 	if active != nil {
-		nextID = active.ID
+		next = appliedRule{id: active.ID, downKbps: active.DownKbps, upKbps: active.UpKbps, altOnly: active.AltOnly}
 	}
-	se.lastApplied = nextID
+	se.lastApplied = next
 	se.mu.Unlock()
 
-	if prevID == nextID {
+	if prev == next {
 		return
 	}
 
@@ -104,4 +115,16 @@ func (se *ScheduleEngine) tick(ctx context.Context) {
 	_ = se.svc.engine.SetGlobalRateLimits(active.DownKbps*1024, active.UpKbps*1024)
 	log.Info().Int("rule_id", active.ID).Int("down", active.DownKbps).Int("up", active.UpKbps).
 		Msg("schedule_engine: applied rule")
+}
+
+// ruleWindowContains reports whether a rule's [startMin, endMin) window
+// contains the given minutes-since-midnight. startMin > endMin means the
+// window wraps midnight (e.g. 22:00–06:00, StartMin=1320 EndMin=360): the
+// rule is active past the start OR before the end. startMin == endMin is an
+// empty window, matching the pre-wrap behavior.
+func ruleWindowContains(startMin, endMin, minutes int) bool {
+	if startMin <= endMin {
+		return minutes >= startMin && minutes < endMin
+	}
+	return minutes >= startMin || minutes < endMin
 }

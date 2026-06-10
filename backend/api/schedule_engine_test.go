@@ -68,6 +68,68 @@ func TestScheduleEngine_NoActiveRule_RestoresUserLimits(t *testing.T) {
 	}, 2*time.Second, 25*time.Millisecond)
 }
 
+func TestRuleWindowContains(t *testing.T) {
+	cases := []struct {
+		name                      string
+		startMin, endMin, minutes int
+		want                      bool
+	}{
+		{"normal window, inside", 9 * 60, 17 * 60, 12 * 60, true},
+		{"normal window, before start", 9 * 60, 17 * 60, 8 * 60, false},
+		{"normal window, at start", 9 * 60, 17 * 60, 9 * 60, true},
+		{"normal window, at end (exclusive)", 9 * 60, 17 * 60, 17 * 60, false},
+		{"empty window never matches", 10 * 60, 10 * 60, 10 * 60, false},
+		{"midnight wrap, late evening", 22 * 60, 6 * 60, 23 * 60, true},
+		{"midnight wrap, at start", 22 * 60, 6 * 60, 22 * 60, true},
+		{"midnight wrap, early morning", 22 * 60, 6 * 60, 3 * 60, true},
+		{"midnight wrap, at end (exclusive)", 22 * 60, 6 * 60, 6 * 60, false},
+		{"midnight wrap, midday outside", 22 * 60, 6 * 60, 12 * 60, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, ruleWindowContains(tc.startMin, tc.endMin, tc.minutes))
+		})
+	}
+}
+
+// TestScheduleEngine_EditingActiveRuleReapplies covers the change-detection
+// key: editing the currently-active rule's limits must be re-applied on the
+// next tick, not deferred until the rule deactivates and reactivates.
+func TestScheduleEngine_EditingActiveRuleReapplies(t *testing.T) {
+	svc, fb := newTestService(t)
+	ctx := sysCtx()
+
+	now := time.Now()
+	dayBit := 1 << int(now.Weekday())
+	startMin := now.Hour()*60 + now.Minute() - 1
+	if startMin < 0 {
+		startMin = 0
+	}
+	endMin := startMin + 10
+	id, err := svc.CreateScheduleRule(ctx, ScheduleRuleDTO{
+		DaysMask: dayBit, StartMin: startMin, EndMin: endMin,
+		DownKbps: 999, UpKbps: 333, Enabled: true,
+	})
+	require.NoError(t, err)
+
+	// Drive ticks directly (no goroutine) so the test is deterministic.
+	se := &ScheduleEngine{svc: svc, rules: svc.scheduleRules, location: time.Local, stop: make(chan struct{})}
+	se.tick(ctx)
+	d, u := fb.GlobalRateLimits()
+	require.Equal(t, 999*1024, d)
+	require.Equal(t, 333*1024, u)
+
+	// Edit the active rule's limits — same ID, same window.
+	require.NoError(t, svc.UpdateScheduleRule(ctx, ScheduleRuleDTO{
+		ID: id, DaysMask: dayBit, StartMin: startMin, EndMin: endMin,
+		DownKbps: 555, UpKbps: 111, Enabled: true,
+	}))
+	se.tick(ctx)
+	d, u = fb.GlobalRateLimits()
+	require.Equal(t, 555*1024, d)
+	require.Equal(t, 111*1024, u)
+}
+
 func TestService_ScheduleRuleCRUD_RoundTrip(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := sysCtx()
