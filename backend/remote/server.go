@@ -157,6 +157,7 @@ func MountWithOptions(svc *api.Service, sessions *SessionStore, hub *Hub, static
 			g.Post("/feeds", h.CreateFeed)
 			g.Put("/feeds", h.UpdateFeed)
 			g.Delete("/feeds/{id}", h.DeleteFeed)
+			g.Post("/feeds/{id}/poll", h.PollFeedNow)
 			g.Get("/feeds/{feedID}/items", h.GetFeedItems)
 			g.Post("/torrents/url", h.AddFeedItem)
 			g.Get("/feeds/{feedID}/filters", h.ListFiltersByFeed)

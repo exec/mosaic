@@ -171,6 +171,20 @@ func TestHandlers_WebConfigAndPasswordRotation(t *testing.T) {
 	require.NotEqual(t, key, rot.APIKey)
 }
 
+// TestHandlers_PollFeedNow_RouteWired pins the POST /api/feeds/{id}/poll
+// route the SPA's per-feed "Refresh now" button calls. The fixture has no
+// RSS poller attached, so the service returns "rss poller not attached" —
+// a user-facing validation message writeServiceErr maps to 400. A missing
+// route would yield 404/405 instead.
+func TestHandlers_PollFeedNow_RouteWired(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(sysCtx())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/feeds/1/poll", nil))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
 func TestHandlers_Stats(t *testing.T) {
 	f := newFixture(t)
 	key, _ := f.svc.RotateAPIKey(sysCtx())

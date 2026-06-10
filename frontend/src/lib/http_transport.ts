@@ -322,6 +322,7 @@ const ROUTES: Record<string, RouteSpec> = {
     unwrap: okEnvelope,
   },
   DeleteFeed: {method: 'DELETE', path: ([id]) => `/api/feeds/${id}`, unwrap: okEnvelope},
+  PollFeedNow: {method: 'POST', path: ([id]) => `/api/feeds/${id}/poll`, unwrap: okEnvelope},
   GetFeedItems: {method: 'GET', path: ([feedID]) => `/api/feeds/${feedID}/items`},
   AddFeedItem: {
     method: 'POST',

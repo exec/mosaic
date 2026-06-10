@@ -1163,6 +1163,22 @@ func (h *Handlers) DeleteFilter(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// PollFeedNow triggers an immediate poll of one feed, bypassing its scheduled
+// interval. Backs the SPA's per-feed "Refresh now" button; permission
+// (CanManageRSS) is enforced by the service like the other feed mutations.
+func (h *Handlers) PollFeedNow(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.PollFeedNow(r.Context(), id); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handlers) GetFeedItems(w http.ResponseWriter, r *http.Request) {
 	feedID, err := strconv.Atoi(chi.URLParam(r, "feedID"))
 	if err != nil {
