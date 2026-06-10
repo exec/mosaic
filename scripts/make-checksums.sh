@@ -10,7 +10,10 @@ cd "${BIN_DIR}"
 shopt -s nullglob
 
 ARTIFACTS=()
-for f in *.dmg *.deb *.rpm *.AppImage *-installer.exe *-portable.exe; do
+# *.tar.gz covers the macOS auto-update tarball (Mosaic-<ver>-darwin-
+# universal.tar.gz from build-macos.sh) — the darwin updater validates it
+# against this manifest, and a missing row is a hard checksum failure.
+for f in *.dmg *.deb *.rpm *.AppImage *.tar.gz *-installer.exe *-portable.exe; do
     if [[ -f "${f}" ]]; then
         ARTIFACTS+=("${f}")
     fi
