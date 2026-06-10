@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -132,9 +133,16 @@ func (u *Updater) Install(ctx context.Context, info Info) error {
 
 // compareVersions returns negative / zero / positive for a < / == / > b
 // using simple semver-ish numeric segment compare. Tolerant of "v" prefix.
+// Pre-release identifiers follow semver precedence in spirit: a pre-release
+// sorts below the same-numbered release (v0.8.0-rc1 < v0.8.0), and two
+// pre-releases of the same core version compare lexicographically (close
+// enough for our rcN/betaN tag scheme — without this, rc users were never
+// offered rc2 or the final release).
 func compareVersions(a, b string) int {
-	pa := parseSegments(a)
-	pb := parseSegments(b)
+	coreA, preA := splitPrerelease(a)
+	coreB, preB := splitPrerelease(b)
+	pa := parseSegments(coreA)
+	pb := parseSegments(coreB)
 	n := len(pa)
 	if len(pb) > n {
 		n = len(pb)
@@ -154,7 +162,30 @@ func compareVersions(a, b string) int {
 			return 1
 		}
 	}
-	return 0
+	switch {
+	case preA == preB:
+		return 0
+	case preA == "": // a is the release, b a pre-release of it
+		return 1
+	case preB == "": // b is the release, a a pre-release of it
+		return -1
+	case preA < preB:
+		return -1
+	default:
+		return 1
+	}
+}
+
+// splitPrerelease splits "0.8.0-rc1+build5" into ("0.8.0", "rc1"). Build
+// metadata after '+' is dropped (semver: ignored for precedence).
+func splitPrerelease(v string) (core, pre string) {
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		v = v[:i]
+	}
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return v, ""
 }
 
 func parseSegments(v string) []int {
@@ -176,7 +207,7 @@ func parseSegments(v string) []int {
 			have = false
 		}
 		if c != '.' {
-			break // stop at first non-dot non-digit (e.g. "-rc1")
+			break // stop at first non-dot non-digit
 		}
 	}
 	if have {
