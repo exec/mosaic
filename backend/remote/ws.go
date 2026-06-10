@@ -350,7 +350,9 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.Han
 				return
 			case <-recheck.C:
 				if sessionToken != "" {
-					if _, ok := sessions.Valid(sessionToken); !ok {
+					// Peek, not Valid: the recheck must not slide the expiry
+					// forward, or any open tab would immortalize its session.
+					if _, ok := sessions.Peek(sessionToken); !ok {
 						conn.Close(websocket.StatusPolicyViolation, "session revoked")
 						return
 					}
