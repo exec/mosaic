@@ -64,30 +64,22 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 	if r.Sequential {
 		sequential = 1
 	}
-	var seedingStartedAt sql.NullInt64
-	if r.SeedingStartedAt != nil {
-		seedingStartedAt = sql.NullInt64{Int64: r.SeedingStartedAt.Unix(), Valid: true}
-	}
 	_, err := t.db.SQL().ExecContext(ctx, `
 INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, sequential)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(infohash) DO UPDATE SET
   name = excluded.name,
-  magnet = excluded.magnet,
-  save_path = excluded.save_path,
-  category_id = excluded.category_id,
-  added_at = excluded.added_at,
-  completed_at = excluded.completed_at,
-  paused = excluded.paused,
-  queue_position = excluded.queue_position,
-  force_start = excluded.force_start,
-  metainfo = COALESCE(excluded.metainfo, torrents.metainfo),
-  down_rate_limit = excluded.down_rate_limit,
-  up_rate_limit = excluded.up_rate_limit,
-  sequential = excluded.sequential
+  magnet = COALESCE(NULLIF(excluded.magnet, ''), torrents.magnet),
+  metainfo = COALESCE(excluded.metainfo, torrents.metainfo)
 `, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo), r.DownRateLimit, r.UpRateLimit, sequential)
-	// seed_policy and seeding_started_at are set by dedicated methods only.
-	_ = seedingStartedAt
+	// On duplicate adds (RSS re-match, watch-folder re-scan, user re-dropping
+	// the same file) only identity/metadata fields are refreshed. User state —
+	// added_at, paused, queue_position, force_start, category_id, rate limits,
+	// sequential, completed_at — is owned by the dedicated Set* methods and
+	// must not be reset by a re-add. save_path stays too: the engine keeps
+	// using the original storage location for an already-known infohash, so
+	// persisting a new path would desync DB from disk. seed_policy and
+	// seeding_started_at are likewise set by dedicated methods only.
 	return err
 }
 
@@ -171,6 +163,27 @@ func (t *Torrents) SetCategory(ctx context.Context, infohash string, categoryID 
 func (t *Torrents) SetQueuePosition(ctx context.Context, infohash string, pos int) error {
 	_, err := t.db.SQL().ExecContext(ctx,
 		`UPDATE torrents SET queue_position = ? WHERE infohash = ?`, pos, infohash)
+	return err
+}
+
+// SetPaused persists whether a torrent is user-paused, so the state survives
+// restarts (RestoreOnStartup re-pauses torrents with paused=1).
+func (t *Torrents) SetPaused(ctx context.Context, infohash string, paused bool) error {
+	v := 0
+	if paused {
+		v = 1
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET paused = ? WHERE infohash = ?`, v, infohash)
+	return err
+}
+
+// SetCompletedAt records when a torrent first finished downloading. Written
+// once by the service when it observes the completed transition; never
+// cleared. RestoreOnStartup uses it to arm missing-files detection.
+func (t *Torrents) SetCompletedAt(ctx context.Context, infohash string, at time.Time) error {
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET completed_at = ? WHERE infohash = ?`, at.Unix(), infohash)
 	return err
 }
 
