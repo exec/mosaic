@@ -199,7 +199,7 @@ func Init(ctx context.Context, cfg Config) (*Backend, func(), error) {
 	closers = append(closers, schedEng.Close)
 
 	// ---- RSS poller ----
-	rss := api.NewRSSPoller(svc, feeds, filters)
+	rss := api.NewRSSPoller(svc, feeds, filters, persistence.NewRSSSeen(db))
 	closers = append(closers, rss.Close)
 	svc.AttachRSSPoller(rss)
 
