@@ -1,9 +1,12 @@
 package notifications
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -225,4 +228,49 @@ func TestTruncate(t *testing.T) {
 	require.Equal(t, "abc", truncate("abc", 5))
 	require.Equal(t, "ab…", truncate("abcdef", 3))
 	require.Equal(t, "a", truncate("abc", 1))
+	require.Equal(t, "", truncate("abc", 0))
+}
+
+// TestTruncate_RuneAware ensures truncation counts runes, not bytes — slicing
+// bytes split multi-byte UTF-8 sequences mid-rune and produced mojibake in
+// OS notifications for non-ASCII torrent names.
+func TestTruncate_RuneAware(t *testing.T) {
+	require.Equal(t, "日本…", truncate("日本語のトレント", 3))
+	require.Equal(t, "日", truncate("日本語", 1))
+	require.Equal(t, "日本語", truncate("日本語", 3))
+	for n := 0; n <= 10; n++ {
+		require.True(t, utf8.ValidString(truncate("héllo wörld🙂", n)), "n=%d", n)
+	}
+}
+
+// TestSubscriber_StopBeforeStartDoesNotBlock: Stop must be a no-op (not a
+// deadlock on <-s.done) when Start was never called — nothing will ever
+// close the done channel in that case.
+func TestSubscriber_StopBeforeStartDoesNotBlock(t *testing.T) {
+	sub := NewSubscriber(&fakeNotifier{}, Settings{})
+	done := make(chan struct{})
+	go func() {
+		sub.Stop()
+		sub.Stop() // still idempotent
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked without a prior Start")
+	}
+}
+
+// TestSubscriber_StartTwicePanics enforces the documented run-once contract —
+// a silent second Start used to double-subscribe to the engine event bus.
+func TestSubscriber_StartTwicePanics(t *testing.T) {
+	eng := engine.NewEngine(engine.NewFakeBackend(), 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	sub := NewSubscriber(&fakeNotifier{}, Settings{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub.Start(ctx, eng)
+	require.Panics(t, func() { sub.Start(ctx, eng) })
+	sub.Stop()
 }

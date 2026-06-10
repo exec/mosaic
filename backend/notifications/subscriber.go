@@ -35,6 +35,12 @@ type Subscriber struct {
 	// errored[id] = true once we've fired an "error" notification; same reset.
 	errored map[engine.TorrentID]bool
 
+	// started/stopped track the consumer-goroutine lifecycle (guarded by mu):
+	// Start enforces its documented run-once contract, and Stop must not
+	// block on done when Start never ran (nothing will ever close it).
+	started bool
+	stopped bool
+
 	stop chan struct{}
 	done chan struct{}
 }
@@ -65,18 +71,31 @@ func (s *Subscriber) SetSettings(cfg Settings) {
 // Start spawns the consumer goroutine. ctx cancellation OR Stop() terminates it.
 // Calling Start more than once panics (callers shouldn't need to re-subscribe).
 func (s *Subscriber) Start(ctx context.Context, eng *engine.Engine) {
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		panic("notifications: Subscriber.Start called more than once")
+	}
+	s.started = true
+	s.mu.Unlock()
 	ch := eng.Subscribe()
 	go s.run(ctx, ch)
 }
 
-// Stop terminates the consumer goroutine. Idempotent.
+// Stop terminates the consumer goroutine. Idempotent, and a no-op (beyond
+// closing the stop channel) when Start was never called — waiting on done in
+// that case would block forever since no goroutine will ever close it.
 func (s *Subscriber) Stop() {
-	select {
-	case <-s.stop:
-		return
-	default:
+	s.mu.Lock()
+	started, alreadyStopped := s.started, s.stopped
+	if !alreadyStopped {
+		s.stopped = true
+		close(s.stop)
 	}
-	close(s.stop)
+	s.mu.Unlock()
+	if alreadyStopped || !started {
+		return
+	}
 	<-s.done
 }
 
@@ -180,12 +199,19 @@ func (s *Subscriber) NotifyUpdateInstalled(version string) {
 	}
 }
 
+// truncate caps s at n runes (not bytes — slicing bytes could split a UTF-8
+// sequence mid-rune and hand the OS notifier mojibake), appending an ellipsis
+// when something was cut.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	if n <= 1 {
-		return s[:n]
+	if n == 1 {
+		return string(r[:1])
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }
