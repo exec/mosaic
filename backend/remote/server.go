@@ -61,8 +61,11 @@ func MountWithOptions(svc *api.Service, sessions *SessionStore, hub *Hub, static
 	csrf := OriginGuard()
 
 	r.Route("/api", func(api chi.Router) {
-		// public
-		api.Post("/login", h.Login)
+		// public — Login still gets the OriginGuard: a cross-site form post
+		// could otherwise silently log the victim's browser into an
+		// attacker-controlled account (login CSRF). The SPA is same-origin so
+		// legitimate logins always carry a matching Origin.
+		api.With(csrf).Post("/login", h.Login)
 		api.Get("/bootstrap", h.Bootstrap)
 		// gated
 		api.Group(func(g chi.Router) {

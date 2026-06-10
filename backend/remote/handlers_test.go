@@ -156,7 +156,7 @@ func TestHandlers_WebConfigAndPasswordRotation(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"username": "remote", "password": "p4ssword!"})
 	rec = httptest.NewRecorder()
-	f.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body)))
+	f.router.ServeHTTP(rec, loginReq(bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	// Rotate API key — old key still works for the PUT but a new one comes back.
@@ -265,7 +265,7 @@ func TestLogin_CookieHasSameSiteStrict(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
 	rec := httptest.NewRecorder()
-	f.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body)))
+	f.router.ServeHTTP(rec, loginReq(bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	var sessionCookie *http.Cookie
@@ -290,14 +290,14 @@ func TestLogin_RateLimitReturns429AfterFiveFailures(t *testing.T) {
 	// 6th from the same IP must trip the limiter and return 429.
 	for i := 0; i < 5; i++ {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+		req := loginReq(bytes.NewReader(body))
 		req.RemoteAddr = "10.0.0.7:54321"
 		f.router.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req := loginReq(bytes.NewReader(body))
 	req.RemoteAddr = "10.0.0.7:54321"
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
@@ -305,10 +305,36 @@ func TestLogin_RateLimitReturns429AfterFiveFailures(t *testing.T) {
 
 	// Different IP gets its own bucket.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req = loginReq(bytes.NewReader(body))
 	req.RemoteAddr = "10.0.0.8:54321"
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// TestLogin_RejectsCrossOriginPOST covers login CSRF: a cross-site form post
+// to /api/login must be rejected by the OriginGuard before credentials are
+// even examined, so a malicious page can't silently log the victim's browser
+// into an attacker-controlled account.
+func TestLogin_RejectsCrossOriginPOST(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Host = "mosaic.local:8080"
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	// Missing both Origin and Referer is rejected too — same semantics as
+	// the rest of the guarded surface.
+	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 }
 
 func TestOriginGuard_RejectsMismatchedOriginOnPOST(t *testing.T) {
@@ -506,7 +532,7 @@ func TestLogin_BodyOver1MiBReturns413BeforeRateLimit(t *testing.T) {
 	body := append([]byte(`{"username":"alice","password":"`), junk...)
 	body = append(body, []byte(`"}`)...)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req := loginReq(bytes.NewReader(body))
 	req.RemoteAddr = "10.0.0.99:12345"
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
@@ -517,7 +543,7 @@ func TestLogin_BodyOver1MiBReturns413BeforeRateLimit(t *testing.T) {
 	good, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
 	for i := 0; i < 5; i++ {
 		rec = httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(good))
+		req = loginReq(bytes.NewReader(good))
 		req.RemoteAddr = "10.0.0.99:12345"
 		f.router.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code, "login %d", i+1)

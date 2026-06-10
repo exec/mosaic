@@ -62,6 +62,16 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{svc: svc, fb: fb, sessions: sessions, router: router}
 }
 
+// loginReq builds a POST /api/login request with a same-origin Origin header.
+// /api/login sits behind the OriginGuard (login-CSRF defense), which rejects
+// browser-shaped POSTs lacking a matching Origin/Referer; the SPA always
+// sends Origin on fetch, so tests mimic that.
+func loginReq(body io.Reader) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/api/login", body)
+	req.Header.Set("Origin", "http://"+req.Host)
+	return req
+}
+
 func (f *fixture) seedCreds(t *testing.T, user, pass string) {
 	t.Helper()
 	require.NoError(t, f.svc.SetWebConfig(sysCtx(), api.WebConfigDTO{Username: user}))
@@ -72,7 +82,7 @@ func (f *fixture) loginCookie(t *testing.T, user, pass string) *http.Cookie {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req := loginReq(bytes.NewReader(body))
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	for _, c := range rec.Result().Cookies() {
@@ -90,7 +100,7 @@ func TestServer_LoginRejectsWrongCreds(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "wrong"})
 	rec := httptest.NewRecorder()
-	f.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body)))
+	f.router.ServeHTTP(rec, loginReq(bytes.NewReader(body)))
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
