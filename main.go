@@ -37,12 +37,15 @@ var version = "dev"
 func main() {
 	// On Windows + Linux, when the file manager launches us with a
 	// .torrent path while another Mosaic is already running, we MUST
-	// forward args + exit before touching anacrolix's listen port
-	// (port-bind would fail and log.Fatal would kill us before reaching
-	// the second-instance dispatch). Windows uses Wails's mutex+WM_COPYDATA
-	// wire; Linux uses our own Unix socket because Wails's D-Bus single-
-	// instance silently fails on common setups (Wayland, sandboxed
-	// launchers, missing XDG_RUNTIME_DIR). See
+	// forward args + exit before touching anacrolix's listen port. A
+	// failed port-bind is no longer fatal (the engine falls back to an
+	// OS-picked ephemeral — see backend/engine/anacrolix.go), but a second
+	// instance that gets that far still opens the shared DB, re-announces
+	// every torrent, and runs on a throwaway port before Wails's
+	// SingleInstanceLock can dispatch it. Windows uses Wails's
+	// mutex+WM_COPYDATA wire; Linux uses our own Unix socket because
+	// Wails's D-Bus single-instance silently fails on common setups
+	// (Wayland, sandboxed launchers, missing XDG_RUNTIME_DIR). See
 	// backend/platform/single_instance_*.go. No-op on macOS.
 	if platform.EarlyForwardLaunchArgs("io.github.exec.mosaic") {
 		os.Exit(0)
