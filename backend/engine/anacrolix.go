@@ -792,7 +792,7 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 						log.Printf("verify: fast-resume %s — skipping hash (partial, restored=%d pieces)", id, restored)
 					}
 					if ctx.Err() == nil {
-						setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
+						a.applyPostVerifyPriorities(id, t)
 					}
 					return
 				}
@@ -826,6 +826,21 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	// next startup can take the fast-resume path.
 	a.saveSnapshotIfComplete(id, t)
 
+	a.applyPostVerifyPriorities(id, t)
+}
+
+// applyPostVerifyPriorities restores piece priorities once verify finishes.
+// SetSequential may have run while the verify was in flight; blindly resetting
+// every file to Normal here would silently revert the sequential gradient, so
+// re-apply it instead when the flag is set.
+func (a *AnacrolixBackend) applyPostVerifyPriorities(id TorrentID, t *torrent.Torrent) {
+	a.pausedMu.RLock()
+	sequential := a.sequential[id]
+	a.pausedMu.RUnlock()
+	if sequential {
+		applySequentialPriorities(t, true)
+		return
+	}
 	setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
 }
 
