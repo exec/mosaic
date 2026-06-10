@@ -61,6 +61,9 @@ type Service struct {
 	desktopHookMu    sync.RWMutex
 	onDesktopChanged func(DesktopIntegrationDTO)
 
+	updaterHookMu    sync.RWMutex
+	onUpdaterChanged func(UpdaterConfigDTO)
+
 	updater       *updater.Updater // may be nil if not yet attached
 	appVersion    string
 	installSource updater.InstallSource // "apt" | "appimage" | "manual"
@@ -551,7 +554,33 @@ func (s *Service) SetUpdaterConfig(ctx context.Context, c UpdaterConfigDTO) erro
 	if err := s.setBoolSetting(ctx, settingUpdaterEnabled, c.Enabled); err != nil {
 		return err
 	}
-	return s.settings.Set(ctx, settingUpdaterChannel, c.Channel)
+	if err := s.settings.Set(ctx, settingUpdaterChannel, c.Channel); err != nil {
+		return err
+	}
+	s.fireUpdaterConfigChanged(s.GetUpdaterConfig(ctx))
+	return nil
+}
+
+// OnUpdaterConfigChange registers a synchronous callback invoked after a
+// SetUpdaterConfig commit, mirroring OnWebConfigChange /
+// OnDesktopIntegrationChange. main.go uses it to push channel changes into
+// the live GitHubSource and to start/stop the periodic check goroutine —
+// without it, both silently required an app restart. Pass nil to unregister.
+// Only one callback is supported. The daemon never registers one (auto-update
+// is intentionally not wired there); firing is nil-safe.
+func (s *Service) OnUpdaterConfigChange(cb func(UpdaterConfigDTO)) {
+	s.updaterHookMu.Lock()
+	s.onUpdaterChanged = cb
+	s.updaterHookMu.Unlock()
+}
+
+func (s *Service) fireUpdaterConfigChanged(c UpdaterConfigDTO) {
+	s.updaterHookMu.RLock()
+	cb := s.onUpdaterChanged
+	s.updaterHookMu.RUnlock()
+	if cb != nil {
+		cb(c)
+	}
 }
 
 func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {

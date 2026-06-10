@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
@@ -196,13 +197,14 @@ func main() {
 	// Auto-update: GitHub-backed updater, fan out new releases to both the
 	// Wails desktop session and any connected browser sessions. Schedule only
 	// runs the goroutine when the user hasn't disabled checks in Settings.
+	ghSource := &updater.GitHubSource{
+		Owner:   "exec",
+		Repo:    "mosaic",
+		Channel: svc.UpdaterChannel(ctx),
+	}
 	upd := updater.New(updater.Config{
 		CurrentVersion: version,
-		Source: &updater.GitHubSource{
-			Owner:   "exec",
-			Repo:    "mosaic",
-			Channel: svc.UpdaterChannel(ctx),
-		},
+		Source:         ghSource,
 		OnAvailable: func(info updater.Info) {
 			dto := svc.MakeUpdateInfoDTO(info)
 			if back.Hub != nil {
@@ -213,6 +215,31 @@ func main() {
 	})
 	installSource := updater.DetectInstallSource()
 	svc.AttachUpdater(upd, version, installSource)
+	// Schedule lifecycle: started/stopped at runtime as the user flips the
+	// Settings → Updates toggle (via OnUpdaterConfigChange below), not just
+	// at boot. Guarded so a toggle flapped on/on doesn't stack goroutines.
+	var (
+		schedMu     sync.Mutex
+		schedCancel context.CancelFunc
+	)
+	startSchedule := func() {
+		schedMu.Lock()
+		defer schedMu.Unlock()
+		if schedCancel != nil {
+			return // already running
+		}
+		sctx, cancel := context.WithCancel(ctx)
+		schedCancel = cancel
+		go upd.Schedule(sctx)
+	}
+	stopSchedule := func() {
+		schedMu.Lock()
+		defer schedMu.Unlock()
+		if schedCancel != nil {
+			schedCancel()
+			schedCancel = nil
+		}
+	}
 	// Apt-managed installs defer upgrades to apt — running our own
 	// updater on top would either need root to rewrite the dpkg
 	// database (gross), or get clobbered on the next `apt upgrade`
@@ -221,8 +248,22 @@ func main() {
 	if installSource == updater.InstallSourceAPT {
 		log.Info().Msg("auto-updater disabled: managed by apt — use `sudo apt upgrade mosaic` for updates")
 	} else if svc.UpdaterEnabled(ctx) {
-		go upd.Schedule(ctx)
+		startSchedule()
 	}
+	// React to Settings → Updates changes without requiring a restart:
+	// push the channel into the live source (it rebuilds its cached
+	// go-selfupdate handle on change) and start/stop the periodic check.
+	svc.OnUpdaterConfigChange(func(c api.UpdaterConfigDTO) {
+		ghSource.SetChannel(c.Channel)
+		if installSource == updater.InstallSourceAPT {
+			return
+		}
+		if c.Enabled {
+			startSchedule()
+		} else {
+			stopSchedule()
+		}
+	})
 
 	// Close-to-tray on Linux/Windows is gated on desktop.tray_enabled +
 	// desktop.close_to_tray. On macOS we set HideWindowOnClose: true below,
