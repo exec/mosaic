@@ -9,7 +9,9 @@ import {fmtBytes, fmtETA, fmtPercent, fmtRate} from '../../lib/format';
 type Props = {
   torrents: Torrent[];
   selection: Set<string>;
-  onRowClick: (id: string, e: MouseEvent) => void;
+  // visibleIds is the id list in the on-screen (sorted) order, so shift-click
+  // range select can extend over exactly the rows the user sees.
+  onRowClick: (id: string, e: MouseEvent, visibleIds: string[]) => void;
 };
 
 // Fixed table row height (px). Rows are single-line with truncation so the
@@ -138,7 +140,7 @@ export function TorrentTable(props: Props) {
                   <tr
                     class="cursor-pointer border-t border-white/[.04] hover:bg-white/[.02]"
                     classList={{'!bg-accent-500/[.06]': props.selection.has(row().original.id)}}
-                    onClick={(e) => props.onRowClick(row().original.id, e)}
+                    onClick={(e) => props.onRowClick(row().original.id, e, table.getRowModel().rows.map((r) => r.original.id))}
                   >
                     <For each={row().getVisibleCells()}>
                       {(cell) => (

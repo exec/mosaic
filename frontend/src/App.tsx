@@ -143,9 +143,9 @@ function AuthenticatedApp() {
     }
   };
 
-  const handleSelect = (id: string, e: MouseEvent) => {
+  const handleSelect = (id: string, e: MouseEvent, visibleIds: string[]) => {
     if (e.metaKey || e.ctrlKey) store.toggleSelect(id);
-    else if (e.shiftKey) store.extendSelectTo(id);
+    else if (e.shiftKey) store.extendSelectTo(id, visibleIds);
     else {
       store.select(id);
       store.openInspector(id);
@@ -196,10 +196,15 @@ function AuthenticatedApp() {
           }
         });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (store.state.selection.size === 0) return;
+        const ids = [...store.state.selection];
+        if (ids.length === 0) return;
         e.preventDefault();
+        // Bulk removal is destructive and a stray keystroke away — confirm
+        // first, matching the confirm() pattern used by the settings panes'
+        // destructive actions. A single torrent stays one keystroke.
+        if (ids.length > 1 && !confirm(`Remove ${ids.length} torrents from the list? Downloaded files are kept.`)) return;
         const failures: string[] = [];
-        Promise.all([...store.state.selection].map(async (id) => {
+        Promise.all(ids.map(async (id) => {
           try { await store.remove(id, false); }
           catch (err) { failures.push(`${id.slice(0, 8)}: ${String(err)}`); }
         })).then(() => {
