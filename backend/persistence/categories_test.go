@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +59,31 @@ func TestCategories_Delete(t *testing.T) {
 	require.NoError(t, c.Delete(ctx, id))
 	_, err := c.Get(ctx, id)
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// TestCategories_DeleteInUse covers deleting a category still assigned to a
+// torrent: torrents.category_id has no ON DELETE action and foreign_keys is
+// on, so Delete must detach the torrents (category_id → NULL) in the same
+// transaction instead of failing with an FK violation.
+func TestCategories_DeleteInUse(t *testing.T) {
+	db := newTestDB(t)
+	c := NewCategories(db)
+	tor := NewTorrents(db)
+	ctx := context.Background()
+
+	id, err := c.Create(ctx, Category{Name: "Movies"})
+	require.NoError(t, err)
+	require.NoError(t, tor.Save(ctx, TorrentRecord{
+		InfoHash: "aaa", Name: "film", SavePath: "/tmp", CategoryID: &id, AddedAt: time.Now(),
+	}))
+
+	require.NoError(t, c.Delete(ctx, id))
+	_, err = c.Get(ctx, id)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	got, err := tor.Get(ctx, "aaa")
+	require.NoError(t, err)
+	require.Nil(t, got.CategoryID, "torrent must be detached from the deleted category")
 }
 
 func TestCategories_NameUnique(t *testing.T) {
