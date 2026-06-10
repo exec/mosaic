@@ -244,6 +244,22 @@ func (f *FakeBackend) SetFilePriorities(id TorrentID, prios map[int]Priority) er
 	return nil
 }
 
+// SetSessionStats is a test helper: overwrites the session byte counters and
+// completion flag the way the anacrolix backend would report them. Completed
+// torrents report BytesDone == TotalBytes, matching the real backend.
+func (f *FakeBackend) SetSessionStats(id TorrentID, down, up int64, completed bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.torrents[id]; ok {
+		t.BytesDown = down
+		t.BytesUp = up
+		t.Completed = completed
+		if completed {
+			t.BytesDone = t.TotalBytes
+		}
+	}
+}
+
 // AdvanceProgress is a test helper: bumps BytesDone for a torrent.
 func (f *FakeBackend) AdvanceProgress(id TorrentID, by int64) {
 	f.mu.Lock()

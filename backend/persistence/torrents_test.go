@@ -186,3 +186,30 @@ func TestTorrents_CategoryAssignment(t *testing.T) {
 	got, _ = tor.Get(ctx, "h1")
 	require.Nil(t, got.CategoryID)
 }
+
+// TestTorrents_AddTransferTotals covers the cumulative cross-session counters
+// CheckSeedLimits checkpoints: totals default to 0, accumulate per call, and
+// updates to missing rows are not an error.
+func TestTorrents_AddTransferTotals(t *testing.T) {
+	db := newTestDB(t)
+	tor := NewTorrents(db)
+	ctx := context.Background()
+
+	require.NoError(t, tor.Save(ctx, TorrentRecord{
+		InfoHash: "tt", Name: "n", SavePath: "/p", AddedAt: time.Now(),
+	}))
+
+	got, err := tor.Get(ctx, "tt")
+	require.NoError(t, err)
+	require.Zero(t, got.TotalUploaded)
+	require.Zero(t, got.TotalDownloaded)
+
+	require.NoError(t, tor.AddTransferTotals(ctx, "tt", 100, 200))
+	require.NoError(t, tor.AddTransferTotals(ctx, "tt", 50, 25))
+	got, err = tor.Get(ctx, "tt")
+	require.NoError(t, err)
+	require.Equal(t, int64(150), got.TotalUploaded)
+	require.Equal(t, int64(225), got.TotalDownloaded)
+
+	require.NoError(t, tor.AddTransferTotals(ctx, "missing", 1, 1))
+}

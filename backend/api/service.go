@@ -93,6 +93,21 @@ type Service struct {
 	// every call. Invalidated alongside session revocation — see
 	// invalidateCaller.
 	callers *callerCache
+
+	// lastSeedCounters is the last-observed session transfer counters per
+	// infohash. CheckSeedLimits adds the delta since the previous observation
+	// to the persisted cumulative totals each pass — the engine's counters
+	// reset every process start, so ratio limits computed straight from them
+	// restarted at 0 on every launch. Guarded by seedCheckMu.
+	seedCheckMu      sync.Mutex
+	lastSeedCounters map[string]sessionCounters
+}
+
+// sessionCounters is one observation of the engine's session-scoped transfer
+// counters for a torrent. See Service.lastSeedCounters.
+type sessionCounters struct {
+	up   int64
+	down int64
 }
 
 // SessionRevoker is the subset of *remote.SessionStore that api.Service needs
@@ -165,6 +180,7 @@ func NewService(
 		defaultSavePath: defaultSavePath,
 		focus:           make(map[int]focusState),
 		callers:         newCallerCache(),
+		lastSeedCounters: make(map[string]sessionCounters),
 	}
 }
 
@@ -2396,17 +2412,37 @@ type seedPolicyJSON struct {
 // CheckSeedLimits inspects every completed, non-paused torrent and pauses
 // any that have exceeded their effective seeding limit (ratio or time).
 // It is designed to be called on a periodic ticker (e.g. every 30 seconds).
+//
+// Each pass also checkpoints the engine's session-scoped transfer counters
+// into the persisted total_uploaded/total_downloaded columns (for every
+// persisted torrent, not just completed ones), and computes the ratio from
+// the persisted total — anacrolix's BytesUp resets each process start, so a
+// ratio computed from it restarted at 0 on every launch and ratio limits
+// effectively never fired across sessions.
 func (s *Service) CheckSeedLimits(ctx context.Context) {
 	ctx = WithCaller(ctx, SystemCaller)
 	defaults := s.GetSeedingDefaults(ctx)
 	snaps := s.engine.List()
+	// One bulk SELECT per pass instead of a per-torrent Get every 30s.
+	records, err := s.torrents.List(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("seed policy: list torrents failed")
+		return
+	}
+	byHash := make(map[string]persistence.TorrentRecord, len(records))
+	for _, r := range records {
+		byHash[r.InfoHash] = r
+	}
 	now := time.Now()
+	live := make(map[string]struct{}, len(snaps))
 	for _, snap := range snaps {
-		if !snap.Completed || snap.Paused {
+		live[string(snap.ID)] = struct{}{}
+		rec, ok := byHash[string(snap.ID)]
+		if !ok {
 			continue
 		}
-		rec, err := s.torrents.Get(ctx, string(snap.ID))
-		if err != nil {
+		totalUp := s.checkpointTransferTotals(ctx, &rec, snap)
+		if !snap.Completed || snap.Paused {
 			continue
 		}
 		// Determine effective policy: per-torrent override wins over global default.
@@ -2434,7 +2470,7 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 		}
 		exceeded := false
 		if ratioLimit != nil && snap.BytesDone > 0 {
-			ratio := float64(snap.BytesUp) / float64(snap.BytesDone)
+			ratio := float64(totalUp) / float64(snap.BytesDone)
 			if ratio >= *ratioLimit {
 				exceeded = true
 			}
@@ -2453,4 +2489,53 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 			}
 		}
 	}
+	// Prune observations for torrents no longer in the engine so a removed
+	// and re-added infohash starts from fresh counters and the map doesn't
+	// grow unbounded across remove cycles.
+	s.seedCheckMu.Lock()
+	for hash := range s.lastSeedCounters {
+		if _, ok := live[hash]; !ok {
+			delete(s.lastSeedCounters, hash)
+		}
+	}
+	s.seedCheckMu.Unlock()
+}
+
+// checkpointTransferTotals persists the delta between the engine's
+// session-scoped transfer counters and the last value this process observed
+// for the torrent, returning the updated cumulative uploaded total. A counter
+// lower than the last observation means the engine restarted (counters reset
+// to zero) — the full current value is the delta. On a write failure the
+// observation is rolled back so the delta is retried next pass instead of
+// being lost.
+func (s *Service) checkpointTransferTotals(ctx context.Context, rec *persistence.TorrentRecord, snap engine.Snapshot) int64 {
+	hash := string(snap.ID)
+	s.seedCheckMu.Lock()
+	last, seen := s.lastSeedCounters[hash]
+	upDelta, downDelta := snap.BytesUp-last.up, snap.BytesDown-last.down
+	if upDelta < 0 {
+		upDelta = snap.BytesUp
+	}
+	if downDelta < 0 {
+		downDelta = snap.BytesDown
+	}
+	s.lastSeedCounters[hash] = sessionCounters{up: snap.BytesUp, down: snap.BytesDown}
+	s.seedCheckMu.Unlock()
+	if upDelta == 0 && downDelta == 0 {
+		return rec.TotalUploaded
+	}
+	if err := s.torrents.AddTransferTotals(ctx, hash, upDelta, downDelta); err != nil {
+		log.Warn().Err(err).Str("id", hash).Msg("seed policy: persist transfer totals failed")
+		s.seedCheckMu.Lock()
+		if seen {
+			s.lastSeedCounters[hash] = last
+		} else {
+			delete(s.lastSeedCounters, hash)
+		}
+		s.seedCheckMu.Unlock()
+		return rec.TotalUploaded
+	}
+	rec.TotalUploaded += upDelta
+	rec.TotalDownloaded += downDelta
+	return rec.TotalUploaded
 }
