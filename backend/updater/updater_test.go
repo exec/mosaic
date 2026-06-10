@@ -151,6 +151,27 @@ func TestInstall_DelegatesToSourceWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestInstall_TargetsAppImagePathWhenWrapped(t *testing.T) {
+	// Inside an AppImage the resolved executable lives on a read-only
+	// squashfs mount; Install must target the .AppImage file itself.
+	t.Setenv("APPIMAGE", "/home/user/Applications/Mosaic.AppImage")
+	src := &fakeSource{
+		latestTag:   "v0.8.0",
+		latestAsset: "Mosaic-v0.8.0-linux-amd64.AppImage",
+	}
+	u := New(Config{CurrentVersion: "v0.7.0", Source: src})
+	info, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Install(context.Background(), info); err != nil {
+		t.Fatalf("Install returned error: %v", err)
+	}
+	if src.installExe != "/home/user/Applications/Mosaic.AppImage" {
+		t.Fatalf("expected install target to be $APPIMAGE, got %q", src.installExe)
+	}
+}
+
 func TestInstall_ErrorsWhenNotAvailable(t *testing.T) {
 	src := &fakeSource{}
 	u := New(Config{CurrentVersion: "v0.7.0", Source: src})

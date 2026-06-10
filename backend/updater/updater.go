@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -112,6 +113,15 @@ func (u *Updater) Schedule(ctx context.Context) {
 func (u *Updater) Install(ctx context.Context, info Info) error {
 	if !info.Available {
 		return fmt.Errorf("no update available")
+	}
+	// Inside a running AppImage, os.Executable() (what ExecutablePath
+	// resolves) points at the payload binary on the read-only squashfs FUSE
+	// mount (/tmp/.mount_*/usr/bin/mosaic) — writing there always fails.
+	// The runtime exports APPIMAGE=<path to the .AppImage file itself>
+	// (same detection as DetectInstallSource), and the Linux release asset
+	// IS a new AppImage, so swap that file instead.
+	if appImage := os.Getenv("APPIMAGE"); appImage != "" {
+		return u.cfg.Source.Install(ctx, appImage)
 	}
 	exe, err := selfupdate.ExecutablePath()
 	if err != nil {
