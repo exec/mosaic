@@ -49,6 +49,26 @@ func TestBus_FanOutsToAllSubscribers(t *testing.T) {
 	require.Equal(t, []int{1, 2, 3}, bv)
 }
 
+func TestBus_UnsubscribeRemovesAndCloses(t *testing.T) {
+	bus := NewBus[sample](2)
+	t.Cleanup(bus.Close)
+
+	a := bus.Subscribe()
+	b := bus.Subscribe()
+
+	bus.Unsubscribe(a)
+	_, ok := <-a
+	require.False(t, ok, "unsubscribed channel must be closed")
+
+	// The remaining subscriber is unaffected.
+	bus.Publish(sample{N: 7})
+	require.Equal(t, sample{N: 7}, <-b)
+
+	// Unsubscribe after Close is a no-op (no double close, no panic).
+	bus.Close()
+	bus.Unsubscribe(b)
+}
+
 func TestBus_DropsWhenSubscriberSlow(t *testing.T) {
 	bus := NewBus[sample](2)
 	t.Cleanup(bus.Close)

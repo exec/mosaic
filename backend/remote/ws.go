@@ -45,9 +45,12 @@ func NewHub() *Hub {
 }
 
 // Run consumes the internal bus and pushes pre-encoded frames to every
-// connected client's send channel. Returns when ctx is done.
+// connected client's send channel. Returns when ctx is done. The subscription
+// is released on exit — each web-server (re)start spawns a fresh Run, so
+// without the Unsubscribe every restart would leak a dead channel in the bus.
 func (h *Hub) Run(ctx context.Context) {
 	sub := h.bus.Subscribe()
+	defer h.bus.Unsubscribe(sub)
 	for {
 		select {
 		case <-ctx.Done():
