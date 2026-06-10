@@ -225,24 +225,25 @@ func TestHandlers_Updater_RejectsUnknownChannel(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
-func TestHandlers_Updater_CheckWithoutUpdater_500s(t *testing.T) {
+func TestHandlers_Updater_CheckWithoutUpdater_400s(t *testing.T) {
 	// fixture Service has no updater attached → CheckForUpdate returns the
-	// "updater disabled" error → handler maps to 500.
+	// "updater disabled" error → writeServiceErr recognizes it as a
+	// user-facing validation message and maps it to 400.
 	f := newFixture(t)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/check", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
-func TestHandlers_Updater_InstallWithoutUpdater_500s(t *testing.T) {
+func TestHandlers_Updater_InstallWithoutUpdater_400s(t *testing.T) {
 	f := newFixture(t)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/install", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
 func TestHandlers_Version_OK(t *testing.T) {

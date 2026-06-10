@@ -465,7 +465,7 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ListTorrents(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListTorrents(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
@@ -585,7 +585,7 @@ func (h *Handlers) ClearInspectorFocus(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GlobalStats(w http.ResponseWriter, r *http.Request) {
 	st, err := h.svc.GlobalStats(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -602,7 +602,7 @@ type createCategoryRequest struct {
 func (h *Handlers) ListCategories(w http.ResponseWriter, r *http.Request) {
 	cats, err := h.svc.ListCategories(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, cats)
@@ -663,7 +663,7 @@ type createTagRequest struct {
 func (h *Handlers) ListTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := h.svc.ListTags(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tags)
@@ -750,7 +750,7 @@ func (h *Handlers) SetTorrentCategory(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GetDefaultSavePath(w http.ResponseWriter, r *http.Request) {
 	v, err := h.svc.GetDefaultSavePath(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"path": v})
@@ -776,7 +776,7 @@ func (h *Handlers) SetDefaultSavePath(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GetLimits(w http.ResponseWriter, r *http.Request) {
 	l, err := h.svc.GetLimits(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, l)
@@ -955,7 +955,7 @@ func (h *Handlers) SetBlocklist(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) RefreshBlocklist(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.RefreshBlocklist(r.Context()); err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1014,7 +1014,7 @@ func (h *Handlers) RemoveTracker(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ListScheduleRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := h.svc.ListScheduleRules(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rules)
@@ -1063,7 +1063,7 @@ func (h *Handlers) DeleteScheduleRule(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ListFeeds(w http.ResponseWriter, r *http.Request) {
 	feeds, err := h.svc.ListFeeds(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, feeds)
@@ -1117,7 +1117,7 @@ func (h *Handlers) ListFiltersByFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	filters, err := h.svc.ListFiltersByFeed(r.Context(), feedID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, filters)
@@ -1183,6 +1183,7 @@ func (h *Handlers) AddFeedItem(w http.ResponseWriter, r *http.Request) {
 		SavePath string `json:"save_path"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
+		writeServiceErr(w, err)
 		return
 	}
 	if body.URL == "" {
@@ -1236,7 +1237,7 @@ func (h *Handlers) SetWebPassword(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 	key, err := h.svc.RotateAPIKey(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"api_key": key})
@@ -1264,7 +1265,7 @@ func (h *Handlers) SetUpdaterConfig(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) CheckForUpdate(w http.ResponseWriter, r *http.Request) {
 	info, err := h.svc.CheckForUpdate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
@@ -1272,7 +1273,7 @@ func (h *Handlers) CheckForUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) InstallUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.InstallUpdate(r.Context()); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
