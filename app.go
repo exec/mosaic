@@ -577,24 +577,19 @@ func (a *App) SetTorrentSeedPolicy(infohash string, p api.SeedPolicyDTO) error {
 // streamWailsEvents emits state snapshots to the embedded SPA via Wails
 // events. The companion bootstrap.StreamTicks goroutine, started alongside
 // this one in startup(), handles the per-user hub fan-out for connected
-// browser clients. seedCheck is wedged in here because it's a periodic
-// service-level operation rather than a publish, and there's no better
-// place for it.
+// browser clients — and also owns the periodic seed-limit enforcement
+// (CheckSeedLimits), so it runs in the daemon too and never twice here.
 func (a *App) streamWailsEvents(ctx context.Context) {
 	torrents := time.NewTicker(500 * time.Millisecond)
 	stats := time.NewTicker(1 * time.Second)
 	inspector := time.NewTicker(1 * time.Second)
-	seedCheck := time.NewTicker(30 * time.Second)
 	defer torrents.Stop()
 	defer stats.Stop()
 	defer inspector.Stop()
-	defer seedCheck.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-seedCheck.C:
-			a.svc.CheckSeedLimits(ctx)
 		case <-torrents.C:
 			rows, err := a.svc.ListTorrents(ctx)
 			if err != nil {

@@ -26,6 +26,12 @@ import (
 // produces zero traffic. Fingerprints for users who disconnect are pruned each
 // tick so a reconnecting client always gets a fresh first frame.
 //
+// Beyond publishing, this loop also runs the periodic seed-limit enforcement
+// (Service.CheckSeedLimits). That's a service-level operation rather than a
+// fan-out, but it must run in BOTH flavors — keeping it here (and only here)
+// means the daemon enforces seeding limits and the desktop doesn't run the
+// check twice.
+//
 // Desktop entry point: call this in a goroutine alongside streamWailsEvents
 // (which handles the embedded-SPA Wails event emission separately).
 // Daemon entry point: call this as the sole tick goroutine.
@@ -33,9 +39,11 @@ func StreamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 	torrents := time.NewTicker(1 * time.Second)
 	stats := time.NewTicker(1 * time.Second)
 	inspector := time.NewTicker(1 * time.Second)
+	seedCheck := time.NewTicker(30 * time.Second)
 	defer torrents.Stop()
 	defer stats.Stop()
 	defer inspector.Stop()
+	defer seedCheck.Stop()
 
 	lastTorrentsFrame := make(map[int][32]byte)
 
@@ -43,6 +51,9 @@ func StreamTicks(ctx context.Context, svc *api.Service, hub *remote.Hub) {
 		select {
 		case <-ctx.Done():
 			return
+
+		case <-seedCheck.C:
+			svc.CheckSeedLimits(ctx)
 
 		case <-torrents.C:
 			uids := hub.ConnectedUserIDs()
