@@ -129,7 +129,13 @@ function AuthenticatedApp() {
     const moved = sorted.splice(currentIdx, 1)[0];
     sorted.splice(targetIdx, 0, moved);
     try {
-      await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
+      // The backend stores each torrent's position verbatim (no server-side
+      // reshuffle), so every row whose index changed needs a write — but
+      // rows already at their position (the common case: all but two for a
+      // one-step move) don't need to be re-sent.
+      await Promise.all(
+        sorted.flatMap((t, i) => (t.queue_position === i ? [] : [store.setQueuePosition(t.id, i)])),
+      );
     } catch (err) {
       toast.error(`Couldn't reorder — ${userErr(err)}`);
     }
@@ -385,7 +391,10 @@ function AuthenticatedApp() {
             try { await api.recheck(id); toast.success('Recheck started'); }
             catch (err) { toast.error(`Recheck failed — ${userErr(err)}`); }
           }}
-          onRemove={(id) => { store.remove(id, false); toast.success('Torrent removed'); }}
+          onRemove={async (id) => {
+            try { await store.remove(id, false); toast.success('Torrent removed'); }
+            catch (err) { toast.error(`Couldn't remove — ${userErr(err)}`); }
+          }}
           onSetCategory={async (id, categoryID) => {
             try {
               await store.setTorrentCategory(id, categoryID);

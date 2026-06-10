@@ -107,7 +107,10 @@ function rowToDetail(t: import('./bindings').Torrent): import('./bindings').Deta
     total_bytes: t.total_bytes,
     bytes_done: t.bytes_done,
     progress: t.progress,
-    ratio: t.bytes_done > 0 ? t.bytes_done / Math.max(1, t.total_bytes) : 0,
+    // The row carries no up/down counters, so the real ratio is unknown —
+    // seed 0 and let the tick fill it in. (bytes_done/total_bytes is the
+    // progress, not the ratio, and flashed a wrong value in the inspector.)
+    ratio: 0,
     total_down: 0, // tick will fill in real cumulative counters
     total_up: 0,
     peers: t.peers,

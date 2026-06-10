@@ -1,7 +1,7 @@
 import {Dialog} from '@kobalte/core/dialog';
 import {RadioGroup} from '@kobalte/core/radio-group';
 import {ChevronDown, FileDown, FolderOpen, Magnet, X} from 'lucide-solid';
-import {createEffect, createSignal, For, Show} from 'solid-js';
+import {createEffect, createSignal, For, on, Show} from 'solid-js';
 import {Button} from '../ui/Button';
 import type {CategoryDTO, TagDTO} from '../../lib/bindings';
 import {isWailsRuntime} from '../../lib/runtime';
@@ -35,9 +35,13 @@ export function AddTorrentModal(props: Props) {
   const [pickedFile, setPickedFile] = createSignal<File | null>(null);
   const isWails = isWailsRuntime();
 
-  // Reset state whenever the modal opens — especially `source` if initialSource changes.
-  createEffect(() => {
-    if (props.open) {
+  // Reset state when the modal opens — especially `source` if initialSource
+  // changes. Keyed on `open` only via on(): a bare createEffect also tracked
+  // initialSource and defaultSavePath, so a late-arriving default save path
+  // (boot fetch resolving after the user opened the modal) wiped whatever
+  // they had already typed.
+  createEffect(on(() => props.open, (open) => {
+    if (open) {
       setSource(props.initialSource ?? 'magnet');
       setMagnet('');
       setSavePath(props.defaultSavePath);
@@ -46,7 +50,7 @@ export function AddTorrentModal(props: Props) {
       setError(null);
       setPickedFile(null);
     }
-  });
+  }));
 
   const toggleTag = (id: number) => {
     setSelectedTags((prev) => {
