@@ -584,6 +584,12 @@ func (s *Service) fireUpdaterConfigChanged(c UpdaterConfigDTO) {
 }
 
 func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
+	// Same gate as InstallUpdate / SetUpdaterConfig: the check performs an
+	// outbound HTTP request and writes two settings rows, neither of which a
+	// caller without the settings permission should be able to trigger.
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return UpdateInfoDTO{}, ErrForbidden
+	}
 	if s.updater == nil {
 		return UpdateInfoDTO{CurrentVersion: s.appVersion}, fmt.Errorf("updater disabled")
 	}
@@ -802,6 +808,16 @@ type TorrentDTO struct {
 	Access string `json:"access"`
 }
 
+// unixOrZero serializes a record timestamp for the wire, mapping the zero
+// time (record missing or lookup failed) to 0. time.Time{}.Unix() is
+// -62135596800, which the SPA would render as a date in year 1.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
 func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 	prog := 0.0
 	if s.TotalBytes > 0 {
@@ -821,7 +837,7 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		Seeds:         s.Seeds,
 		Paused:        s.Paused,
 		Completed:     s.Completed,
-		AddedAt:       addedAt.Unix(),
+		AddedAt:       unixOrZero(addedAt),
 		QueuePosition: s.QueuePosition,
 		ForceStart:    s.ForceStart,
 		Sequential:    s.Sequential,
@@ -1231,7 +1247,11 @@ func (s *Service) ListTorrentsFromSnapshot(ctx context.Context, tick TorrentTick
 			access = lvl
 		}
 		rec, ok := tick.byHash[hash]
-		addedAt := time.Now()
+		// No DB record (engine-only torrent, e.g. a restore raced the tick):
+		// use the zero time, which unixOrZero serializes as added_at=0. A
+		// fresh time.Now() here changed every tick, scrambling the added_at
+		// sort below and defeating streamTicks' frame dedup.
+		var addedAt time.Time
 		if ok {
 			snap.SavePath = rec.SavePath
 			if snap.Magnet == "" {
@@ -1477,7 +1497,7 @@ func detailToDTO(d engine.Detail, addedAt time.Time, completedAt *time.Time) Det
 		TotalUp:    snap.BytesUp,
 		Peers:        snap.Peers,
 		Seeds:        snap.Seeds,
-		AddedAt:      addedAt.Unix(),
+		AddedAt:      unixOrZero(addedAt),
 		Paused:       snap.Paused,
 		Completed:    snap.Completed,
 		FilesMissing: snap.FilesMissing,
