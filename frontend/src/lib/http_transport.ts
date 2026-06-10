@@ -350,17 +350,33 @@ interface FetchOptions {
   wsCtor?: new (url: string) => WebSocket;
 }
 
+// WebSocket reconnect backoff bounds: start at 1s, double per failed
+// attempt, cap at 30s.
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30_000;
+
 export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Transport {
   const fetchImpl = opts.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : undefined);
   const wsCtor = opts.wsCtor ?? (typeof WebSocket !== 'undefined' ? WebSocket : undefined);
 
   const handlers = new Map<string, Set<(data: any) => void>>();
   let socket: WebSocket | null = null;
+  // Pending reconnect timer, cancelled when the last handler unsubscribes —
+  // otherwise a timer scheduled before the unsubscribe would resurrect a
+  // socket with zero subscribers and leak it.
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Capped exponential backoff so a down server isn't hammered at 1Hz
+  // forever; reset once a connection opens successfully.
+  let reconnectDelayMs = RECONNECT_BASE_MS;
 
   function ensureSocket() {
     if (socket || !wsCtor) return;
+    if (handlers.size === 0) return; // nobody listening — don't (re)connect
     const wsURL = origin.replace(/^http/, 'ws') + '/api/ws';
     socket = new wsCtor(wsURL);
+    socket.onopen = () => {
+      reconnectDelayMs = RECONNECT_BASE_MS;
+    };
     socket.onmessage = (ev) => {
       try {
         const env = JSON.parse(ev.data);
@@ -373,9 +389,10 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
     };
     socket.onclose = () => {
       socket = null;
-      // Reconnect after a short delay if any handlers are still subscribed.
+      // Reconnect with backoff if any handlers are still subscribed.
       if (handlers.size > 0) {
-        setTimeout(ensureSocket, 1000);
+        reconnectTimer = setTimeout(ensureSocket, reconnectDelayMs);
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_MS);
       }
     };
     socket.onerror = (e) => console.error('ws error', e);
@@ -425,9 +442,15 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
           s.delete(handler);
           if (s.size === 0) handlers.delete(event);
         }
-        if (handlers.size === 0 && socket) {
-          socket.close();
-          socket = null;
+        if (handlers.size === 0) {
+          if (reconnectTimer !== null) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+          }
+          if (socket) {
+            socket.close();
+            socket = null;
+          }
         }
       };
     },
