@@ -120,6 +120,13 @@ func (s *Server) Apply(cfg api.WebConfigDTO) error {
 	s.current = cfg
 
 	if !cfg.Enabled {
+		// Full disable: revoke every session so remote credentials stop
+		// working the moment the interface is turned off (and don't silently
+		// come back to life on a later re-enable). A reconfigure restart
+		// (Enabled stays true, port/bind changed) deliberately keeps sessions:
+		// the browser reconnects to the new listener with its still-valid
+		// cookie instead of forcing everyone through the login screen.
+		s.sessions.RevokeAll()
 		return nil
 	}
 
@@ -132,11 +139,14 @@ func (s *Server) Apply(cfg api.WebConfigDTO) error {
 	return nil
 }
 
-// Stop tears down the running server (no-op if not running).
+// Stop tears down the running server (no-op if not running) and revokes all
+// sessions — it is a full stop, not a restart, so no remote credential should
+// outlive it.
 func (s *Server) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.shutdownLocked()
+	s.sessions.RevokeAll()
 }
 
 // CurrentAddr returns the addr the server is bound to ("" if not running).
@@ -221,6 +231,10 @@ func (s *Server) shutdownLocked() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	// Shutdown does not close hijacked connections, so established WebSocket
+	// clients would otherwise survive the listener and keep receiving the
+	// per-user tick frames pushed directly via sendFrameToUser.
+	s.hub.DisconnectAll()
 	s.srv = nil
 	s.cancel = nil
 }
