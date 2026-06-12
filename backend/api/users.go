@@ -51,12 +51,14 @@ type ShareDTO struct {
 	Access   string `json:"access"`
 }
 
-// BootstrapDTO is the unauthenticated payload the SPA fetches before login to
-// learn which build it is talking to. Flavor drives whether the "Web
-// Interface" or the "Users" settings pane is shown.
+// BootstrapDTO is the unauthenticated payload the SPA fetches before login.
+// Flavor drives whether the "Web Interface" or the "Users" settings pane is
+// shown. It deliberately omits the build version: that is a pre-auth
+// fingerprinting aid (it lets an attacker match a known-CVE target without
+// logging in) and the SPA reads the version from the authenticated
+// /api/version endpoint after login instead.
 type BootstrapDTO struct {
 	Flavor    string `json:"flavor"`     // "daemon" | "desktop"
-	Version   string `json:"version"`
 	MultiUser bool   `json:"multi_user"` // true for the daemon
 }
 

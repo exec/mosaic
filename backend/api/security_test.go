@@ -116,6 +116,45 @@ func TestAuthz_GetUpdaterConfig_NonAdminGetsEmptyDTO(t *testing.T) {
 	require.Equal(t, UpdaterConfigDTO{}, dto)
 }
 
+// settingsDelegateCtx creates a non-admin who DOES hold PermChangeSettings —
+// the delegable "tweak preferences" flag — to prove the host-integrity and
+// filesystem-reach operations are lifted above it to admin-only.
+func settingsDelegateCtx(t *testing.T, svc *Service) context.Context {
+	t.Helper()
+	u := mkUser(t, svc, UserInput{
+		Username: "settings-delegate", Password: "password123", Role: persistence.RoleUser,
+		PermChangeSettings: true,
+	})
+	return asUser(t, svc, u.ID)
+}
+
+// TestAuthz_HostOps_RequireAdminNotChangeSettings pins the finding fix: a
+// PermChangeSettings holder can still edit ordinary preferences but cannot
+// reach the updater (swaps the running binary) or the watch folder (an
+// unconfined server directory the daemon reads from and deletes within).
+func TestAuthz_HostOps_RequireAdminNotChangeSettings(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := settingsDelegateCtx(t, svc)
+
+	// Sanity: the delegable flag still grants ordinary settings access, so the
+	// test below is proving a real boundary, not a wholesale loss of the perm.
+	require.NoError(t, svc.SetLimits(ctx, LimitsDTO{DownKbps: 1000, UpKbps: 500}))
+
+	// Host-integrity / filesystem-reach operations are now admin-only.
+	require.ErrorIs(t, svc.InstallUpdate(ctx), ErrForbidden)
+	require.ErrorIs(t, svc.SetUpdaterConfig(ctx, UpdaterConfigDTO{Enabled: true, Channel: "stable"}), ErrForbidden)
+	_, err := svc.CheckForUpdate(ctx)
+	require.ErrorIs(t, err, ErrForbidden)
+	require.ErrorIs(t, svc.SetWatchFolder(ctx, WatchFolderDTO{Enabled: true, Path: "/etc"}), ErrForbidden)
+
+	// The same operations clear the auth gate for an admin/system caller —
+	// InstallUpdate still fails on the disabled test updater, but with a
+	// non-Forbidden error, proving the gate let it through.
+	require.NoError(t, svc.SetWatchFolder(sysCtx(), WatchFolderDTO{Enabled: false, Path: ""}))
+	require.NoError(t, svc.SetUpdaterConfig(sysCtx(), UpdaterConfigDTO{Enabled: true, Channel: "stable"}))
+	require.NotErrorIs(t, svc.InstallUpdate(sysCtx()), ErrForbidden)
+}
+
 func TestAuthz_SetDesktopIntegration_NonAdminForbidden(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx, _ := nonAdminCtx(t, svc)

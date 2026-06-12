@@ -1309,7 +1309,6 @@ func (h *Handlers) GetAppVersion(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, api.BootstrapDTO{
 		Flavor:    h.flavor,
-		Version:   h.svc.AppVersion(),
 		MultiUser: h.flavor == FlavorDaemon,
 	})
 }

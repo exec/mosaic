@@ -169,6 +169,56 @@ func TestSessionStore_CreateRejectsAtCapacity(t *testing.T) {
 	require.ErrorIs(t, err, ErrTooManySessions)
 }
 
+// TestSessionStore_PerUserCapEvictsOwnSessions confirms a single account cannot
+// exhaust the global pool: once it hits maxSessionsPerUser, each new login
+// evicts one of that user's own sessions so the count holds steady at the cap.
+func TestSessionStore_PerUserCapEvictsOwnSessions(t *testing.T) {
+	s := NewSessionStore()
+	toks := make([]string, 0, maxSessionsPerUser+5)
+	for i := 0; i < maxSessionsPerUser; i++ {
+		tok, err := s.Create(1)
+		require.NoError(t, err)
+		toks = append(toks, tok)
+	}
+	require.Equal(t, maxSessionsPerUser, s.Count())
+
+	// Five more logins for the same user: count must stay pinned at the cap.
+	for i := 0; i < 5; i++ {
+		tok, err := s.Create(1)
+		require.NoError(t, err)
+		require.Equal(t, maxSessionsPerUser, s.Count())
+		toks = append(toks, tok)
+	}
+	// Exactly maxSessionsPerUser of the issued tokens survive — the rest were
+	// evicted. (Which specific ones is timing-dependent under the sliding TTL,
+	// so we assert the count, not the identity.)
+	valid := 0
+	for _, tok := range toks {
+		if _, ok := s.Peek(tok); ok {
+			valid++
+		}
+	}
+	require.Equal(t, maxSessionsPerUser, valid)
+}
+
+// TestSessionStore_PerUserCapDoesNotEvictOthers confirms one user's churn never
+// touches another user's sessions — the cap is the whole point of stopping a
+// single account from locking everyone else out.
+func TestSessionStore_PerUserCapDoesNotEvictOthers(t *testing.T) {
+	s := NewSessionStore()
+	victim, err := s.Create(2)
+	require.NoError(t, err)
+
+	// User 1 logs in well past their own cap.
+	for i := 0; i < maxSessionsPerUser+5; i++ {
+		_, err := s.Create(1)
+		require.NoError(t, err)
+	}
+	// User 2's session is untouched, and the global pool never overflowed.
+	requireValid(t, s, victim, 2)
+	require.Equal(t, maxSessionsPerUser+1, s.Count())
+}
+
 // TestSessionStore_RevokeUser drops only the targeted user's sessions.
 func TestSessionStore_RevokeUser(t *testing.T) {
 	s := NewSessionStore()

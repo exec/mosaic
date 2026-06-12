@@ -76,6 +76,21 @@ func (c Caller) SeesAllTorrents() bool { return c.IsAdmin() }
 
 // Permission predicates. Admins (and the system caller) implicitly hold every
 // permission regardless of their individual flags.
+//
+// Trust model: these sub-admin permissions are delegable flags, but each one
+// acts on a GLOBAL, shared namespace — not a per-user slice. CanManageCatTags
+// lets the holder create/rename/delete categories and tags that any other
+// user's torrents reference; CanChangeSettings edits singleton engine settings
+// (limits, alt-speed, blocklist, default save path) that affect every user.
+// Granting them therefore confers system-wide influence, not just control over
+// the grantee's own torrents — operators should treat them as semi-privileged.
+//
+// The genuinely host-integrity / filesystem-reach operations are deliberately
+// NOT covered by these flags and require IsAdmin() instead: the updater
+// (CheckForUpdate / SetUpdaterConfig / InstallUpdate — they swap the running
+// binary) and SetWatchFolder (an unconfined server directory the daemon reads
+// from and may delete files in). The only per-user-scoped authority is
+// per-torrent access (owner/editor/viewer), enforced by requireTorrentAccess.
 func (c Caller) CanAddTorrents() bool    { return c.IsAdmin() || c.PermAddTorrents }
 func (c Caller) CanManageRSS() bool      { return c.IsAdmin() || c.PermManageRSS }
 func (c Caller) CanManageCatTags() bool  { return c.IsAdmin() || c.PermManageCatTags }

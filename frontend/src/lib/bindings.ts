@@ -228,7 +228,6 @@ export type ServerFlavor = 'daemon' | 'desktop';
 
 export type BootstrapDTO = {
   flavor: ServerFlavor;
-  version: string;
   multi_user: boolean;
 };
 

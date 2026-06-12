@@ -485,7 +485,12 @@ func (s *Service) GetWatchFolder(ctx context.Context) WatchFolderDTO {
 // SetWatchFolder persists the watch-folder configuration and (re)starts or
 // stops the watcher accordingly.
 func (s *Service) SetWatchFolder(ctx context.Context, c WatchFolderDTO) error {
-	if !CallerFrom(ctx).CanChangeSettings() {
+	// Admin-only: the path is an unconfined server-side directory the daemon
+	// will read from — and, with DeleteAfterAdd, delete files in. That is a
+	// filesystem-reach primitive, not an ordinary preference, so it sits above
+	// the delegable PermChangeSettings flag. Reads (GetWatchFolder) stay under
+	// CanChangeSettings so a settings-delegate can still see the config.
+	if !CallerFrom(ctx).IsAdmin() {
 		return ErrForbidden
 	}
 	if err := s.settings.Set(ctx, settingWatchFolderPath, c.Path); err != nil {
@@ -561,7 +566,11 @@ func (s *Service) GetUpdaterConfig(ctx context.Context) UpdaterConfigDTO {
 }
 
 func (s *Service) SetUpdaterConfig(ctx context.Context, c UpdaterConfigDTO) error {
-	if !CallerFrom(ctx).CanChangeSettings() {
+	// Admin-only, not merely CanChangeSettings: the updater downloads and
+	// swaps the running server binary, so steering its channel/enablement is a
+	// host-integrity operation, not an ordinary preference. PermChangeSettings
+	// is a delegable, sub-admin flag and must not reach this far.
+	if !CallerFrom(ctx).IsAdmin() {
 		return ErrForbidden
 	}
 	if c.Channel != "stable" && c.Channel != "beta" {
@@ -600,10 +609,11 @@ func (s *Service) fireUpdaterConfigChanged(c UpdaterConfigDTO) {
 }
 
 func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
-	// Same gate as InstallUpdate / SetUpdaterConfig: the check performs an
-	// outbound HTTP request and writes two settings rows, neither of which a
-	// caller without the settings permission should be able to trigger.
-	if !CallerFrom(ctx).CanChangeSettings() {
+	// Same admin-only gate as InstallUpdate / SetUpdaterConfig: the check
+	// performs an outbound HTTP request and writes two settings rows, and it is
+	// the precursor to an install, so it belongs to the same host-integrity
+	// boundary rather than the delegable PermChangeSettings flag.
+	if !CallerFrom(ctx).IsAdmin() {
 		return UpdateInfoDTO{}, ErrForbidden
 	}
 	if s.updater == nil {
@@ -628,7 +638,10 @@ func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
 }
 
 func (s *Service) InstallUpdate(ctx context.Context) error {
-	if !CallerFrom(ctx).CanChangeSettings() {
+	// Admin-only: this replaces the running server binary. A non-admin holding
+	// the delegable PermChangeSettings flag must not be able to swap the host's
+	// executable.
+	if !CallerFrom(ctx).IsAdmin() {
 		return ErrForbidden
 	}
 	if s.updater == nil {

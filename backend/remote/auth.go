@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,16 @@ const (
 	// expired entries), Create returns ErrTooManySessions. 100 is plenty for
 	// an interactive single-user web UI.
 	maxSessions = 100
+	// maxSessionsPerUser bounds how many live sessions a single account may
+	// hold. Without it, one user (a serial re-logger, or an attacker with
+	// valid credentials logging in from many tabs/IPs) could mint sessions
+	// until the global maxSessions pool is exhausted and every *other* user's
+	// next login fails with ErrTooManySessions — an availability attack on the
+	// whole daemon. With the cap, a user's churn evicts only their own oldest
+	// session (see enforceUserCapLocked), never another user's, and it takes
+	// maxSessions/maxSessionsPerUser distinct accounts to fill the pool. 10
+	// covers a generous spread of devices/tabs for one person.
+	maxSessionsPerUser = 10
 )
 
 // sessionEntry binds a session token to the user it authenticates and its
@@ -73,6 +84,10 @@ func (s *SessionStore) Create(userID int) (string, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Bound this user's own footprint first so a single account can't exhaust
+	// the global pool: if they're already at the per-user cap, this evicts
+	// their least-recently-active session (and prunes their expired ones).
+	s.enforceUserCapLocked(userID)
 	if len(s.sessions) >= maxSessions {
 		s.reapExpiredLocked()
 	}
@@ -81,6 +96,37 @@ func (s *SessionStore) Create(userID int) (string, error) {
 	}
 	s.sessions[tok] = sessionEntry{userID: userID, expires: time.Now().Add(sessionTTL)}
 	return tok, nil
+}
+
+// enforceUserCapLocked ensures userID is left holding strictly fewer than
+// maxSessionsPerUser sessions, so the about-to-be-added token leaves them at
+// the cap rather than over it. It first drops the user's expired entries, then
+// evicts the least-recently-active live ones (earliest expiry wins under the
+// sliding-TTL window) if still at/over the cap. Caller must hold s.mu (write).
+func (s *SessionStore) enforceUserCapLocked(userID int) {
+	now := time.Now()
+	live := make([]string, 0, maxSessionsPerUser+1)
+	for tok, e := range s.sessions {
+		if e.userID != userID {
+			continue
+		}
+		if now.After(e.expires) {
+			delete(s.sessions, tok)
+			continue
+		}
+		live = append(live, tok)
+	}
+	if len(live) < maxSessionsPerUser {
+		return
+	}
+	// Oldest-expiry first; the rolling window means earliest expiry == least
+	// recently used. Evict down to maxSessionsPerUser-1 so the new token fits.
+	sort.Slice(live, func(i, j int) bool {
+		return s.sessions[live[i]].expires.Before(s.sessions[live[j]].expires)
+	})
+	for i := 0; i <= len(live)-maxSessionsPerUser; i++ {
+		delete(s.sessions, live[i])
+	}
 }
 
 // reapExpiredLocked drops every entry past its expiry. Caller must hold
