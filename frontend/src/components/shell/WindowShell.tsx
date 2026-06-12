@@ -180,7 +180,15 @@ export function WindowShell(props: Props) {
                     onToggleAltSpeed={props.onToggleAltSpeed}
                   />
                   <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
-                    <div class="h-full overflow-auto">
+                    {/* The table view owns its scrollport (TorrentTable's
+                        h-full overflow-auto container, which its row
+                        virtualizer and sticky header measure against), so
+                        this wrapper must NOT scroll there — two nested
+                        scrollports would defeat the virtualization. The
+                        cards view (CardList) also scrolls itself; keep
+                        overflow-auto here only as the fallback for the
+                        non-virtualized empty state. */}
+                    <div class={props.density === 'table' ? 'h-full overflow-hidden' : 'h-full overflow-auto'}>
                       {props.children}
                     </div>
                   </DropZone>

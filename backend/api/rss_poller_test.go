@@ -42,12 +42,12 @@ func newPollerForTest(t *testing.T) (*RSSPoller, *Service, *persistence.Feeds, *
 	// handle to it, so build a fresh DB for poller dependencies. The poller's
 	// SetTorrentCategory / AddMagnet calls go through svc.* which uses svc's
 	// own DB, but tests only assert on the engine list (not the categories).
-	feeds, filters := newRSSDAOs(t)
+	feeds, filters, seen := newRSSDAOs(t)
 	p := &RSSPoller{
 		adder:    svc,
 		feeds:    feeds,
 		filters:  filters,
-		parser:   gofeed.NewParser(),
+		seen:     seen,
 		httpC:    &http.Client{Timeout: 5 * time.Second},
 		seenByID: make(map[int]map[string]struct{}),
 		stop:     make(chan struct{}),
@@ -55,12 +55,12 @@ func newPollerForTest(t *testing.T) (*RSSPoller, *Service, *persistence.Feeds, *
 	return p, svc, feeds, filters
 }
 
-func newRSSDAOs(t *testing.T) (*persistence.Feeds, *persistence.Filters) {
+func newRSSDAOs(t *testing.T) (*persistence.Feeds, *persistence.Filters, *persistence.RSSSeen) {
 	t.Helper()
 	db, err := persistence.Open(sysCtx(), t.TempDir()+"/rss.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return persistence.NewFeeds(db), persistence.NewFilters(db)
+	return persistence.NewFeeds(db), persistence.NewFilters(db), persistence.NewRSSSeen(db)
 }
 
 func TestRSSPoller_PollOne_MatchesAndAddsMagnet(t *testing.T) {
@@ -149,6 +149,43 @@ func TestRSSPoller_PollOne_DedupViaSeenSet(t *testing.T) {
 	// engine de-dups by infohash; both items are added once on first poll, and
 	// the seen-set prevents AddMagnet from running a second time.
 	require.Len(t, rows, 2)
+}
+
+// TestRSSPoller_SeenSurvivesRestart pins the persisted dedup: a second poller
+// hydrated from the same DB (simulating a process restart) must not re-add
+// items the first poller already handled.
+func TestRSSPoller_SeenSurvivesRestart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(rssFeedXML))
+	}))
+	defer srv.Close()
+
+	p, _, feeds, filters := newPollerForTest(t)
+	ctx := sysCtx()
+
+	feedID, _ := feeds.Create(ctx, persistence.Feed{URL: srv.URL, Name: "n", IntervalMin: 1, Enabled: true})
+	_, _ = filters.Create(ctx, persistence.Filter{FeedID: feedID, Regex: `.*`, Enabled: true})
+
+	f, _ := feeds.Get(ctx, feedID)
+	require.NoError(t, p.pollOne(ctx, f))
+
+	// "Restart": new poller against the same seen DAO, fresh in-memory cache.
+	svc2, _ := newTestService(t)
+	p2 := &RSSPoller{
+		adder:    svc2,
+		feeds:    feeds,
+		filters:  filters,
+		seen:     p.seen,
+		httpC:    &http.Client{Timeout: 5 * time.Second},
+		seenByID: make(map[int]map[string]struct{}),
+		stop:     make(chan struct{}),
+	}
+	p2.loadSeen(ctx)
+	require.NoError(t, p2.pollOne(ctx, f))
+
+	rows, err := svc2.ListTorrents(ctx)
+	require.NoError(t, err)
+	require.Empty(t, rows, "items seen before the restart must not be re-added")
 }
 
 func TestRSSPoller_Tick_SkipsDisabledAndNotDue(t *testing.T) {

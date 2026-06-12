@@ -129,7 +129,13 @@ function AuthenticatedApp() {
     const moved = sorted.splice(currentIdx, 1)[0];
     sorted.splice(targetIdx, 0, moved);
     try {
-      await Promise.all(sorted.map((t, i) => store.setQueuePosition(t.id, i)));
+      // The backend stores each torrent's position verbatim (no server-side
+      // reshuffle), so every row whose index changed needs a write — but
+      // rows already at their position (the common case: all but two for a
+      // one-step move) don't need to be re-sent.
+      await Promise.all(
+        sorted.flatMap((t, i) => (t.queue_position === i ? [] : [store.setQueuePosition(t.id, i)])),
+      );
     } catch (err) {
       toast.error(`Couldn't reorder — ${userErr(err)}`);
     }
@@ -143,9 +149,9 @@ function AuthenticatedApp() {
     }
   };
 
-  const handleSelect = (id: string, e: MouseEvent) => {
+  const handleSelect = (id: string, e: MouseEvent, visibleIds: string[]) => {
     if (e.metaKey || e.ctrlKey) store.toggleSelect(id);
-    else if (e.shiftKey) store.extendSelectTo(id);
+    else if (e.shiftKey) store.extendSelectTo(id, visibleIds);
     else {
       store.select(id);
       store.openInspector(id);
@@ -196,10 +202,15 @@ function AuthenticatedApp() {
           }
         });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (store.state.selection.size === 0) return;
+        const ids = [...store.state.selection];
+        if (ids.length === 0) return;
         e.preventDefault();
+        // Bulk removal is destructive and a stray keystroke away — confirm
+        // first, matching the confirm() pattern used by the settings panes'
+        // destructive actions. A single torrent stays one keystroke.
+        if (ids.length > 1 && !confirm(`Remove ${ids.length} torrents from the list? Downloaded files are kept.`)) return;
         const failures: string[] = [];
-        Promise.all([...store.state.selection].map(async (id) => {
+        Promise.all(ids.map(async (id) => {
           try { await store.remove(id, false); }
           catch (err) { failures.push(`${id.slice(0, 8)}: ${String(err)}`); }
         })).then(() => {
@@ -380,7 +391,10 @@ function AuthenticatedApp() {
             try { await api.recheck(id); toast.success('Recheck started'); }
             catch (err) { toast.error(`Recheck failed — ${userErr(err)}`); }
           }}
-          onRemove={(id) => { store.remove(id, false); toast.success('Torrent removed'); }}
+          onRemove={async (id) => {
+            try { await store.remove(id, false); toast.success('Torrent removed'); }
+            catch (err) { toast.error(`Couldn't remove — ${userErr(err)}`); }
+          }}
           onSetCategory={async (id, categoryID) => {
             try {
               await store.setTorrentCategory(id, categoryID);

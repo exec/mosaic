@@ -1,8 +1,10 @@
 import {createSignal, Index, Show} from 'solid-js';
 import {Trash2} from 'lucide-solid';
+import {toast} from 'solid-sonner';
 import type {DetailDTO} from '../../lib/bindings';
 import {api} from '../../lib/bindings';
 import {fmtTimestamp} from '../../lib/format';
+import {userErr} from '../../lib/errors';
 
 type Props = {detail: DetailDTO | null};
 
@@ -36,9 +38,8 @@ export function TrackersTab(props: Props) {
     if (!props.detail?.id) return;
     try {
       await api.removeTracker(props.detail.id, url);
-    } catch {
-      // silently ignore — the tracker will reappear on the next tick if it
-      // wasn't actually removed
+    } catch (err) {
+      toast.error(`Couldn't remove tracker — ${userErr(err)}`);
     }
   }
 

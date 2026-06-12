@@ -83,6 +83,88 @@ func TestTorrents_QueueAndForceStart(t *testing.T) {
 	require.True(t, got.ForceStart)
 }
 
+func TestTorrents_SetPausedRoundtrip(t *testing.T) {
+	db := newTestDB(t)
+	tr := NewTorrents(db)
+	ctx := context.Background()
+	require.NoError(t, tr.Save(ctx, TorrentRecord{InfoHash: "p1", Name: "n", SavePath: "/p", AddedAt: time.Now()}))
+
+	got, _ := tr.Get(ctx, "p1")
+	require.False(t, got.Paused)
+
+	require.NoError(t, tr.SetPaused(ctx, "p1", true))
+	got, _ = tr.Get(ctx, "p1")
+	require.True(t, got.Paused)
+
+	require.NoError(t, tr.SetPaused(ctx, "p1", false))
+	got, _ = tr.Get(ctx, "p1")
+	require.False(t, got.Paused)
+}
+
+func TestTorrents_SetCompletedAt(t *testing.T) {
+	db := newTestDB(t)
+	tr := NewTorrents(db)
+	ctx := context.Background()
+	require.NoError(t, tr.Save(ctx, TorrentRecord{InfoHash: "c1", Name: "n", SavePath: "/p", AddedAt: time.Now()}))
+
+	got, _ := tr.Get(ctx, "c1")
+	require.Nil(t, got.CompletedAt)
+
+	at := time.Unix(1700000123, 0)
+	require.NoError(t, tr.SetCompletedAt(ctx, "c1", at))
+	got, _ = tr.Get(ctx, "c1")
+	require.NotNil(t, got.CompletedAt)
+	require.Equal(t, at.Unix(), got.CompletedAt.Unix())
+}
+
+// TestTorrents_SaveDuplicateKeepsUserState pins the non-destructive upsert:
+// re-adding an already-known torrent (RSS re-match, watch-folder re-scan)
+// must refresh metadata only, never reset user state set via the dedicated
+// Set* methods.
+func TestTorrents_SaveDuplicateKeepsUserState(t *testing.T) {
+	db := newTestDB(t)
+	tr := NewTorrents(db)
+	cats := NewCategories(db)
+	ctx := context.Background()
+
+	addedAt := time.Unix(1700000000, 0)
+	require.NoError(t, tr.Save(ctx, TorrentRecord{
+		InfoHash: "d1", Name: "n", Magnet: "magnet:?xt=urn:btih:d1", SavePath: "/p", AddedAt: addedAt,
+	}))
+
+	catID, _ := cats.Create(ctx, Category{Name: "Movies"})
+	completedAt := time.Unix(1700001000, 0)
+	require.NoError(t, tr.SetPaused(ctx, "d1", true))
+	require.NoError(t, tr.SetQueuePosition(ctx, "d1", 3))
+	require.NoError(t, tr.SetForceStart(ctx, "d1", true))
+	require.NoError(t, tr.SetSequential(ctx, "d1", true))
+	require.NoError(t, tr.SetCategory(ctx, "d1", &catID))
+	require.NoError(t, tr.SetRateLimits(ctx, "d1", 1000, 2000))
+	require.NoError(t, tr.SetCompletedAt(ctx, "d1", completedAt))
+
+	// Duplicate add: fresh AddedAt, zeroed user state, empty magnet (file add).
+	require.NoError(t, tr.Save(ctx, TorrentRecord{
+		InfoHash: "d1", Name: "renamed", SavePath: "/other", AddedAt: time.Now(),
+	}))
+
+	got, err := tr.Get(ctx, "d1")
+	require.NoError(t, err)
+	require.Equal(t, "renamed", got.Name, "name is metadata and should refresh")
+	require.Equal(t, "magnet:?xt=urn:btih:d1", got.Magnet, "empty magnet must not wipe the stored one")
+	require.Equal(t, "/p", got.SavePath, "save_path must not change on re-add")
+	require.Equal(t, addedAt.Unix(), got.AddedAt.Unix())
+	require.True(t, got.Paused)
+	require.Equal(t, 3, got.QueuePosition)
+	require.True(t, got.ForceStart)
+	require.True(t, got.Sequential)
+	require.NotNil(t, got.CategoryID)
+	require.Equal(t, catID, *got.CategoryID)
+	require.Equal(t, int64(1000), got.DownRateLimit)
+	require.Equal(t, int64(2000), got.UpRateLimit)
+	require.NotNil(t, got.CompletedAt)
+	require.Equal(t, completedAt.Unix(), got.CompletedAt.Unix())
+}
+
 func TestTorrents_CategoryAssignment(t *testing.T) {
 	db := newTestDB(t)
 	tor := NewTorrents(db)
@@ -103,4 +185,31 @@ func TestTorrents_CategoryAssignment(t *testing.T) {
 	require.NoError(t, tor.SetCategory(ctx, "h1", nil))
 	got, _ = tor.Get(ctx, "h1")
 	require.Nil(t, got.CategoryID)
+}
+
+// TestTorrents_AddTransferTotals covers the cumulative cross-session counters
+// CheckSeedLimits checkpoints: totals default to 0, accumulate per call, and
+// updates to missing rows are not an error.
+func TestTorrents_AddTransferTotals(t *testing.T) {
+	db := newTestDB(t)
+	tor := NewTorrents(db)
+	ctx := context.Background()
+
+	require.NoError(t, tor.Save(ctx, TorrentRecord{
+		InfoHash: "tt", Name: "n", SavePath: "/p", AddedAt: time.Now(),
+	}))
+
+	got, err := tor.Get(ctx, "tt")
+	require.NoError(t, err)
+	require.Zero(t, got.TotalUploaded)
+	require.Zero(t, got.TotalDownloaded)
+
+	require.NoError(t, tor.AddTransferTotals(ctx, "tt", 100, 200))
+	require.NoError(t, tor.AddTransferTotals(ctx, "tt", 50, 25))
+	got, err = tor.Get(ctx, "tt")
+	require.NoError(t, err)
+	require.Equal(t, int64(150), got.TotalUploaded)
+	require.Equal(t, int64(225), got.TotalDownloaded)
+
+	require.NoError(t, tor.AddTransferTotals(ctx, "missing", 1, 1))
 }

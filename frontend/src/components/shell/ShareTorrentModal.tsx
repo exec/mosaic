@@ -30,6 +30,7 @@ export function ShareTorrentModal(props: Props) {
     if (!id) return;
     try {
       const [u, s] = await Promise.all([api.listUsers(), api.listTorrentShares(id)]);
+      if (props.torrentID !== id) return; // stale — dialog moved to another torrent mid-flight
       setUsers(u);
       setShares(s);
     } catch (err) {

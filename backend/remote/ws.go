@@ -45,9 +45,12 @@ func NewHub() *Hub {
 }
 
 // Run consumes the internal bus and pushes pre-encoded frames to every
-// connected client's send channel. Returns when ctx is done.
+// connected client's send channel. Returns when ctx is done. The subscription
+// is released on exit — each web-server (re)start spawns a fresh Run, so
+// without the Unsubscribe every restart would leak a dead channel in the bus.
 func (h *Hub) Run(ctx context.Context) {
 	sub := h.bus.Subscribe()
+	defer h.bus.Unsubscribe(sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -260,6 +263,28 @@ func (h *Hub) RevokeUser(userID int) {
 	}
 }
 
+// DisconnectAll hangs up every live WebSocket client. Called when the web
+// interface is stopped or reconfigured: http.Server.Shutdown does not touch
+// hijacked connections, so without this an established client would keep
+// receiving frames from the per-user tick fan-out (sendFrameToUser bypasses
+// the bus) after the listener is gone. StatusGoingAway tells the SPA the
+// server is shutting down rather than that its session was revoked.
+func (h *Hub) DisconnectAll() {
+	h.mu.Lock()
+	victims := make([]*hubClient, 0, len(h.clients))
+	for c := range h.clients {
+		victims = append(victims, c)
+	}
+	h.mu.Unlock()
+	// Close outside the hub lock so the loop in HandleUpgrade can call
+	// removeClient (which re-acquires it) without deadlocking us.
+	for _, c := range victims {
+		if c.conn != nil {
+			_ = c.conn.Close(websocket.StatusGoingAway, "server stopping")
+		}
+	}
+}
+
 // wsSessionRecheckInterval is the cadence at which a live WebSocket
 // re-validates its session token. Cheaper than checking on every frame and
 // still fast enough that a logged-out user's stream stops within ~30s of
@@ -325,7 +350,9 @@ func (h *Hub) HandleUpgrade(sessions *SessionStore, res CallerResolver) http.Han
 				return
 			case <-recheck.C:
 				if sessionToken != "" {
-					if _, ok := sessions.Valid(sessionToken); !ok {
+					// Peek, not Valid: the recheck must not slide the expiry
+					// forward, or any open tab would immortalize its session.
+					if _, ok := sessions.Peek(sessionToken); !ok {
 						conn.Close(websocket.StatusPolicyViolation, "session revoked")
 						return
 					}

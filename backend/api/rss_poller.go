@@ -27,7 +27,7 @@ type RSSPoller struct {
 	adder   TorrentAdder
 	feeds   *persistence.Feeds
 	filters *persistence.Filters
-	parser  *gofeed.Parser
+	seen    *persistence.RSSSeen
 	httpC   *http.Client
 
 	mu       sync.Mutex
@@ -36,20 +36,40 @@ type RSSPoller struct {
 	stop chan struct{}
 }
 
+// rssSeenCap bounds the persisted seen-set per feed: Add prunes the oldest
+// rows beyond it, so the table tracks the ~1000 most recent items per feed.
 const rssSeenCap = 1000
+
+// rssBodyCap bounds how much of a feed body we parse — same idea as the
+// 10 MB torrent-fetch cap below (blocklists get 50 MB elsewhere).
+const rssBodyCap = 10 << 20
 
 // NewRSSPoller starts a goroutine that ticks every 60 seconds and polls feeds
 // whose LastPolled + IntervalMin has elapsed. Call Close() to stop the poller.
-func NewRSSPoller(adder TorrentAdder, feeds *persistence.Feeds, filters *persistence.Filters) *RSSPoller {
+func NewRSSPoller(adder TorrentAdder, feeds *persistence.Feeds, filters *persistence.Filters, seen *persistence.RSSSeen) *RSSPoller {
 	p := &RSSPoller{
-		adder: adder, feeds: feeds, filters: filters,
-		parser:   gofeed.NewParser(),
+		adder: adder, feeds: feeds, filters: filters, seen: seen,
 		httpC:    safeHTTPClient(30 * time.Second),
 		seenByID: make(map[int]map[string]struct{}),
 		stop:     make(chan struct{}),
 	}
+	// Hydrate the seen cache from the DB before polling starts, so a restart
+	// doesn't re-add every matching item still present in the feeds.
+	p.loadSeen(WithCaller(context.Background(), SystemCaller))
 	go p.run()
 	return p
+}
+
+// loadSeen replaces the in-memory seen cache with the persisted sets.
+func (p *RSSPoller) loadSeen(ctx context.Context) {
+	loaded, err := p.seen.All(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("rss: load persisted seen items failed; matching items may be re-added")
+		return
+	}
+	p.mu.Lock()
+	p.seenByID = loaded
+	p.mu.Unlock()
 }
 
 func (p *RSSPoller) Close() { close(p.stop) }
@@ -138,7 +158,11 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 		return fmt.Errorf("rss: HTTP %d", resp.StatusCode)
 	}
 
-	feed, err := p.parser.Parse(resp.Body)
+	// Fresh parser per Parse: gofeed.Parser lazily initializes its
+	// translators without synchronization, so sharing one instance between
+	// the run() goroutine and PollNow/GetFeedItems request goroutines races.
+	// Body is capped — a feed shouldn't be anywhere near 10 MB.
+	feed, err := gofeed.NewParser().Parse(io.LimitReader(resp.Body, rssBodyCap))
 	if err != nil {
 		if uerr := p.feeds.UpdatePollResult(ctx, f.ID, time.Now(), f.ETag); uerr != nil {
 			log.Warn().Err(uerr).Int("feed", f.ID).Msg("rss: update poll result failed")
@@ -150,7 +174,22 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 	if err != nil {
 		return err
 	}
-	enabledFilters := filterEnabled(filters)
+	// Compile each filter's regex once per poll instead of once per item;
+	// invalid patterns are logged once here rather than silently skipped on
+	// every item.
+	type compiledFilter struct {
+		persistence.Filter
+		re *regexp.Regexp
+	}
+	var enabledFilters []compiledFilter
+	for _, fil := range filterEnabled(filters) {
+		re, err := regexp.Compile(fil.Regex)
+		if err != nil {
+			log.Warn().Err(err).Int("feed_id", f.ID).Str("regex", fil.Regex).Msg("rss: invalid filter regex; filter skipped")
+			continue
+		}
+		enabledFilters = append(enabledFilters, compiledFilter{Filter: fil, re: re})
+	}
 
 	matched := 0
 	for _, item := range feed.Items {
@@ -166,11 +205,7 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 		}
 
 		for _, fil := range enabledFilters {
-			re, err := regexp.Compile(fil.Regex)
-			if err != nil {
-				continue
-			}
-			if !re.MatchString(item.Title) {
+			if !fil.re.MatchString(item.Title) {
 				continue
 			}
 
@@ -196,7 +231,7 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 				id = string(tid)
 			} else {
 				// No torrent source found — mark seen so we don't retry forever.
-				p.markSeen(f.ID, key)
+				p.markSeen(ctx, f.ID, key)
 				break
 			}
 
@@ -206,7 +241,7 @@ func (p *RSSPoller) pollOne(ctx context.Context, f persistence.Feed) error {
 				}
 			}
 			matched++
-			p.markSeen(f.ID, key)
+			p.markSeen(ctx, f.ID, key)
 			break // first matching filter wins
 		}
 	}
@@ -232,16 +267,21 @@ func (p *RSSPoller) alreadySeen(feedID int, key string) bool {
 	return ok
 }
 
-func (p *RSSPoller) markSeen(feedID int, key string) {
+func (p *RSSPoller) markSeen(ctx context.Context, feedID int, key string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.seenByID[feedID] == nil {
 		p.seenByID[feedID] = make(map[string]struct{})
 	}
-	if len(p.seenByID[feedID]) >= rssSeenCap {
-		p.seenByID[feedID] = make(map[string]struct{})
-	}
 	p.seenByID[feedID][key] = struct{}{}
+	p.mu.Unlock()
+	// Persist so dedup survives restarts; Add caps the table at the newest
+	// rssSeenCap rows per feed. The in-memory set is deliberately NOT capped
+	// or wiped — wiping it (the old behavior) re-added up to a full feed's
+	// worth of items on the next poll. Log-don't-fail: the in-memory set
+	// still dedups for the rest of this session.
+	if err := p.seen.Add(ctx, feedID, key, rssSeenCap); err != nil {
+		log.Warn().Err(err).Int("feed_id", feedID).Msg("rss: persist seen item failed")
+	}
 }
 
 func filterEnabled(all []persistence.Filter) []persistence.Filter {
@@ -365,7 +405,8 @@ func (p *RSSPoller) GetFeedItems(ctx context.Context, feedID int) ([]FeedItemDTO
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("rss: HTTP %d", resp.StatusCode)
 	}
-	feed, err := p.parser.Parse(resp.Body)
+	// Fresh parser + capped body, same as pollOne (see comment there).
+	feed, err := gofeed.NewParser().Parse(io.LimitReader(resp.Body, rssBodyCap))
 	if err != nil {
 		return nil, err
 	}

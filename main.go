@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
@@ -36,12 +37,15 @@ var version = "dev"
 func main() {
 	// On Windows + Linux, when the file manager launches us with a
 	// .torrent path while another Mosaic is already running, we MUST
-	// forward args + exit before touching anacrolix's listen port
-	// (port-bind would fail and log.Fatal would kill us before reaching
-	// the second-instance dispatch). Windows uses Wails's mutex+WM_COPYDATA
-	// wire; Linux uses our own Unix socket because Wails's D-Bus single-
-	// instance silently fails on common setups (Wayland, sandboxed
-	// launchers, missing XDG_RUNTIME_DIR). See
+	// forward args + exit before touching anacrolix's listen port. A
+	// failed port-bind is no longer fatal (the engine falls back to an
+	// OS-picked ephemeral — see backend/engine/anacrolix.go), but a second
+	// instance that gets that far still opens the shared DB, re-announces
+	// every torrent, and runs on a throwaway port before Wails's
+	// SingleInstanceLock can dispatch it. Windows uses Wails's
+	// mutex+WM_COPYDATA wire; Linux uses our own Unix socket because
+	// Wails's D-Bus single-instance silently fails on common setups
+	// (Wayland, sandboxed launchers, missing XDG_RUNTIME_DIR). See
 	// backend/platform/single_instance_*.go. No-op on macOS.
 	if platform.EarlyForwardLaunchArgs("io.github.exec.mosaic") {
 		os.Exit(0)
@@ -196,13 +200,14 @@ func main() {
 	// Auto-update: GitHub-backed updater, fan out new releases to both the
 	// Wails desktop session and any connected browser sessions. Schedule only
 	// runs the goroutine when the user hasn't disabled checks in Settings.
+	ghSource := &updater.GitHubSource{
+		Owner:   "exec",
+		Repo:    "mosaic",
+		Channel: svc.UpdaterChannel(ctx),
+	}
 	upd := updater.New(updater.Config{
 		CurrentVersion: version,
-		Source: &updater.GitHubSource{
-			Owner:   "exec",
-			Repo:    "mosaic",
-			Channel: svc.UpdaterChannel(ctx),
-		},
+		Source:         ghSource,
 		OnAvailable: func(info updater.Info) {
 			dto := svc.MakeUpdateInfoDTO(info)
 			if back.Hub != nil {
@@ -213,6 +218,31 @@ func main() {
 	})
 	installSource := updater.DetectInstallSource()
 	svc.AttachUpdater(upd, version, installSource)
+	// Schedule lifecycle: started/stopped at runtime as the user flips the
+	// Settings → Updates toggle (via OnUpdaterConfigChange below), not just
+	// at boot. Guarded so a toggle flapped on/on doesn't stack goroutines.
+	var (
+		schedMu     sync.Mutex
+		schedCancel context.CancelFunc
+	)
+	startSchedule := func() {
+		schedMu.Lock()
+		defer schedMu.Unlock()
+		if schedCancel != nil {
+			return // already running
+		}
+		sctx, cancel := context.WithCancel(ctx)
+		schedCancel = cancel
+		go upd.Schedule(sctx)
+	}
+	stopSchedule := func() {
+		schedMu.Lock()
+		defer schedMu.Unlock()
+		if schedCancel != nil {
+			schedCancel()
+			schedCancel = nil
+		}
+	}
 	// Apt-managed installs defer upgrades to apt — running our own
 	// updater on top would either need root to rewrite the dpkg
 	// database (gross), or get clobbered on the next `apt upgrade`
@@ -221,8 +251,22 @@ func main() {
 	if installSource == updater.InstallSourceAPT {
 		log.Info().Msg("auto-updater disabled: managed by apt — use `sudo apt upgrade mosaic` for updates")
 	} else if svc.UpdaterEnabled(ctx) {
-		go upd.Schedule(ctx)
+		startSchedule()
 	}
+	// React to Settings → Updates changes without requiring a restart:
+	// push the channel into the live source (it rebuilds its cached
+	// go-selfupdate handle on change) and start/stop the periodic check.
+	svc.OnUpdaterConfigChange(func(c api.UpdaterConfigDTO) {
+		ghSource.SetChannel(c.Channel)
+		if installSource == updater.InstallSourceAPT {
+			return
+		}
+		if c.Enabled {
+			startSchedule()
+		} else {
+			stopSchedule()
+		}
+	})
 
 	// Close-to-tray on Linux/Windows is gated on desktop.tray_enabled +
 	// desktop.close_to_tray. On macOS we set HideWindowOnClose: true below,
@@ -249,21 +293,30 @@ func main() {
 		if !trayAvailable {
 			return false
 		}
-		if app.ctx != nil {
-			wailsruntime.WindowHide(app.ctx)
+		if hideCtx := app.context(); hideCtx != nil {
+			// Mark hidden BEFORE hiding so streamWailsEvents stops emitting
+			// tick events nobody can see; ShowWindow flips it back.
+			app.setWindowVisible(false)
+			wailsruntime.WindowHide(hideCtx)
 		}
 		return true
 	}
 
+	// StartHidden honors the desktop.start_minimized preference. The
+	// frontend still mounts and connects to the WS / fetches state on
+	// load — only the OS window is hidden until the user opens it from
+	// the tray.
+	startHidden := desktopCfg.StartMinimized && desktopCfg.TrayEnabled && trayAvailable && goruntime.GOOS != "darwin"
+	if startHidden {
+		// Suppress Wails tick emission until the tray shows the window.
+		app.setWindowVisible(false)
+	}
+
 	opts := &options.App{
-		Title:  "Mosaic",
-		Width:  1200,
-		Height: 800,
-		// StartHidden honors the desktop.start_minimized preference. The
-		// frontend still mounts and connects to the WS / fetches state on
-		// load — only the OS window is hidden until the user opens it from
-		// the tray.
-		StartHidden: desktopCfg.StartMinimized && desktopCfg.TrayEnabled && trayAvailable && goruntime.GOOS != "darwin",
+		Title:       "Mosaic",
+		Width:       1200,
+		Height:      800,
+		StartHidden: startHidden,
 		// On macOS, X button hides the app (Cmd+H equivalent) at the AppKit
 		// layer instead of triggering OnBeforeClose. Dock-click auto-unhides.
 		// Cmd+Q and dock right-click → Quit still terminate cleanly via the
@@ -295,14 +348,15 @@ func main() {
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "io.github.exec.mosaic",
 			OnSecondInstanceLaunch: func(d options.SecondInstanceData) {
-				if app.ctx != nil {
-					wailsruntime.WindowUnminimise(app.ctx)
-					wailsruntime.WindowShow(app.ctx)
-				}
+				app.ShowWindow()
 				go app.HandleLaunchArgs(d.Args)
 			},
 		},
 		OnStartup: app.startup,
+		// OnShutdown cancels the tick goroutines and grants a short grace so
+		// in-flight ticks drain before the deferred cleanup above closes the
+		// hub/engine/DB they're reading — see App.shutdown.
+		OnShutdown: app.shutdown,
 		Bind: []any{
 			app,
 		},
@@ -313,8 +367,10 @@ func main() {
 	if goruntime.GOOS == "windows" || goruntime.GOOS == "linux" {
 		opts.Frameless = true
 	}
-	err = wails.Run(opts)
-	if err != nil {
-		log.Fatal().Err(err).Msg("wails run")
+	// log.Fatal would os.Exit and skip every deferred teardown above
+	// (engine, DB, tray, listener) — log the error and fall off main so
+	// the defers run.
+	if err := wails.Run(opts); err != nil {
+		log.Error().Err(err).Msg("wails run")
 	}
 }

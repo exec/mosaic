@@ -107,7 +107,10 @@ function rowToDetail(t: import('./bindings').Torrent): import('./bindings').Deta
     total_bytes: t.total_bytes,
     bytes_done: t.bytes_done,
     progress: t.progress,
-    ratio: t.bytes_done > 0 ? t.bytes_done / Math.max(1, t.total_bytes) : 0,
+    // The row carries no up/down counters, so the real ratio is unknown —
+    // seed 0 and let the tick fill it in. (bytes_done/total_bytes is the
+    // progress, not the ratio, and flashed a wrong value in the inspector.)
+    ratio: 0,
     total_down: 0, // tick will fill in real cumulative counters
     total_up: 0,
     peers: t.peers,
@@ -376,16 +379,19 @@ export function createTorrentsStore() {
       if (next.has(id)) next.delete(id); else next.add(id);
       s.selection = next;
     })),
-    extendSelectTo: (id: string) => setState(produce((s) => {
-      // Range select: from last-selected to id within the current visible list order.
-      const visible = s.torrents.map((t) => t.id);
+    // Range select: from last-selected to id. visibleIds is the id list in
+    // the order the user actually sees (filtered + sorted), passed in by the
+    // row click handler — ranging over raw s.torrents (unfiltered, insertion
+    // order) silently swept hidden torrents into the selection whenever a
+    // filter or sort was active.
+    extendSelectTo: (id: string, visibleIds: string[]) => setState(produce((s) => {
       const last = [...s.selection].pop();
       if (!last) { s.selection = new Set([id]); return; }
-      const a = visible.indexOf(last);
-      const b = visible.indexOf(id);
+      const a = visibleIds.indexOf(last);
+      const b = visibleIds.indexOf(id);
       if (a < 0 || b < 0) { s.selection = new Set([id]); return; }
       const [lo, hi] = a < b ? [a, b] : [b, a];
-      s.selection = new Set(visible.slice(lo, hi + 1));
+      s.selection = new Set(visibleIds.slice(lo, hi + 1));
     })),
     selectAll: () => setState(produce((s) => { s.selection = new Set(s.torrents.map((t) => t.id)); })),
     clearSelection: () => setState(produce((s) => { s.selection = new Set(); })),

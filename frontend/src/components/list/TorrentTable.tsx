@@ -9,7 +9,9 @@ import {fmtBytes, fmtETA, fmtPercent, fmtRate} from '../../lib/format';
 type Props = {
   torrents: Torrent[];
   selection: Set<string>;
-  onRowClick: (id: string, e: MouseEvent) => void;
+  // visibleIds is the id list in the on-screen (sorted) order, so shift-click
+  // range select can extend over exactly the rows the user sees.
+  onRowClick: (id: string, e: MouseEvent, visibleIds: string[]) => void;
 };
 
 // Fixed table row height (px). Rows are single-line with truncation so the
@@ -93,7 +95,12 @@ export function TorrentTable(props: Props) {
   });
 
   return (
-    <div class="overflow-auto" ref={scrollEl}>
+    // h-full constrains this element to the pane so IT is the scrollport
+    // (mirroring CardList). Without the height cap the div grows to content
+    // height, the ancestor scrolls instead, the virtualizer sees a viewport
+    // equal to the full list and renders every row, and the sticky header
+    // sticks to the wrong scroll container.
+    <div class="h-full overflow-auto" ref={scrollEl}>
       <table class="w-full text-sm">
         <thead class="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-md text-xs font-medium uppercase tracking-wider text-zinc-500">
           <For each={table.getHeaderGroups()}>
@@ -133,7 +140,7 @@ export function TorrentTable(props: Props) {
                   <tr
                     class="cursor-pointer border-t border-white/[.04] hover:bg-white/[.02]"
                     classList={{'!bg-accent-500/[.06]': props.selection.has(row().original.id)}}
-                    onClick={(e) => props.onRowClick(row().original.id, e)}
+                    onClick={(e) => props.onRowClick(row().original.id, e, table.getRowModel().rows.map((r) => r.original.id))}
                   >
                     <For each={row().getVisibleCells()}>
                       {(cell) => (

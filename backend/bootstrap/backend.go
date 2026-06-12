@@ -141,15 +141,26 @@ func Init(ctx context.Context, cfg Config) (*Backend, func(), error) {
 	}
 	closers = append(closers, func() { _ = anacrolixBackend.Close() })
 
-	// If the configured port was taken and anacrolix fell back to an OS-picked
-	// ephemeral, persist the actual port. Without this the next launch races
-	// the same port, loses again, and picks a *different* random — meaning the
-	// user's router port-forward never sticks across restarts.
+	// Persist the actual bound port ONLY when no port was configured
+	// (listenPort 0 = "let the OS pick"): pinning the OS-assigned port on
+	// first run keeps it stable across restarts so a router port-forward
+	// can stick. When an explicitly configured port was taken and anacrolix
+	// fell back to an ephemeral, do NOT persist: the common cause is a
+	// benign second launch racing the running instance's bind (our
+	// bootstrap runs before Wails's SingleInstanceLock dispatch), and
+	// persisting the throwaway port would overwrite the user's chosen port
+	// in the shared DB — killing their port-forward on the next launch.
+	// Keeping the configured value means the next start retries it.
 	if actual := anacrolixBackend.ListenPort(); actual > 0 && actual != listenPort {
-		log.Info().Int("configured", listenPort).Int("actual", actual).
-			Msg("listen port fell back to OS-picked; persisting for next launch")
-		if err := settingsDAO.Set(ctx, "peer_listen_port", strconv.Itoa(actual)); err != nil {
-			log.Warn().Err(err).Msg("persist fallback listen port")
+		if listenPort == 0 {
+			log.Info().Int("actual", actual).
+				Msg("no listen port configured; persisting OS-picked port for next launch")
+			if err := settingsDAO.Set(ctx, "peer_listen_port", strconv.Itoa(actual)); err != nil {
+				log.Warn().Err(err).Msg("persist OS-picked listen port")
+			}
+		} else {
+			log.Warn().Int("configured", listenPort).Int("actual", actual).
+				Msg("configured listen port unavailable; using ephemeral fallback for this run only (configured port kept for next launch)")
 		}
 	}
 
@@ -199,7 +210,7 @@ func Init(ctx context.Context, cfg Config) (*Backend, func(), error) {
 	closers = append(closers, schedEng.Close)
 
 	// ---- RSS poller ----
-	rss := api.NewRSSPoller(svc, feeds, filters)
+	rss := api.NewRSSPoller(svc, feeds, filters, persistence.NewRSSSeen(db))
 	closers = append(closers, rss.Close)
 	svc.AttachRSSPoller(rss)
 

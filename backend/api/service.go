@@ -61,6 +61,9 @@ type Service struct {
 	desktopHookMu    sync.RWMutex
 	onDesktopChanged func(DesktopIntegrationDTO)
 
+	updaterHookMu    sync.RWMutex
+	onUpdaterChanged func(UpdaterConfigDTO)
+
 	updater       *updater.Updater // may be nil if not yet attached
 	appVersion    string
 	installSource updater.InstallSource // "apt" | "appimage" | "manual"
@@ -90,6 +93,21 @@ type Service struct {
 	// every call. Invalidated alongside session revocation — see
 	// invalidateCaller.
 	callers *callerCache
+
+	// lastSeedCounters is the last-observed session transfer counters per
+	// infohash. CheckSeedLimits adds the delta since the previous observation
+	// to the persisted cumulative totals each pass — the engine's counters
+	// reset every process start, so ratio limits computed straight from them
+	// restarted at 0 on every launch. Guarded by seedCheckMu.
+	seedCheckMu      sync.Mutex
+	lastSeedCounters map[string]sessionCounters
+}
+
+// sessionCounters is one observation of the engine's session-scoped transfer
+// counters for a torrent. See Service.lastSeedCounters.
+type sessionCounters struct {
+	up   int64
+	down int64
 }
 
 // SessionRevoker is the subset of *remote.SessionStore that api.Service needs
@@ -162,6 +180,7 @@ func NewService(
 		defaultSavePath: defaultSavePath,
 		focus:           make(map[int]focusState),
 		callers:         newCallerCache(),
+		lastSeedCounters: make(map[string]sessionCounters),
 	}
 }
 
@@ -551,10 +570,42 @@ func (s *Service) SetUpdaterConfig(ctx context.Context, c UpdaterConfigDTO) erro
 	if err := s.setBoolSetting(ctx, settingUpdaterEnabled, c.Enabled); err != nil {
 		return err
 	}
-	return s.settings.Set(ctx, settingUpdaterChannel, c.Channel)
+	if err := s.settings.Set(ctx, settingUpdaterChannel, c.Channel); err != nil {
+		return err
+	}
+	s.fireUpdaterConfigChanged(s.GetUpdaterConfig(ctx))
+	return nil
+}
+
+// OnUpdaterConfigChange registers a synchronous callback invoked after a
+// SetUpdaterConfig commit, mirroring OnWebConfigChange /
+// OnDesktopIntegrationChange. main.go uses it to push channel changes into
+// the live GitHubSource and to start/stop the periodic check goroutine —
+// without it, both silently required an app restart. Pass nil to unregister.
+// Only one callback is supported. The daemon never registers one (auto-update
+// is intentionally not wired there); firing is nil-safe.
+func (s *Service) OnUpdaterConfigChange(cb func(UpdaterConfigDTO)) {
+	s.updaterHookMu.Lock()
+	s.onUpdaterChanged = cb
+	s.updaterHookMu.Unlock()
+}
+
+func (s *Service) fireUpdaterConfigChanged(c UpdaterConfigDTO) {
+	s.updaterHookMu.RLock()
+	cb := s.onUpdaterChanged
+	s.updaterHookMu.RUnlock()
+	if cb != nil {
+		cb(c)
+	}
 }
 
 func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
+	// Same gate as InstallUpdate / SetUpdaterConfig: the check performs an
+	// outbound HTTP request and writes two settings rows, neither of which a
+	// caller without the settings permission should be able to trigger.
+	if !CallerFrom(ctx).CanChangeSettings() {
+		return UpdateInfoDTO{}, ErrForbidden
+	}
 	if s.updater == nil {
 		return UpdateInfoDTO{CurrentVersion: s.appVersion}, fmt.Errorf("updater disabled")
 	}
@@ -773,6 +824,16 @@ type TorrentDTO struct {
 	Access string `json:"access"`
 }
 
+// unixOrZero serializes a record timestamp for the wire, mapping the zero
+// time (record missing or lookup failed) to 0. time.Time{}.Unix() is
+// -62135596800, which the SPA would render as a date in year 1.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
 func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 	prog := 0.0
 	if s.TotalBytes > 0 {
@@ -792,7 +853,7 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		Seeds:         s.Seeds,
 		Paused:        s.Paused,
 		Completed:     s.Completed,
-		AddedAt:       addedAt.Unix(),
+		AddedAt:       unixOrZero(addedAt),
 		QueuePosition: s.QueuePosition,
 		ForceStart:    s.ForceStart,
 		Sequential:    s.Sequential,
@@ -991,14 +1052,29 @@ func (s *Service) Pause(ctx context.Context, id engine.TorrentID) error {
 	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
 		return err
 	}
-	return s.engine.Pause(id)
+	if err := s.engine.Pause(id); err != nil {
+		return err
+	}
+	// Persist so the pause survives a restart (RestoreOnStartup re-pauses
+	// from the paused column). Log-don't-fail: the engine state is already
+	// applied and a DB hiccup shouldn't surface as a failed pause.
+	if err := s.torrents.SetPaused(ctx, string(id), true); err != nil {
+		log.Warn().Err(err).Str("id", string(id)).Msg("Pause: persist paused state failed")
+	}
+	return nil
 }
 
 func (s *Service) Resume(ctx context.Context, id engine.TorrentID) error {
 	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
 		return err
 	}
-	return s.engine.Resume(id)
+	if err := s.engine.Resume(id); err != nil {
+		return err
+	}
+	if err := s.torrents.SetPaused(ctx, string(id), false); err != nil {
+		log.Warn().Err(err).Str("id", string(id)).Msg("Resume: persist paused state failed")
+	}
+	return nil
 }
 
 func (s *Service) Recheck(ctx context.Context, id engine.TorrentID) error {
@@ -1012,26 +1088,34 @@ func (s *Service) Recheck(ctx context.Context, id engine.TorrentID) error {
 // individual torrents are logged but don't abort the loop — best-effort
 // semantics so a single missing/dead torrent can't strand the rest.
 // Used by the system-tray "Pause all" item.
-func (s *Service) PauseAll(_ context.Context) {
+func (s *Service) PauseAll(ctx context.Context) {
 	for _, snap := range s.engine.List() {
 		if snap.Paused {
 			continue
 		}
 		if err := s.engine.Pause(snap.ID); err != nil {
 			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("PauseAll: pause failed")
+			continue
+		}
+		if err := s.torrents.SetPaused(ctx, string(snap.ID), true); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("PauseAll: persist paused state failed")
 		}
 	}
 }
 
 // ResumeAll is the mirror of PauseAll. Used by the system-tray "Resume all"
 // item when the engine is in the globally-paused state.
-func (s *Service) ResumeAll(_ context.Context) {
+func (s *Service) ResumeAll(ctx context.Context) {
 	for _, snap := range s.engine.List() {
 		if !snap.Paused {
 			continue
 		}
 		if err := s.engine.Resume(snap.ID); err != nil {
 			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("ResumeAll: resume failed")
+			continue
+		}
+		if err := s.torrents.SetPaused(ctx, string(snap.ID), false); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("ResumeAll: persist paused state failed")
 		}
 	}
 }
@@ -1114,8 +1198,29 @@ func (s *Service) BuildTorrentTickSnapshot(ctx context.Context) (TorrentTickSnap
 	if err != nil {
 		return TorrentTickSnapshot{}, err
 	}
+	snaps := s.engine.List()
+	// Persist completed_at the first time we observe a torrent complete.
+	// Every flavor's tick path funnels through here, so this is the one
+	// choke point where the service sees the completion transition. The
+	// record's nil check keeps the write to exactly once per torrent —
+	// RestoreOnStartup reads the column to arm missing-files detection, and
+	// the inspector surfaces it as DetailDTO.CompletedAt.
+	now := time.Now()
+	for _, snap := range snaps {
+		rec, ok := byHash[string(snap.ID)]
+		if !ok || !snap.Completed || rec.CompletedAt != nil {
+			continue
+		}
+		if err := s.torrents.SetCompletedAt(ctx, string(snap.ID), now); err != nil {
+			log.Warn().Err(err).Str("id", string(snap.ID)).Msg("tick: persist completed_at failed")
+			continue
+		}
+		t := now
+		rec.CompletedAt = &t
+		byHash[string(snap.ID)] = rec
+	}
 	return TorrentTickSnapshot{
-		snaps:      s.engine.List(),
+		snaps:      snaps,
 		byHash:     byHash,
 		tagsByHash: tagsByHash,
 	}, nil
@@ -1158,7 +1263,11 @@ func (s *Service) ListTorrentsFromSnapshot(ctx context.Context, tick TorrentTick
 			access = lvl
 		}
 		rec, ok := tick.byHash[hash]
-		addedAt := time.Now()
+		// No DB record (engine-only torrent, e.g. a restore raced the tick):
+		// use the zero time, which unixOrZero serializes as added_at=0. A
+		// fresh time.Now() here changed every tick, scrambling the added_at
+		// sort below and defeating streamTicks' frame dedup.
+		var addedAt time.Time
 		if ok {
 			snap.SavePath = rec.SavePath
 			if snap.Magnet == "" {
@@ -1357,7 +1466,8 @@ func (s *Service) DetailForFocus(ctx context.Context) (*DetailDTO, error) {
 	if err != nil {
 		return nil, err
 	}
-	dto := detailToDTO(d, s.lookupAddedAt(ctx, f.id))
+	addedAt, completedAt := s.lookupRecordTimes(ctx, f.id)
+	dto := detailToDTO(d, addedAt, completedAt)
 	return &dto, nil
 }
 
@@ -1376,15 +1486,15 @@ func scopeForTabs(tabs []string) engine.DetailScope {
 	return scope
 }
 
-func (s *Service) lookupAddedAt(ctx context.Context, id engine.TorrentID) time.Time {
+func (s *Service) lookupRecordTimes(ctx context.Context, id engine.TorrentID) (time.Time, *time.Time) {
 	rec, err := s.torrents.Get(ctx, string(id))
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, nil
 	}
-	return rec.AddedAt
+	return rec.AddedAt, rec.CompletedAt
 }
 
-func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
+func detailToDTO(d engine.Detail, addedAt time.Time, completedAt *time.Time) DetailDTO {
 	snap := d.Snapshot
 	prog := 0.0
 	if snap.TotalBytes > 0 {
@@ -1403,10 +1513,13 @@ func detailToDTO(d engine.Detail, addedAt time.Time) DetailDTO {
 		TotalUp:    snap.BytesUp,
 		Peers:        snap.Peers,
 		Seeds:        snap.Seeds,
-		AddedAt:      addedAt.Unix(),
+		AddedAt:      unixOrZero(addedAt),
 		Paused:       snap.Paused,
 		Completed:    snap.Completed,
 		FilesMissing: snap.FilesMissing,
+	}
+	if completedAt != nil {
+		dto.CompletedAt = completedAt.Unix()
 	}
 	for _, f := range d.Files {
 		fp := 0.0
@@ -2299,17 +2412,37 @@ type seedPolicyJSON struct {
 // CheckSeedLimits inspects every completed, non-paused torrent and pauses
 // any that have exceeded their effective seeding limit (ratio or time).
 // It is designed to be called on a periodic ticker (e.g. every 30 seconds).
+//
+// Each pass also checkpoints the engine's session-scoped transfer counters
+// into the persisted total_uploaded/total_downloaded columns (for every
+// persisted torrent, not just completed ones), and computes the ratio from
+// the persisted total — anacrolix's BytesUp resets each process start, so a
+// ratio computed from it restarted at 0 on every launch and ratio limits
+// effectively never fired across sessions.
 func (s *Service) CheckSeedLimits(ctx context.Context) {
 	ctx = WithCaller(ctx, SystemCaller)
 	defaults := s.GetSeedingDefaults(ctx)
 	snaps := s.engine.List()
+	// One bulk SELECT per pass instead of a per-torrent Get every 30s.
+	records, err := s.torrents.List(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("seed policy: list torrents failed")
+		return
+	}
+	byHash := make(map[string]persistence.TorrentRecord, len(records))
+	for _, r := range records {
+		byHash[r.InfoHash] = r
+	}
 	now := time.Now()
+	live := make(map[string]struct{}, len(snaps))
 	for _, snap := range snaps {
-		if !snap.Completed || snap.Paused {
+		live[string(snap.ID)] = struct{}{}
+		rec, ok := byHash[string(snap.ID)]
+		if !ok {
 			continue
 		}
-		rec, err := s.torrents.Get(ctx, string(snap.ID))
-		if err != nil {
+		totalUp := s.checkpointTransferTotals(ctx, &rec, snap)
+		if !snap.Completed || snap.Paused {
 			continue
 		}
 		// Determine effective policy: per-torrent override wins over global default.
@@ -2337,7 +2470,7 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 		}
 		exceeded := false
 		if ratioLimit != nil && snap.BytesDone > 0 {
-			ratio := float64(snap.BytesUp) / float64(snap.BytesDone)
+			ratio := float64(totalUp) / float64(snap.BytesDone)
 			if ratio >= *ratioLimit {
 				exceeded = true
 			}
@@ -2356,4 +2489,53 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 			}
 		}
 	}
+	// Prune observations for torrents no longer in the engine so a removed
+	// and re-added infohash starts from fresh counters and the map doesn't
+	// grow unbounded across remove cycles.
+	s.seedCheckMu.Lock()
+	for hash := range s.lastSeedCounters {
+		if _, ok := live[hash]; !ok {
+			delete(s.lastSeedCounters, hash)
+		}
+	}
+	s.seedCheckMu.Unlock()
+}
+
+// checkpointTransferTotals persists the delta between the engine's
+// session-scoped transfer counters and the last value this process observed
+// for the torrent, returning the updated cumulative uploaded total. A counter
+// lower than the last observation means the engine restarted (counters reset
+// to zero) — the full current value is the delta. On a write failure the
+// observation is rolled back so the delta is retried next pass instead of
+// being lost.
+func (s *Service) checkpointTransferTotals(ctx context.Context, rec *persistence.TorrentRecord, snap engine.Snapshot) int64 {
+	hash := string(snap.ID)
+	s.seedCheckMu.Lock()
+	last, seen := s.lastSeedCounters[hash]
+	upDelta, downDelta := snap.BytesUp-last.up, snap.BytesDown-last.down
+	if upDelta < 0 {
+		upDelta = snap.BytesUp
+	}
+	if downDelta < 0 {
+		downDelta = snap.BytesDown
+	}
+	s.lastSeedCounters[hash] = sessionCounters{up: snap.BytesUp, down: snap.BytesDown}
+	s.seedCheckMu.Unlock()
+	if upDelta == 0 && downDelta == 0 {
+		return rec.TotalUploaded
+	}
+	if err := s.torrents.AddTransferTotals(ctx, hash, upDelta, downDelta); err != nil {
+		log.Warn().Err(err).Str("id", hash).Msg("seed policy: persist transfer totals failed")
+		s.seedCheckMu.Lock()
+		if seen {
+			s.lastSeedCounters[hash] = last
+		} else {
+			delete(s.lastSeedCounters, hash)
+		}
+		s.seedCheckMu.Unlock()
+		return rec.TotalUploaded
+	}
+	rec.TotalUploaded += upDelta
+	rec.TotalDownloaded += downDelta
+	return rec.TotalUploaded
 }

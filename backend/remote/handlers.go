@@ -431,6 +431,7 @@ var userFacingValidationPrefixes = []string{
 	"max peers per torrent must be ",
 	"no blocklist URL configured",
 	"rss poller not attached",
+	"filter regex is invalid",
 	"URL is empty",
 	"URL has no host",
 	"URL scheme must be http or https",
@@ -465,7 +466,7 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ListTorrents(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListTorrents(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
@@ -585,7 +586,7 @@ func (h *Handlers) ClearInspectorFocus(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GlobalStats(w http.ResponseWriter, r *http.Request) {
 	st, err := h.svc.GlobalStats(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -602,7 +603,7 @@ type createCategoryRequest struct {
 func (h *Handlers) ListCategories(w http.ResponseWriter, r *http.Request) {
 	cats, err := h.svc.ListCategories(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, cats)
@@ -663,7 +664,7 @@ type createTagRequest struct {
 func (h *Handlers) ListTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := h.svc.ListTags(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tags)
@@ -750,7 +751,7 @@ func (h *Handlers) SetTorrentCategory(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GetDefaultSavePath(w http.ResponseWriter, r *http.Request) {
 	v, err := h.svc.GetDefaultSavePath(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"path": v})
@@ -776,7 +777,7 @@ func (h *Handlers) SetDefaultSavePath(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GetLimits(w http.ResponseWriter, r *http.Request) {
 	l, err := h.svc.GetLimits(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, l)
@@ -955,7 +956,7 @@ func (h *Handlers) SetBlocklist(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) RefreshBlocklist(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.RefreshBlocklist(r.Context()); err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1014,7 +1015,7 @@ func (h *Handlers) RemoveTracker(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ListScheduleRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := h.svc.ListScheduleRules(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rules)
@@ -1063,7 +1064,7 @@ func (h *Handlers) DeleteScheduleRule(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ListFeeds(w http.ResponseWriter, r *http.Request) {
 	feeds, err := h.svc.ListFeeds(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, feeds)
@@ -1117,7 +1118,7 @@ func (h *Handlers) ListFiltersByFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	filters, err := h.svc.ListFiltersByFeed(r.Context(), feedID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, filters)
@@ -1163,6 +1164,22 @@ func (h *Handlers) DeleteFilter(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// PollFeedNow triggers an immediate poll of one feed, bypassing its scheduled
+// interval. Backs the SPA's per-feed "Refresh now" button; permission
+// (CanManageRSS) is enforced by the service like the other feed mutations.
+func (h *Handlers) PollFeedNow(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.PollFeedNow(r.Context(), id); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handlers) GetFeedItems(w http.ResponseWriter, r *http.Request) {
 	feedID, err := strconv.Atoi(chi.URLParam(r, "feedID"))
 	if err != nil {
@@ -1183,6 +1200,7 @@ func (h *Handlers) AddFeedItem(w http.ResponseWriter, r *http.Request) {
 		SavePath string `json:"save_path"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
+		writeServiceErr(w, err)
 		return
 	}
 	if body.URL == "" {
@@ -1236,7 +1254,7 @@ func (h *Handlers) SetWebPassword(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 	key, err := h.svc.RotateAPIKey(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"api_key": key})
@@ -1264,7 +1282,7 @@ func (h *Handlers) SetUpdaterConfig(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) CheckForUpdate(w http.ResponseWriter, r *http.Request) {
 	info, err := h.svc.CheckForUpdate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
@@ -1272,7 +1290,7 @@ func (h *Handlers) CheckForUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) InstallUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.InstallUpdate(r.Context()); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1444,10 +1462,13 @@ func (h *Handlers) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("bad user id"))
 		return
 	}
-	// Rate-limit keyed by the *target* user id so a compromised admin
-	// session can't grind through a password-reset oracle for a victim
-	// account.
-	if !h.passwordLimiter.allow(id) {
+	// Rate-limit keyed by the ACTING caller, not the target. The limiter
+	// runs before the service's admin check, so a target-keyed bucket let
+	// any authenticated user drain a victim's bucket (shared with
+	// ChangeMyPassword) just by spamming this endpoint and eating the 403s.
+	// Caller-keyed, the pre-authorization charge only ever costs the abuser
+	// their own budget, while still throttling a compromised admin session.
+	if !h.passwordLimiter.allow(api.CallerFrom(r.Context()).UserID) {
 		w.Header().Set("Retry-After", strconv.Itoa(loginRetryAfterSecs))
 		writeErr(w, http.StatusTooManyRequests, errors.New("too many password attempts"))
 		return

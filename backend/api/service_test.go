@@ -264,6 +264,25 @@ func TestService_QueuePosition(t *testing.T) {
 	require.Equal(t, 7, rows[0].QueuePosition)
 }
 
+// TestService_PauseResume_PersistsPausedColumn pins that Pause/Resume write
+// the paused column — RestoreOnStartup reads it to re-pause torrents the user
+// paused last session.
+func TestService_PauseResume_PersistsPausedColumn(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := sysCtx()
+	id, _ := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:pp", "")
+
+	require.NoError(t, svc.Pause(ctx, id))
+	rec, err := svc.torrents.Get(ctx, string(id))
+	require.NoError(t, err)
+	require.True(t, rec.Paused)
+
+	require.NoError(t, svc.Resume(ctx, id))
+	rec, err = svc.torrents.Get(ctx, string(id))
+	require.NoError(t, err)
+	require.False(t, rec.Paused)
+}
+
 func TestService_GlobalStats(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := sysCtx()
@@ -346,6 +365,29 @@ func TestService_FilterCRUD(t *testing.T) {
 	require.NoError(t, svc.DeleteFilter(ctx, filterID))
 	got, _ = svc.ListFiltersByFeed(ctx, feedID)
 	require.Empty(t, got)
+}
+
+// TestService_FilterRejectsInvalidRegex covers create AND update: the poller
+// compiles each filter per poll and skips invalid ones, so a bad pattern
+// stored here would be accepted silently and simply never match.
+func TestService_FilterRejectsInvalidRegex(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := sysCtx()
+
+	feedID, err := svc.CreateFeed(ctx, FeedDTO{URL: "https://example.com/rss", Name: "f", IntervalMin: 30, Enabled: true})
+	require.NoError(t, err)
+
+	_, err = svc.CreateFilter(ctx, FilterDTO{FeedID: feedID, Regex: `ubuntu(`, Enabled: true})
+	require.ErrorContains(t, err, "filter regex is invalid")
+	got, _ := svc.ListFiltersByFeed(ctx, feedID)
+	require.Empty(t, got, "invalid filter must not be stored")
+
+	filterID, err := svc.CreateFilter(ctx, FilterDTO{FeedID: feedID, Regex: `^debian`, Enabled: true})
+	require.NoError(t, err)
+	err = svc.UpdateFilter(ctx, FilterDTO{ID: filterID, FeedID: feedID, Regex: `[a-`, Enabled: true})
+	require.ErrorContains(t, err, "filter regex is invalid")
+	got, _ = svc.ListFiltersByFeed(ctx, feedID)
+	require.Equal(t, `^debian`, got[0].Regex, "failed update must not clobber the stored regex")
 }
 
 func TestService_DeleteFeed_CascadesFilters(t *testing.T) {

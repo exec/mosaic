@@ -32,6 +32,12 @@ type TorrentRecord struct {
 	// Used by the seed-policy enforcement loop to measure seeding duration.
 	SeedingStartedAt *time.Time
 	Sequential       bool
+	// TotalUploaded / TotalDownloaded are cumulative byte counters across
+	// engine sessions, checkpointed by CheckSeedLimits via AddTransferTotals.
+	// The engine's own counters reset every process start, so ratio-based
+	// seeding limits are computed from these instead.
+	TotalUploaded   int64
+	TotalDownloaded int64
 }
 
 // Torrents is the DAO for the torrents table.
@@ -64,30 +70,22 @@ func (t *Torrents) Save(ctx context.Context, r TorrentRecord) error {
 	if r.Sequential {
 		sequential = 1
 	}
-	var seedingStartedAt sql.NullInt64
-	if r.SeedingStartedAt != nil {
-		seedingStartedAt = sql.NullInt64{Int64: r.SeedingStartedAt.Unix(), Valid: true}
-	}
 	_, err := t.db.SQL().ExecContext(ctx, `
 INSERT INTO torrents (infohash, name, magnet, save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, sequential)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(infohash) DO UPDATE SET
   name = excluded.name,
-  magnet = excluded.magnet,
-  save_path = excluded.save_path,
-  category_id = excluded.category_id,
-  added_at = excluded.added_at,
-  completed_at = excluded.completed_at,
-  paused = excluded.paused,
-  queue_position = excluded.queue_position,
-  force_start = excluded.force_start,
-  metainfo = COALESCE(excluded.metainfo, torrents.metainfo),
-  down_rate_limit = excluded.down_rate_limit,
-  up_rate_limit = excluded.up_rate_limit,
-  sequential = excluded.sequential
+  magnet = COALESCE(NULLIF(excluded.magnet, ''), torrents.magnet),
+  metainfo = COALESCE(excluded.metainfo, torrents.metainfo)
 `, r.InfoHash, r.Name, r.Magnet, r.SavePath, catID, r.AddedAt.Unix(), completed, paused, r.QueuePosition, forceStart, nullableBytes(r.Metainfo), r.DownRateLimit, r.UpRateLimit, sequential)
-	// seed_policy and seeding_started_at are set by dedicated methods only.
-	_ = seedingStartedAt
+	// On duplicate adds (RSS re-match, watch-folder re-scan, user re-dropping
+	// the same file) only identity/metadata fields are refreshed. User state —
+	// added_at, paused, queue_position, force_start, category_id, rate limits,
+	// sequential, completed_at — is owned by the dedicated Set* methods and
+	// must not be reset by a re-add. save_path stays too: the engine keeps
+	// using the original storage location for an already-known infohash, so
+	// persisting a new path would desync DB from disk. seed_policy and
+	// seeding_started_at are likewise set by dedicated methods only.
 	return err
 }
 
@@ -125,7 +123,7 @@ func nullableBytes(b []byte) any {
 // Get returns a single record by infohash.
 func (t *Torrents) Get(ctx context.Context, infohash string) (TorrentRecord, error) {
 	row := t.db.SQL().QueryRowContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at, sequential
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at, sequential, total_uploaded, total_downloaded
 FROM torrents WHERE infohash = ?`, infohash)
 	return scanTorrent(row)
 }
@@ -133,7 +131,7 @@ FROM torrents WHERE infohash = ?`, infohash)
 // List returns all records ordered by added_at descending.
 func (t *Torrents) List(ctx context.Context) ([]TorrentRecord, error) {
 	rows, err := t.db.SQL().QueryContext(ctx, `
-SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at, sequential
+SELECT infohash, name, COALESCE(magnet, ''), save_path, category_id, added_at, completed_at, paused, queue_position, force_start, metainfo, down_rate_limit, up_rate_limit, seed_policy, seeding_started_at, sequential, total_uploaded, total_downloaded
 FROM torrents ORDER BY added_at DESC`)
 	if err != nil {
 		return nil, err
@@ -174,6 +172,27 @@ func (t *Torrents) SetQueuePosition(ctx context.Context, infohash string, pos in
 	return err
 }
 
+// SetPaused persists whether a torrent is user-paused, so the state survives
+// restarts (RestoreOnStartup re-pauses torrents with paused=1).
+func (t *Torrents) SetPaused(ctx context.Context, infohash string, paused bool) error {
+	v := 0
+	if paused {
+		v = 1
+	}
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET paused = ? WHERE infohash = ?`, v, infohash)
+	return err
+}
+
+// SetCompletedAt records when a torrent first finished downloading. Written
+// once by the service when it observes the completed transition; never
+// cleared. RestoreOnStartup uses it to arm missing-files detection.
+func (t *Torrents) SetCompletedAt(ctx context.Context, infohash string, at time.Time) error {
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET completed_at = ? WHERE infohash = ?`, at.Unix(), infohash)
+	return err
+}
+
 // SetForceStart toggles whether a torrent bypasses the queue limit.
 func (t *Torrents) SetForceStart(ctx context.Context, infohash string, force bool) error {
 	v := 0
@@ -211,7 +230,7 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 	var metainfo []byte
 	var seedPolicy sql.NullString
 	var seedingStartedAt sql.NullInt64
-	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo, &r.DownRateLimit, &r.UpRateLimit, &seedPolicy, &seedingStartedAt, &sequential); err != nil {
+	if err := s.Scan(&r.InfoHash, &r.Name, &r.Magnet, &r.SavePath, &categoryID, &addedAt, &completedAt, &paused, &r.QueuePosition, &forceStart, &metainfo, &r.DownRateLimit, &r.UpRateLimit, &seedPolicy, &seedingStartedAt, &sequential, &r.TotalUploaded, &r.TotalDownloaded); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return r, ErrNotFound
 		}
@@ -238,6 +257,17 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 		r.SeedingStartedAt = &t
 	}
 	return r, nil
+}
+
+// AddTransferTotals adds session-counter deltas to the persisted cumulative
+// transfer totals. CheckSeedLimits checkpoints these every pass so that
+// ratio-based seeding limits survive restarts — the engine's own byte
+// counters reset to zero each process start. Missing rows are not an error.
+func (t *Torrents) AddTransferTotals(ctx context.Context, infohash string, upDelta, downDelta int64) error {
+	_, err := t.db.SQL().ExecContext(ctx,
+		`UPDATE torrents SET total_uploaded = total_uploaded + ?, total_downloaded = total_downloaded + ? WHERE infohash = ?`,
+		upDelta, downDelta, infohash)
+	return err
 }
 
 // SetRateLimits persists per-torrent download and upload bandwidth caps.

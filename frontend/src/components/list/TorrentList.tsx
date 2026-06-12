@@ -14,7 +14,9 @@ type Props = {
   selection: Set<string>;
   categories: CategoryDTO[];
   tags: TagDTO[];
-  onSelect: (id: string, e: MouseEvent) => void;
+  // visibleIds is the id list in the on-screen (filtered + sorted) order, so
+  // shift-click range select extends over exactly the rows the user sees.
+  onSelect: (id: string, e: MouseEvent, visibleIds: string[]) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRecheck: (id: string) => void;
@@ -89,7 +91,7 @@ function CardList(props: Props) {
                     <TorrentCard
                       torrent={t()}
                       selected={props.selection.has(t().id)}
-                      onSelect={(e) => props.onSelect(t().id, e)}
+                      onSelect={(e) => props.onSelect(t().id, e, props.torrents.map((x) => x.id))}
                       onPause={() => props.onPause(t().id)}
                       onResume={() => props.onResume(t().id)}
                       onRemove={() => props.onRemove(t().id)}

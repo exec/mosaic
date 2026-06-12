@@ -32,9 +32,9 @@ const (
 	sessionCookieName = "mosaic_session"
 	sessionTTL        = 12 * time.Hour
 	// maxSessions caps the SessionStore so a flood of logins (or stale tokens
-	// piling up) can't grow memory without bound. When full, the oldest
-	// (earliest-expiring) entry is evicted. 100 is plenty for an interactive
-	// single-user web UI.
+	// piling up) can't grow memory without bound. When full (after reaping
+	// expired entries), Create returns ErrTooManySessions. 100 is plenty for
+	// an interactive single-user web UI.
 	maxSessions = 100
 )
 
@@ -115,6 +115,23 @@ func (s *SessionStore) Valid(token string) (int, bool) {
 	}
 	e.expires = now.Add(sessionTTL)
 	s.sessions[token] = e
+	return e.userID, true
+}
+
+// Peek reports whether token is currently valid WITHOUT sliding its expiry
+// forward. Used by the WebSocket session recheck: an open tab pings every 30s,
+// so routing that through Valid would renew an otherwise-idle session forever.
+// Real user activity still slides the window via Valid on each API request.
+func (s *SessionStore) Peek(token string) (int, bool) {
+	if token == "" {
+		return 0, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.sessions[token]
+	if !ok || time.Now().After(e.expires) {
+		return 0, false
+	}
 	return e.userID, true
 }
 

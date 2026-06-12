@@ -47,15 +47,27 @@ type GitHubSource struct {
 	Owner string
 	Repo  string
 	// Channel is "stable" (default) or "beta"; beta accepts pre-release tags.
+	// Set at construction; runtime changes must go through SetChannel.
 	Channel string
 
 	mu          sync.Mutex
 	cached      *selfupdate.Updater
+	cachedFor   string // Channel the cached updater was built with
 	lastRelease *selfupdate.Release
 }
 
+// SetChannel switches the release channel at runtime (Settings → Updates).
+// The cached *selfupdate.Updater bakes the channel into its Prerelease flag,
+// so lazyInit compares cachedFor against Channel and rebuilds on mismatch —
+// without this, a channel change silently required an app restart.
+func (s *GitHubSource) SetChannel(channel string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Channel = channel
+}
+
 func (s *GitHubSource) lazyInit() (*selfupdate.Updater, error) {
-	if s.cached != nil {
+	if s.cached != nil && s.cachedFor == s.Channel {
 		return s.cached, nil
 	}
 	src, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
@@ -99,6 +111,10 @@ func (s *GitHubSource) lazyInit() (*selfupdate.Updater, error) {
 		return nil, fmt.Errorf("new updater: %w", err)
 	}
 	s.cached = u
+	s.cachedFor = s.Channel
+	// A release detected under the previous channel may not be offered on
+	// the new one; force a fresh DetectLatest before any Install.
+	s.lastRelease = nil
 	return u, nil
 }
 

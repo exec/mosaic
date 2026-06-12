@@ -123,6 +123,38 @@ func TestSessionStore_ValidSlidesExpiry(t *testing.T) {
 	require.True(t, newExp.After(originalExp), "Valid() must slide expiry forward")
 }
 
+// TestSessionStore_PeekDoesNotSlideExpiry confirms the read-only validity
+// check used by the WS 30s recheck loop: an idle tab's periodic pings must
+// not renew the session forever.
+func TestSessionStore_PeekDoesNotSlideExpiry(t *testing.T) {
+	s := NewSessionStore()
+	tok, err := s.Create(1)
+	require.NoError(t, err)
+
+	s.mu.RLock()
+	originalExp := s.sessions[tok].expires
+	s.mu.RUnlock()
+
+	time.Sleep(10 * time.Millisecond)
+	uid, ok := s.Peek(tok)
+	require.True(t, ok)
+	require.Equal(t, 1, uid)
+
+	s.mu.RLock()
+	newExp := s.sessions[tok].expires
+	s.mu.RUnlock()
+	require.Equal(t, originalExp, newExp, "Peek() must not slide expiry")
+
+	// Unknown and expired tokens are rejected.
+	_, ok = s.Peek("nope")
+	require.False(t, ok)
+	s.mu.Lock()
+	s.sessions[tok] = sessionEntry{userID: 1, expires: time.Now().Add(-time.Second)}
+	s.mu.Unlock()
+	_, ok = s.Peek(tok)
+	require.False(t, ok)
+}
+
 // TestSessionStore_CreateRejectsAtCapacity confirms that an in-memory full
 // store refuses new logins instead of silently evicting the oldest live
 // session — closing an availability-attack vector where a flood of logins

@@ -156,7 +156,7 @@ func TestHandlers_WebConfigAndPasswordRotation(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"username": "remote", "password": "p4ssword!"})
 	rec = httptest.NewRecorder()
-	f.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body)))
+	f.router.ServeHTTP(rec, loginReq(bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	// Rotate API key — old key still works for the PUT but a new one comes back.
@@ -169,6 +169,20 @@ func TestHandlers_WebConfigAndPasswordRotation(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rot))
 	require.NotEmpty(t, rot.APIKey)
 	require.NotEqual(t, key, rot.APIKey)
+}
+
+// TestHandlers_PollFeedNow_RouteWired pins the POST /api/feeds/{id}/poll
+// route the SPA's per-feed "Refresh now" button calls. The fixture has no
+// RSS poller attached, so the service returns "rss poller not attached" —
+// a user-facing validation message writeServiceErr maps to 400. A missing
+// route would yield 404/405 instead.
+func TestHandlers_PollFeedNow_RouteWired(t *testing.T) {
+	f := newFixture(t)
+	key, _ := f.svc.RotateAPIKey(sysCtx())
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/feeds/1/poll", nil))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
 func TestHandlers_Stats(t *testing.T) {
@@ -225,24 +239,25 @@ func TestHandlers_Updater_RejectsUnknownChannel(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
-func TestHandlers_Updater_CheckWithoutUpdater_500s(t *testing.T) {
+func TestHandlers_Updater_CheckWithoutUpdater_400s(t *testing.T) {
 	// fixture Service has no updater attached → CheckForUpdate returns the
-	// "updater disabled" error → handler maps to 500.
+	// "updater disabled" error → writeServiceErr recognizes it as a
+	// user-facing validation message and maps it to 400.
 	f := newFixture(t)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/check", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
-func TestHandlers_Updater_InstallWithoutUpdater_500s(t *testing.T) {
+func TestHandlers_Updater_InstallWithoutUpdater_400s(t *testing.T) {
 	f := newFixture(t)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/updater/install", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
 func TestHandlers_Version_OK(t *testing.T) {
@@ -264,7 +279,7 @@ func TestLogin_CookieHasSameSiteStrict(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
 	rec := httptest.NewRecorder()
-	f.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body)))
+	f.router.ServeHTTP(rec, loginReq(bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	var sessionCookie *http.Cookie
@@ -289,14 +304,14 @@ func TestLogin_RateLimitReturns429AfterFiveFailures(t *testing.T) {
 	// 6th from the same IP must trip the limiter and return 429.
 	for i := 0; i < 5; i++ {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+		req := loginReq(bytes.NewReader(body))
 		req.RemoteAddr = "10.0.0.7:54321"
 		f.router.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req := loginReq(bytes.NewReader(body))
 	req.RemoteAddr = "10.0.0.7:54321"
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
@@ -304,10 +319,36 @@ func TestLogin_RateLimitReturns429AfterFiveFailures(t *testing.T) {
 
 	// Different IP gets its own bucket.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req = loginReq(bytes.NewReader(body))
 	req.RemoteAddr = "10.0.0.8:54321"
 	f.router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// TestLogin_RejectsCrossOriginPOST covers login CSRF: a cross-site form post
+// to /api/login must be rejected by the OriginGuard before credentials are
+// even examined, so a malicious page can't silently log the victim's browser
+// into an attacker-controlled account.
+func TestLogin_RejectsCrossOriginPOST(t *testing.T) {
+	f := newFixture(t)
+	f.seedCreds(t, "alice", "s3cret")
+
+	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Host = "mosaic.local:8080"
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	// Missing both Origin and Referer is rejected too — same semantics as
+	// the rest of the guarded surface.
+	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 }
 
 func TestOriginGuard_RejectsMismatchedOriginOnPOST(t *testing.T) {
@@ -505,7 +546,7 @@ func TestLogin_BodyOver1MiBReturns413BeforeRateLimit(t *testing.T) {
 	body := append([]byte(`{"username":"alice","password":"`), junk...)
 	body = append(body, []byte(`"}`)...)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req := loginReq(bytes.NewReader(body))
 	req.RemoteAddr = "10.0.0.99:12345"
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
@@ -516,7 +557,7 @@ func TestLogin_BodyOver1MiBReturns413BeforeRateLimit(t *testing.T) {
 	good, _ := json.Marshal(map[string]string{"username": "alice", "password": "s3cret"})
 	for i := 0; i < 5; i++ {
 		rec = httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(good))
+		req = loginReq(bytes.NewReader(good))
 		req.RemoteAddr = "10.0.0.99:12345"
 		f.router.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code, "login %d", i+1)

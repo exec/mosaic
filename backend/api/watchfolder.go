@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,11 +38,16 @@ func (w *WatchFolder) Start(path string, deleteAfterAdd bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Stop any running loop.
+	// Stop any running loop. Swap stop/done to nil under the lock BEFORE
+	// closing, so neither a concurrent Stop() during the unlocked wait below
+	// nor a later Stop() after one of the early returns can ever observe —
+	// and re-close — an already-closed channel.
 	if w.stop != nil {
-		close(w.stop)
+		stop, done := w.stop, w.done
+		w.stop, w.done = nil, nil
+		close(stop)
 		w.mu.Unlock()
-		<-w.done
+		<-done
 		w.mu.Lock()
 	}
 
@@ -68,11 +74,12 @@ func (w *WatchFolder) Stop() {
 		w.mu.Unlock()
 		return
 	}
-	close(w.stop)
-	done := w.done
-	w.stop = nil
-	w.done = nil
+	// Same swap-before-close discipline as Start: once the fields are nil
+	// nobody else can reach the closed channel.
+	stop, done := w.stop, w.done
+	w.stop, w.done = nil, nil
 	w.mu.Unlock()
+	close(stop)
 	<-done
 }
 
@@ -83,8 +90,16 @@ func (w *WatchFolder) run(dir string, deleteAfterAdd bool, stop <-chan struct{},
 
 	ctx := WithCaller(context.Background(), SystemCaller)
 
+	// processed remembers files already added this session, keyed by path
+	// with a size+mtime fingerprint as the value. Without it, every poll
+	// with delete_after_add=false re-adds every file in the folder (and
+	// re-triggers a verify each time). A changed fingerprint counts as a
+	// new file; entries for files that disappear are dropped so a later
+	// re-creation is picked up again.
+	processed := make(map[string]string)
+
 	// Poll immediately on start, then on each 5-second tick.
-	w.poll(ctx, dir, deleteAfterAdd)
+	w.poll(ctx, dir, deleteAfterAdd, processed)
 
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
@@ -94,17 +109,18 @@ func (w *WatchFolder) run(dir string, deleteAfterAdd bool, stop <-chan struct{},
 			log.Info().Str("dir", dir).Msg("watch_folder: stopped")
 			return
 		case <-t.C:
-			w.poll(ctx, dir, deleteAfterAdd)
+			w.poll(ctx, dir, deleteAfterAdd, processed)
 		}
 	}
 }
 
-func (w *WatchFolder) poll(ctx context.Context, dir string, deleteAfterAdd bool) {
+func (w *WatchFolder) poll(ctx context.Context, dir string, deleteAfterAdd bool, processed map[string]string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		log.Warn().Err(err).Str("dir", dir).Msg("watch_folder: ReadDir failed")
 		return
 	}
+	present := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -113,6 +129,16 @@ func (w *WatchFolder) poll(ctx context.Context, dir string, deleteAfterAdd bool)
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		info, err := e.Info()
+		if err != nil {
+			// File vanished between ReadDir and stat; next poll catches it.
+			continue
+		}
+		present[path] = struct{}{}
+		fingerprint := fmt.Sprintf("%d|%d", info.Size(), info.ModTime().UnixNano())
+		if processed[path] == fingerprint {
+			continue // already added this exact file
+		}
 		blob, err := os.ReadFile(path)
 		if err != nil {
 			log.Warn().Err(err).Str("path", path).Msg("watch_folder: read file failed")
@@ -123,11 +149,19 @@ func (w *WatchFolder) poll(ctx context.Context, dir string, deleteAfterAdd bool)
 			log.Warn().Err(err).Str("path", path).Msg("watch_folder: AddTorrentBytes failed")
 			continue
 		}
+		processed[path] = fingerprint
 		log.Info().Str("path", path).Str("id", string(id)).Msg("watch_folder: torrent added")
 		if deleteAfterAdd {
 			if err := os.Remove(path); err != nil {
 				log.Warn().Err(err).Str("path", path).Msg("watch_folder: delete after add failed")
 			}
+		}
+	}
+	// Drop processed entries for files that no longer exist so the map can't
+	// grow unboundedly and a re-created file is treated as new.
+	for p := range processed {
+		if _, ok := present[p]; !ok {
+			delete(processed, p)
 		}
 	}
 }

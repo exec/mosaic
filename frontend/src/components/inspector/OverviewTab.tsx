@@ -1,4 +1,4 @@
-import {createEffect, createSignal, Show} from 'solid-js';
+import {createEffect, createSignal, on, Show} from 'solid-js';
 import {Copy} from 'lucide-solid';
 import {toast} from 'solid-sonner';
 import type {DetailDTO, SeedPolicyDTO} from '../../lib/bindings';
@@ -216,15 +216,19 @@ export function OverviewTab(props: Props) {
   const [downKbps, setDownKbps] = createSignal(0);
   const [upKbps, setUpKbps] = createSignal(0);
 
-  createEffect(() => {
-    const d = props.detail;
-    if (!d) return;
-    const id = d.id;
+  // Keyed on the torrent id only — props.detail is replaced wholesale every
+  // inspector tick (~1Hz), so tracking it directly re-fetched the rate
+  // limits once per second for as long as the tab was open. Responses that
+  // arrive after the user switched torrents are discarded so a slow reply
+  // for torrent A can't populate B's inputs.
+  createEffect(on(() => props.detail?.id, (id) => {
+    if (!id) return;
     api.getTorrentRateLimits(id).then((limits) => {
+      if (props.detail?.id !== id) return; // stale — torrent changed mid-flight
       setDownKbps(limits.down_kbps);
       setUpKbps(limits.up_kbps);
     }).catch(() => {});
-  });
+  }));
 
   const saveDown = async (kbps: number) => {
     const id = props.detail?.id;

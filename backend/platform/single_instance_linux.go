@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -118,6 +119,17 @@ func StartSecondInstanceListener(uniqueId string, onArgs func(args []string)) er
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return fmt.Errorf("create socket dir: %w", err)
 	}
+	// When XDG_RUNTIME_DIR is unset, the socket dir is the world-writable
+	// /tmp fallback (/tmp/mosaic-<uid>) — MkdirAll happily accepts a
+	// pre-existing directory, which another local user could have planted
+	// (symlink, wrong owner, loose mode) to hijack or eavesdrop on the
+	// socket. Verify before binding. XDG_RUNTIME_DIR itself is created by
+	// systemd-logind with the right ownership, so it's left alone.
+	if os.Getenv("XDG_RUNTIME_DIR") == "" {
+		if err := verifyPrivateDir(filepath.Dir(socketPath)); err != nil {
+			return fmt.Errorf("socket dir %s: %w", filepath.Dir(socketPath), err)
+		}
+	}
 
 	listener, err := bindSingleInstanceSocket(socketPath)
 	if err != nil {
@@ -155,32 +167,68 @@ var (
 	registeredCleanupSocket string
 )
 
+// verifyPrivateDir checks that path is a real directory (not a symlink)
+// owned by the current user with no group/other permission bits. Guards the
+// /tmp fallback socket dir against a pre-planted attacker-owned path.
+func verifyPrivateDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("not a directory (mode %v) — possible squatting, refusing to use it", info.Mode())
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("cannot determine directory owner")
+	}
+	if int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("owned by uid %d, not us (uid %d) — refusing to use it", st.Uid, os.Getuid())
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("mode %#o is accessible to other users (want 0700) — refusing to use it", perm)
+	}
+	return nil
+}
+
 // bindSingleInstanceSocket binds the socket, recovering from a stale socket
 // file left by a crashed previous owner. Returns the listener.
+//
+// The probe → remove → re-bind sequence is raced when two instances start
+// simultaneously: both can probe-fail the same stale socket, both Remove,
+// and the bind loser would give up even though the winner is now live (or
+// the path is simply free again). Loop a few times so the loser re-probes —
+// on the next pass it either connects to the winner (clean "owned by other
+// instance" error) or binds the freed path itself.
 func bindSingleInstanceSocket(socketPath string) (net.Listener, error) {
-	listener, err := net.Listen("unix", socketPath)
-	if err == nil {
-		return listener, nil
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		listener, err := net.Listen("unix", socketPath)
+		if err == nil {
+			return listener, nil
+		}
+		// EADDRINUSE: someone bound this path. Probe by connecting — if we can,
+		// a real first instance exists (this code path means EarlyForwardLaunchArgs
+		// missed it, e.g. no args were passed). If we can't, the socket is stale.
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, err
+		}
+		lastErr = err
+		probe, probeErr := net.DialTimeout("unix", socketPath, connectTimeout)
+		if probeErr == nil {
+			_ = probe.Close()
+			// A live owner exists. The caller can still run as a "logical first
+			// instance" of its own UI, but we won't be able to receive forwarded
+			// args. Surface the conflict so the caller can decide.
+			return nil, fmt.Errorf("another mosaic instance owns %s", socketPath)
+		}
+		// Stale socket — remove and loop back to retry the bind. A concurrent
+		// starter may have removed it first; that's fine.
+		if rmErr := os.Remove(socketPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf("remove stale socket %s: %w", socketPath, rmErr)
+		}
 	}
-	// EADDRINUSE: someone bound this path. Probe by connecting — if we can,
-	// a real first instance exists (this code path means EarlyForwardLaunchArgs
-	// missed it, e.g. no args were passed). If we can't, the socket is stale.
-	if !errors.Is(err, syscall.EADDRINUSE) {
-		return nil, err
-	}
-	probe, probeErr := net.DialTimeout("unix", socketPath, connectTimeout)
-	if probeErr == nil {
-		_ = probe.Close()
-		// A live owner exists. The caller can still run as a "logical first
-		// instance" of its own UI, but we won't be able to receive forwarded
-		// args. Surface the conflict so the caller can decide.
-		return nil, fmt.Errorf("another mosaic instance owns %s", socketPath)
-	}
-	// Stale socket — remove and retry once.
-	if rmErr := os.Remove(socketPath); rmErr != nil {
-		return nil, fmt.Errorf("remove stale socket %s: %w", socketPath, rmErr)
-	}
-	return net.Listen("unix", socketPath)
+	return nil, fmt.Errorf("gave up after repeated bind races: %w", lastErr)
 }
 
 func acceptSecondInstances(listener net.Listener, out chan<- []string) {

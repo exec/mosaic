@@ -476,18 +476,18 @@ function FilterForm(props: {
   const [savePath, setSavePath] = createSignal(props.initial.save_path);
   const [enabled, setEnabled] = createSignal(props.initial.enabled);
 
+  // Only require a non-empty regex client-side. Filters run on Go's RE2
+  // engine, whose syntax differs from JS RegExp — validating with
+  // `new RegExp` here rejected valid RE2 patterns like the suggested
+  // `(?i)ubuntu.*amd64` and permanently disabled Save. Syntax errors are
+  // the backend's call; create/update failures surface via the submit
+  // handlers' toast.
   const regexEmpty = () => regex().trim() === '';
-  const regexValid = () => {
-    const r = regex().trim();
-    if (!r) return false;
-    try { new RegExp(r); return true; } catch { return false; }
-  };
   // Surfaces *why* Save is disabled. Plain "disabled button" gave no
   // signal — users (correctly) couldn't tell whether the regex, the
   // category dropdown, or something else was blocking submit.
   const disabledReason = () => {
     if (regexEmpty()) return 'Enter a regex to enable Save.';
-    if (!regexValid()) return 'Regex is invalid — fix the syntax to enable Save.';
     return null;
   };
 
@@ -496,7 +496,7 @@ function FilterForm(props: {
       class="flex flex-col gap-2 rounded-md border border-white/[.06] bg-white/[.02] p-2 my-1"
       onSubmit={async (e) => {
         e.preventDefault();
-        if (!regexValid()) return;
+        if (regexEmpty()) return;
         await props.onSubmit({
           id: props.initial.id,
           feed_id: props.initial.feed_id,
@@ -513,7 +513,6 @@ function FilterForm(props: {
         </label>
         <input
           class="rounded border border-white/[.06] bg-black/30 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
-          classList={{'border-rose-500/50': regex().trim() !== '' && !regexValid()}}
           value={regex()}
           onInput={(e) => setRegex(e.currentTarget.value)}
           autofocus
@@ -563,7 +562,7 @@ function FilterForm(props: {
           <X class="h-3.5 w-3.5" />
           Cancel
         </Button>
-        <Button type="submit" variant="primary" disabled={!regexValid()}>
+        <Button type="submit" variant="primary" disabled={regexEmpty()}>
           <Check class="h-3.5 w-3.5" />
           Save
         </Button>

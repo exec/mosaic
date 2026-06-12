@@ -188,6 +188,38 @@ func TestService_OnWebConfigChange_FiresFromSetWebConfig(t *testing.T) {
 		2*time.Second, 20*time.Millisecond)
 }
 
+// TestServer_SessionsAcrossApplyTransitions pins the session lifecycle rules:
+// a reconfigure restart (Enabled stays true) keeps sessions so browsers can
+// reconnect with their cookie, while a full disable revokes every session so
+// remote credentials don't survive (and silently revive on a later re-enable).
+func TestServer_SessionsAcrossApplyTransitions(t *testing.T) {
+	svc, _ := newServerFixture(t)
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	sessions := NewSessionStore()
+	srv := NewServer(svc, hub, sessions, nil, t.TempDir(), FlavorDaemon)
+	t.Cleanup(srv.Stop)
+
+	p1 := freePort(t)
+	srv.Apply(api.WebConfigDTO{Enabled: true, Port: p1})
+	waitListening(t, fmt.Sprintf("127.0.0.1:%d", p1))
+
+	_, err := sessions.Create(1)
+	require.NoError(t, err)
+	require.Equal(t, 1, sessions.Count())
+
+	// Port change restart: sessions survive.
+	p2 := freePort(t)
+	srv.Apply(api.WebConfigDTO{Enabled: true, Port: p2})
+	waitListening(t, fmt.Sprintf("127.0.0.1:%d", p2))
+	require.Equal(t, 1, sessions.Count())
+
+	// Disable: sessions revoked.
+	srv.Apply(api.WebConfigDTO{Enabled: false, Port: p2})
+	require.Empty(t, srv.CurrentAddr())
+	require.Equal(t, 0, sessions.Count())
+}
+
 func TestServer_StaticFSServedAtRoot(t *testing.T) {
 	svc, _ := newServerFixture(t)
 	hub := NewHub()
