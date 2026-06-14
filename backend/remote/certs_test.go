@@ -1,12 +1,15 @@
 package remote
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -74,6 +77,77 @@ func TestEnsureSelfSignedCert_RegeneratesWhenLANIPRequested(t *testing.T) {
 	}
 	require.Contains(t, ipStrings, "192.168.1.42")
 	require.Contains(t, ipStrings, "127.0.0.1") // loopback still covered
+}
+
+func TestEnsureSelfSignedCert_IdempotentMatchingPair(t *testing.T) {
+	dir := t.TempDir()
+
+	// Idempotent: repeated calls return a usable cert whose on-disk cert.pem
+	// and key.pem always parse as a matching pair (the public key in the cert
+	// corresponds to the private key in key.pem). This is the property the
+	// non-atomic write + missing mutex previously could violate.
+	for i := 0; i < 3; i++ {
+		cert, err := EnsureSelfSignedCert(dir, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, cert.Certificate)
+
+		// tls.LoadX509KeyPair already verifies the public/private key match;
+		// re-load explicitly to be sure the bytes on disk are consistent.
+		reloaded, err := tls.LoadX509KeyPair(
+			filepath.Join(dir, "cert.pem"),
+			filepath.Join(dir, "key.pem"),
+		)
+		require.NoError(t, err, "cert.pem and key.pem must form a matching pair")
+		require.NotEmpty(t, reloaded.Certificate)
+	}
+}
+
+func TestEnsureSelfSignedCert_ConcurrentMatchingPair(t *testing.T) {
+	dir := t.TempDir()
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		// Mix IP requests so some goroutines trigger regeneration while others
+		// hit the cache, maximizing the chance of interleaved writes.
+		var extra []net.IP
+		if i%2 == 0 {
+			extra = []net.IP{net.ParseIP("192.168.1.42")}
+		}
+		wg.Add(1)
+		go func(extra []net.IP) {
+			defer wg.Done()
+			if _, err := EnsureSelfSignedCert(dir, extra); err != nil {
+				errs <- err
+			}
+		}(extra)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	// Whatever the final state, the on-disk pair must match.
+	_, err := tls.LoadX509KeyPair(
+		filepath.Join(dir, "cert.pem"),
+		filepath.Join(dir, "key.pem"),
+	)
+	require.NoError(t, err, "concurrent writes must leave a matching cert/key pair")
+}
+
+func TestEnsureSelfSignedCert_ValidityUnderOneYearPlus(t *testing.T) {
+	dir := t.TempDir()
+	cert, err := EnsureSelfSignedCert(dir, nil)
+	require.NoError(t, err)
+
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	require.NoError(t, err)
+
+	validity := leaf.NotAfter.Sub(leaf.NotBefore)
+	require.InDelta(t, (397 * 24 * time.Hour).Hours(), validity.Hours(), 24,
+		"cert validity should be ~397 days, not multi-year")
 }
 
 func TestEnsureSelfSignedCert_WritesPEMFiles(t *testing.T) {

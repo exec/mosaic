@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // Available reports whether a StatusNotifierItem watcher is currently
@@ -37,6 +38,7 @@ func Available() bool {
 		// No session bus reachable — headless / sandboxed / SSH session
 		// without DISPLAY. Fall back to "tray unavailable" so close-to-tray
 		// gets disabled for the session.
+		log.Debug().Err(err).Msg("tray: session bus unreachable; treating tray as unavailable")
 		return false
 	}
 	defer conn.Close()
@@ -49,6 +51,7 @@ func Available() bool {
 		"org.kde.StatusNotifierWatcher",
 	).Store(&hasOwner)
 	if err != nil {
+		log.Debug().Err(err).Msg("tray: NameHasOwner check failed; treating tray as unavailable")
 		return false
 	}
 	return hasOwner

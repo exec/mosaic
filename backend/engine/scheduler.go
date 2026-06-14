@@ -16,7 +16,8 @@ type Scheduler struct {
 	maxActiveDownloads int // 0 = unlimited
 	maxActiveSeeds     int
 
-	stop chan struct{}
+	stop      chan struct{}
+	closeOnce sync.Once
 }
 
 func NewScheduler(eng *Engine, maxDL, maxSeeds int, tickEvery time.Duration) *Scheduler {
@@ -38,7 +39,9 @@ func (s *Scheduler) Limits() (int, int) {
 	return s.maxActiveDownloads, s.maxActiveSeeds
 }
 
-func (s *Scheduler) Close() { close(s.stop) }
+// Close stops the scheduler's tick loop. It is idempotent: calling Close more
+// than once is safe and will not panic on a double close(s.stop).
+func (s *Scheduler) Close() { s.closeOnce.Do(func() { close(s.stop) }) }
 
 func (s *Scheduler) run(every time.Duration) {
 	t := time.NewTicker(every)

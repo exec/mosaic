@@ -79,6 +79,22 @@ func TestScheduler_TieBreaksDeterministicallyOnEqualQueuePosition(t *testing.T) 
 	}
 }
 
+// TestScheduler_CloseIsIdempotent guards the double-close panic: Close used to
+// do a bare close(s.stop), which panics on the second call. A sync.Once makes
+// it safe to call Close any number of times.
+func TestScheduler_CloseIsIdempotent(t *testing.T) {
+	fb := NewFakeBackend()
+	eng := NewEngine(fb, 50*time.Millisecond)
+	t.Cleanup(func() { _ = eng.Close() })
+
+	s := NewScheduler(eng, 2, 0, 50*time.Millisecond)
+	require.NotPanics(t, func() {
+		s.Close()
+		s.Close()
+		s.Close()
+	}, "calling Close multiple times must not panic")
+}
+
 func TestScheduler_ForceStartBypassesLimit(t *testing.T) {
 	fb := NewFakeBackend()
 	eng := NewEngine(fb, 50*time.Millisecond)

@@ -105,11 +105,25 @@ func TestIsBlockedIP(t *testing.T) {
 		{"239.255.255.255", true, "multicast v4 edge"},
 		{"ff02::1", true, "multicast v6"},
 
+		// RFC 6598 carrier-grade NAT 100.64.0.0/10.
+		{"100.64.0.0", true, "CGNAT low edge"},
+		{"100.64.0.1", true, "CGNAT"},
+		{"100.100.100.100", true, "CGNAT mid"},
+		{"100.127.255.255", true, "CGNAT high edge"},
+
+		// Non-global IPv6 transition ranges.
+		{"2002::1", true, "6to4 2002::/16"},
+		{"2002:c058:6301::1", true, "6to4 wrapping a public v4"},
+		{"2001::1", true, "Teredo 2001::/32"},
+		{"2001:0:4136:e378:8000:63bf:3fff:fdd2", true, "Teredo full"},
+
 		{"8.8.8.8", false, "Google DNS"},
 		{"1.1.1.1", false, "Cloudflare DNS"},
 		{"2001:4860:4860::8888", false, "Google DNS v6"},
 		{"172.15.0.1", false, "just below RFC1918"},
 		{"172.32.0.1", false, "just above RFC1918"},
+		{"100.63.255.255", false, "just below CGNAT"},
+		{"100.128.0.0", false, "just above CGNAT"},
 	}
 
 	for _, tc := range cases {

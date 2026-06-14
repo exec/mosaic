@@ -58,33 +58,57 @@ func validateFetchURL(rawURL string) (*url.URL, error) {
 	return u, nil
 }
 
-// isBlockedIP returns true if dialing this address would reach loopback,
-// link-local, RFC1918/ULA private space, multicast, or the unspecified
-// address. Pulled out of the dialer so it can be unit-tested directly.
+// isBlockedIP returns true if dialing this address would reach a non-public
+// destination. It adopts an allow-global-only baseline: anything that is not a
+// global-unicast address is blocked (this covers loopback, link-local,
+// multicast, and unspecified). On top of that it explicitly blocks RFC1918/ULA
+// private space, the RFC 6598 CGNAT range 100.64.0.0/10 for IPv4, and the
+// IPv6 transition ranges 6to4 2002::/16 and Teredo 2001::/32 — Go's
+// IsGlobalUnicast reports those last two as global, so they must be checked
+// explicitly. Pulled out of the dialer so it can be unit-tested directly.
 func isBlockedIP(addr netip.Addr) bool {
 	if !addr.IsValid() {
 		return true
 	}
 	// Unmap so an IPv4-in-IPv6 address (::ffff:127.0.0.1) is checked as IPv4.
 	addr = addr.Unmap()
-	if addr.IsLoopback() {
+
+	// Allow-global-only baseline. Anything that isn't a routable global
+	// unicast address (loopback, link-local, multicast, unspecified) is
+	// refused.
+	if !addr.IsGlobalUnicast() {
 		return true
 	}
+
+	// Explicitly block RFC1918 (IPv4) / RFC4193 ULA (IPv6) private space.
 	if addr.IsPrivate() {
 		return true
 	}
-	if addr.IsLinkLocalUnicast() {
-		return true
+
+	// RFC 6598 carrier-grade NAT: 100.64.0.0/10. Only applies to IPv4.
+	if addr.Is4() {
+		b := addr.As4()
+		if b[0] == 100 && b[1]&0xc0 == 64 {
+			return true
+		}
 	}
-	if addr.IsLinkLocalMulticast() {
-		return true
+
+	// Non-global IPv6 transition ranges that Go still classifies as global
+	// unicast: 6to4 (2002::/16) embeds an arbitrary IPv4 destination and
+	// Teredo (2001:0::/32) tunnels to one, so either can be used to reach an
+	// otherwise-blocked v4 target. Block them outright.
+	if addr.Is6() {
+		b := addr.As16()
+		// 6to4: 2002::/16.
+		if b[0] == 0x20 && b[1] == 0x02 {
+			return true
+		}
+		// Teredo: 2001:0000::/32 (the first 32 bits are 2001:0000).
+		if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00 {
+			return true
+		}
 	}
-	if addr.IsMulticast() {
-		return true
-	}
-	if addr.IsUnspecified() {
-		return true
-	}
+
 	return false
 }
 

@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/energye/systray"
 	"github.com/rs/zerolog/log"
@@ -41,15 +42,21 @@ type otherImpl struct {
 	settingsItem *systray.MenuItem
 	quitItem     *systray.MenuItem
 	ready        bool
+
+	// done is closed when systray.Run returns (the tray goroutine has fully
+	// torn down). stop() waits on it so shutdown is synchronized rather than
+	// racing the goroutine.
+	done chan struct{}
 }
 
-func newImpl(t *Tray) trayImpl { return &otherImpl{t: t} }
+func newImpl(t *Tray) trayImpl { return &otherImpl{t: t, done: make(chan struct{})} }
 
 func (o *otherImpl) start() {
 	go func() {
 		// systray.Run blocks until Quit is called. It's the canonical entry
 		// point and guarantees the LockOSThread invariant the platform tray
 		// APIs require.
+		defer close(o.done)
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error().Interface("panic", r).Msg("tray: panic in systray.Run")
@@ -61,6 +68,13 @@ func (o *otherImpl) start() {
 
 func (o *otherImpl) stop() {
 	systray.Quit()
+	// Wait for the tray goroutine to confirm teardown so shutdown is
+	// synchronized, but don't block forever if systray.Run wedges.
+	select {
+	case <-o.done:
+	case <-time.After(2 * time.Second):
+		log.Warn().Msg("tray: timed out waiting for systray.Run to return on stop")
+	}
 }
 
 func (o *otherImpl) refreshIcon() {

@@ -15,13 +15,18 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
+// certMu serializes EnsureSelfSignedCert so concurrent callers cannot
+// interleave the cert/key writes and leave a mismatched pair on disk.
+var certMu sync.Mutex
+
 // EnsureSelfSignedCert returns a tls.Certificate, generating a fresh ECDSA P-256
-// self-signed certificate (10-year validity) under dir/cert.pem + key.pem if not
-// already present OR the cached cert's SAN list doesn't cover the requested
-// extraIPs. The cert always covers localhost + 127.0.0.1 + ::1; extraIPs is
+// self-signed certificate (397-day validity) under dir/cert.pem + key.pem if not
+// already present, the cached cert's SAN list doesn't cover the requested
+// extraIPs, OR the cached cert is expired/expiring soon. The cert always covers localhost + 127.0.0.1 + ::1; extraIPs is
 // the set of bound LAN-interface addresses appended on top so a browser
 // hitting the box at its local-network address doesn't trip a TLS-name-
 // mismatch warning.
@@ -32,6 +37,9 @@ import (
 // networks. Removing an old IP doesn't trigger regen; over-permissive SANs
 // for unreachable interfaces are harmless.
 func EnsureSelfSignedCert(dir string, extraIPs []net.IP) (tls.Certificate, error) {
+	certMu.Lock()
+	defer certMu.Unlock()
+
 	certPath := filepath.Join(dir, "cert.pem")
 	keyPath := filepath.Join(dir, "key.pem")
 
@@ -40,7 +48,7 @@ func EnsureSelfSignedCert(dir string, extraIPs []net.IP) (tls.Certificate, error
 	if _, err := os.Stat(certPath); err == nil {
 		if _, err := os.Stat(keyPath); err == nil {
 			if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
-				if certCoversIPs(cert, want) {
+				if certCoversIPs(cert, want) && !certExpiringSoon(cert) {
 					return cert, nil
 				}
 			}
@@ -63,7 +71,7 @@ func EnsureSelfSignedCert(dir string, extraIPs []net.IP) (tls.Certificate, error
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "Mosaic local"},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(397 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
@@ -74,17 +82,80 @@ func EnsureSelfSignedCert(dir string, extraIPs []net.IP) (tls.Certificate, error
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
-		return tls.Certificate{}, err
-	}
 	keyDER, err := x509.MarshalECPrivateKey(priv)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+
+	// Write each PEM to a temp file in the same directory, then os.Rename into
+	// place. Rename is atomic within a filesystem, so a concurrent reader (or a
+	// process that crashes mid-write) never observes a partially written or
+	// mismatched cert/key pair. The package-level mutex above already
+	// serializes writers; the atomic rename additionally protects external
+	// readers and survives crashes.
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := writeFileAtomic(certPath, certPEM, 0o600); err != nil {
+		return tls.Certificate{}, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := writeFileAtomic(keyPath, keyPEM, 0o600); err != nil {
 		return tls.Certificate{}, err
 	}
 	return tls.LoadX509KeyPair(certPath, keyPath)
+}
+
+// writeFileAtomic writes data to a temp file in the same directory as path and
+// then renames it into place, so readers never see a partial write. The temp
+// file is created with perm directly (and re-chmod'd to defeat umask) and is
+// cleaned up on any error before the rename succeeds.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}
+
+// certExpiringSoon reports whether the leaf cert is already expired or will
+// expire within a short renewal window, so EnsureSelfSignedCert can mint a
+// fresh one before the old one stops validating.
+func certExpiringSoon(cert tls.Certificate) bool {
+	if len(cert.Certificate) == 0 {
+		return true
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return true
+	}
+	// Renew once we are within 30 days of expiry (or already past it).
+	return time.Now().Add(30 * 24 * time.Hour).After(leaf.NotAfter)
 }
 
 // certCoversIPs reports whether every IP in want is present in the loaded
@@ -128,8 +199,8 @@ func dedupIPs(in []net.IP) []net.IP {
 	return out
 }
 
-// LocalInterfaceIPs returns every non-loopback unicast IP on the host, used
-// to populate the cert SAN list when binding 0.0.0.0. We can't know which
+// LocalInterfaceIPs returns every non-loopback, non-link-local unicast IP on
+// the host, used to populate the cert SAN list when binding 0.0.0.0. We can't know which
 // interface the user's browser will reach us from, so we cover all of them.
 // Returns an empty slice on enumeration failure — caller falls back to the
 // loopback-only SAN set, the same behavior as before this function existed.
@@ -141,10 +212,17 @@ func LocalInterfaceIPs() []net.IP {
 	out := make([]net.IP, 0, len(addrs))
 	for _, a := range addrs {
 		ipnet, ok := a.(*net.IPNet)
-		if !ok || ipnet.IP.IsLoopback() {
+		if !ok {
 			continue
 		}
-		out = append(out, ipnet.IP)
+		ip := ipnet.IP
+		// Skip loopback and link-local addresses: link-local addrs
+		// (169.254.0.0/16, fe80::/10, and link-local multicast) are not
+		// reachable across networks and should not be baked into SANs.
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			continue
+		}
+		out = append(out, ip)
 	}
 	return out
 }

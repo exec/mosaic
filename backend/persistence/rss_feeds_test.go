@@ -85,6 +85,50 @@ func TestFeeds_Delete(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestFeeds_LastPolledZeroRoundTrips: a feed created without a LastPolled must
+// store 0 (not the bogus -62135596800 from the zero time's Unix()) and read
+// back as the zero time.Time{} so IsZero() is true.
+func TestFeeds_LastPolledZeroRoundTrips(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFeeds(db)
+	ctx := context.Background()
+
+	id, err := f.Create(ctx, Feed{URL: "u", Name: "n", IntervalMin: 30, Enabled: true})
+	require.NoError(t, err)
+
+	// The stored column must be exactly 0.
+	var stored int64
+	require.NoError(t, db.SQL().QueryRowContext(ctx,
+		`SELECT last_polled FROM rss_feeds WHERE id = ?`, id).Scan(&stored))
+	require.Equal(t, int64(0), stored)
+
+	got, err := f.Get(ctx, id)
+	require.NoError(t, err)
+	require.True(t, got.LastPolled.IsZero(), "LastPolled should round-trip to the zero time")
+
+	rows, err := f.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].LastPolled.IsZero(), "LastPolled from List should be the zero time")
+}
+
+// TestFeeds_UpdateFloorsInterval: Update must floor a non-positive interval to
+// 30, matching Create's behavior.
+func TestFeeds_UpdateFloorsInterval(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFeeds(db)
+	ctx := context.Background()
+
+	id, err := f.Create(ctx, Feed{URL: "u", Name: "n", IntervalMin: 60, Enabled: true})
+	require.NoError(t, err)
+
+	require.NoError(t, f.Update(ctx, Feed{ID: id, URL: "u", Name: "n", IntervalMin: 0, Enabled: true}))
+
+	got, err := f.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, 30, got.IntervalMin, "Update should floor interval 0 to 30")
+}
+
 func TestFeeds_UpdatePollResult(t *testing.T) {
 	db := newTestDB(t)
 	f := NewFeeds(db)

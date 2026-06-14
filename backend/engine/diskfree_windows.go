@@ -1,6 +1,10 @@
 package engine
 
-import "golang.org/x/sys/windows"
+import (
+	"math"
+
+	"golang.org/x/sys/windows"
+)
 
 // diskFreeBytes returns the bytes available on the volume containing path
 // for the calling user (Windows GetDiskFreeSpaceEx's "FreeBytesAvailable",
@@ -14,6 +18,11 @@ func diskFreeBytes(path string) int64 {
 	var freeAvail, totalBytes, totalFree uint64
 	if err := windows.GetDiskFreeSpaceEx(p, &freeAvail, &totalBytes, &totalFree); err != nil {
 		return -1
+	}
+	// freeAvail is a uint64; int64(freeAvail) would truncate/wrap a value
+	// above MaxInt64 into a negative ("unknown") result. Saturate instead.
+	if freeAvail > math.MaxInt64 {
+		return math.MaxInt64
 	}
 	return int64(freeAvail)
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -58,8 +59,16 @@ func safeRemovePath(saveTo, name string) (string, error) {
 	// the lexical check above is sufficient and we return cleanTarget directly.
 	evalSaveTo, err := filepath.EvalSymlinks(cleanSaveTo)
 	if err != nil {
-		// saveTo missing or unreadable — best we can do is the lexical check.
-		return cleanTarget, nil
+		// This is a DELETE operation, so fail closed. If saveTo doesn't exist
+		// there's nothing under it to remove and the lexical check already
+		// passed — degrade to the lexical result. But for any other error
+		// (permission denied, a symlink loop, an I/O error) we must NOT fall
+		// back to a lexical-only check: that would let a symlink we couldn't
+		// resolve redirect the RemoveAll outside saveTo. Refuse instead.
+		if os.IsNotExist(err) {
+			return cleanTarget, nil
+		}
+		return "", fmt.Errorf("safeRemovePath: cannot resolve save dir %q: %w", saveTo, err)
 	}
 	evalTarget, err := filepath.EvalSymlinks(cleanTarget)
 	if err != nil {
