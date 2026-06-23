@@ -100,9 +100,22 @@ func sentinelExists(path string) bool {
 	return info.Mode().IsRegular()
 }
 
+// maxDpkgListSize caps how large a dpkg .list file we're willing to read
+// into memory before line-scanning. Real mosaic*.list files are a few KB;
+// anything multi-megabyte is corrupt or hostile, so we refuse it rather
+// than risk a large allocation. dpkg .list files for normal packages are
+// well under this.
+const maxDpkgListSize = 4 << 20 // 4 MiB
+
 // aptListMatch is the legacy detection path: search /var/lib/dpkg/info/
-// mosaic*.list for a line equal to the running exe path. Kept for users
+// mosaic*.list for a line that names the running exe path. Kept for users
 // on pre-sentinel installs; remove once those have rolled forward.
+//
+// Paths are normalized on both sides (filepath.Clean, plus EvalSymlinks
+// where the target exists) so a symlinked install or a /usr/local shim
+// — e.g. /usr/bin/mosaic → /opt/mosaic/mosaic, or a dpkg line recorded
+// as a relative-ish path — isn't misclassified as a manual install. We
+// stay conservative: only a confident path match returns apt-managed.
 func aptListMatch() bool {
 	exe, err := os.Executable()
 	if err != nil {
@@ -111,10 +124,11 @@ func aptListMatch() bool {
 	// /proc/self/exe (what os.Executable resolves to on Linux) is
 	// already a symlink-resolved absolute path, but a user could have
 	// re-symlinked /usr/bin/mosaic → /opt/something/mosaic. Resolve
-	// once more defensively.
-	resolved, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		resolved = exe
+	// once more defensively, then Clean both forms.
+	exeClean := filepath.Clean(exe)
+	resolved := exeClean
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		resolved = filepath.Clean(r)
 	}
 
 	// Search all .list files matching mosaic*.list — covers both the
@@ -125,6 +139,10 @@ func aptListMatch() bool {
 		return false
 	}
 	for _, listFile := range matches {
+		info, err := os.Stat(listFile)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > maxDpkgListSize {
+			continue
+		}
 		data, err := os.ReadFile(listFile)
 		if err != nil {
 			continue
@@ -134,8 +152,19 @@ func aptListMatch() bool {
 			if line == "" {
 				continue
 			}
-			if line == exe || line == resolved {
+			// Normalize each dpkg-recorded path the same way we
+			// normalized the exe: Clean, plus EvalSymlinks when the
+			// path exists on disk (catches /usr/bin/mosaic shims that
+			// point at the real binary).
+			lineClean := filepath.Clean(line)
+			if lineClean == exeClean || lineClean == resolved {
 				return true
+			}
+			if lineResolved, err := filepath.EvalSymlinks(line); err == nil {
+				lr := filepath.Clean(lineResolved)
+				if lr == exeClean || lr == resolved {
+					return true
+				}
 			}
 		}
 	}

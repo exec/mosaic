@@ -72,9 +72,29 @@ func (n *LinuxDBusNotifier) Notify(title, body, icon string) error {
 
 	_, err = notify.SendNotification(conn, note)
 	if err != nil {
+		// The cached session connection may be dead (the bus dropped, the
+		// daemon restarted, etc.). Drop and close it so the next Notify
+		// reconnects from scratch instead of failing forever against a
+		// stale *dbus.Conn.
+		n.resetConn(conn)
 		return fmt.Errorf("notifications: send: %w", err)
 	}
 	return nil
+}
+
+// resetConn drops the cached connection so a later call reconnects. It only
+// clears the cache if conn is still the one stored (a concurrent Notify may
+// already have replaced it) and closes the connection we discard. Safe to
+// call with a nil conn.
+func (n *LinuxDBusNotifier) resetConn(conn *dbus.Conn) {
+	n.mu.Lock()
+	if n.conn == conn {
+		n.conn = nil
+	}
+	n.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 func (n *LinuxDBusNotifier) session() (*dbus.Conn, error) {

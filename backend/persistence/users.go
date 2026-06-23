@@ -198,11 +198,26 @@ func (d *Users) SetAPIKey(ctx context.Context, id int, hash, hint string) error 
 	return err
 }
 
-// Delete removes a user. Their torrent_access rows are cascade-deleted by the
-// foreign key; torrents they solely owned are handled by the caller.
+// Delete removes a user. Their torrent_access rows (where they are the grantee)
+// are cascade-deleted by the user_id foreign key; torrents they solely owned are
+// handled by the caller. The granted_by column references users(id) without an
+// ON DELETE action, so with foreign_keys ON a bare DELETE would fail when this
+// user granted access to others — we first null out those references in the
+// same transaction. granted_by is nullable.
 func (d *Users) Delete(ctx context.Context, id int) error {
-	_, err := d.db.SQL().ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
-	return err
+	tx, err := d.db.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE torrent_access SET granted_by = NULL WHERE granted_by = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // isUniqueViolation reports whether err is a SQLite UNIQUE constraint failure.

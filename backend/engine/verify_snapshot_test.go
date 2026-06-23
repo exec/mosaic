@@ -123,3 +123,55 @@ func TestComputeFileSnapshot_NilInfo(t *testing.T) {
 	_, err := computeFileSnapshot(nil, t.TempDir())
 	require.Error(t, err)
 }
+
+// TestComputeFileSnapshot_ChangesOnTypeSwap covers the mode/type component of
+// the per-file digest line. Swapping a regular file for a directory (a
+// regular↔dir swap) must change the digest even though both entries exist —
+// otherwise a planted directory/symlink could masquerade as the original file
+// and slip past fast-resume. computeFileSnapshot digests st.Mode() (which
+// carries the type bits) precisely to catch this.
+func TestComputeFileSnapshot_ChangesOnTypeSwap(t *testing.T) {
+	saveTo := t.TempDir()
+	info := makeFakeTorrentTree(t, saveTo)
+
+	before, err := computeFileSnapshot(info, saveTo)
+	require.NoError(t, err)
+
+	// Replace the regular file a.txt with a directory of the same name. Size
+	// and even mtime may differ, but the load-bearing assertion is that the
+	// type change alone is reflected in the digest.
+	target := filepath.Join(saveTo, info.Name, "a.txt")
+	require.NoError(t, os.Remove(target))
+	require.NoError(t, os.Mkdir(target, 0o755))
+
+	after, err := computeFileSnapshot(info, saveTo)
+	require.NoError(t, err)
+	require.False(t, bytes.Equal(before, after), "regular→dir type swap must alter snapshot")
+}
+
+// TestComputeFileSnapshot_NotFollowSymlink verifies os.Lstat semantics: when a
+// file is replaced by a symlink (even one pointing at content of the same
+// size), the digest records the symlink's own mode rather than following it to
+// the target — so the swap is detected. Guards against a symlink-redirection
+// fast-resume bypass.
+func TestComputeFileSnapshot_NotFollowSymlink(t *testing.T) {
+	saveTo := t.TempDir()
+	info := makeFakeTorrentTree(t, saveTo)
+
+	before, err := computeFileSnapshot(info, saveTo)
+	require.NoError(t, err)
+
+	// Replace a.txt (content "hello", 5 bytes) with a symlink to another file
+	// that also holds 5 bytes. If we followed the link via os.Stat the size
+	// would match and the digest could collide; with os.Lstat the symlink mode
+	// bit changes the digest.
+	target := filepath.Join(saveTo, info.Name, "a.txt")
+	decoy := filepath.Join(saveTo, "decoy.txt")
+	require.NoError(t, os.WriteFile(decoy, []byte("world"), 0o644))
+	require.NoError(t, os.Remove(target))
+	require.NoError(t, os.Symlink(decoy, target))
+
+	after, err := computeFileSnapshot(info, saveTo)
+	require.NoError(t, err)
+	require.False(t, bytes.Equal(before, after), "regular→symlink swap must alter snapshot (Lstat, not Stat)")
+}

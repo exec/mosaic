@@ -3,6 +3,7 @@ package engine
 import (
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,9 +41,13 @@ type SnapshotStore interface {
 }
 
 // computeFileSnapshot returns a SHA-256 over the torrent's on-disk file
-// state. Each metainfo file contributes a `path|size|mtime_ns` line; missing
-// files contribute `MISSING:<path>` so a deletion changes the digest. The
-// path component is the joined relative path inside the torrent (forward-
+// state. Each metainfo file contributes a `path|size|mtime_ns|mode` line;
+// missing files contribute `MISSING:<path>` so a deletion changes the digest.
+// The mode component is the file's os.FileMode bits, so swapping a regular
+// file for a directory or symlink (regular↔dir↔symlink) changes the digest
+// even if the size/mtime happen to match. We stat with os.Lstat so a planted
+// symlink is recorded as a symlink rather than being followed to its target.
+// The path component is the joined relative path inside the torrent (forward-
 // slash separators) so the digest is stable across OSes for the same files.
 //
 // `saveTo` matches anacrolix's `storage.NewFile` root: a single-file torrent
@@ -67,30 +72,38 @@ func computeFileSnapshot(info *metainfo.Info, saveTo string) ([]byte, error) {
 		// Single-file torrent. Path on disk is saveTo/info.Name.
 		rel := info.Name
 		full := filepath.Join(saveTo, info.Name)
-		st, err := os.Stat(full)
+		st, err := os.Lstat(full)
 		if err != nil {
 			if os.IsNotExist(err) {
 				writeLine("MISSING:" + rel)
 			} else {
+				// Non-not-exist stat error: log it and return so the caller
+				// falls through to a full piece-by-piece hash rather than
+				// silently trusting a stale snapshot.
+				log.Printf("computeFileSnapshot: lstat %q: %v — falling back to full hash", full, err)
 				return nil, err
 			}
 		} else {
-			writeLine(fmt.Sprintf("%s|%d|%d", rel, st.Size(), st.ModTime().UnixNano()))
+			writeLine(fmt.Sprintf("%s|%d|%d|%o", rel, st.Size(), st.ModTime().UnixNano(), st.Mode()))
 		}
 	} else {
 		for _, f := range info.Files {
 			rel := strings.Join(f.Path, "/")
 			parts := append([]string{saveTo, info.Name}, f.Path...)
 			full := filepath.Join(parts...)
-			st, err := os.Stat(full)
+			st, err := os.Lstat(full)
 			if err != nil {
 				if os.IsNotExist(err) {
 					writeLine("MISSING:" + rel)
 					continue
 				}
+				// Non-not-exist stat error: log it and return so the caller
+				// falls through to a full piece-by-piece hash rather than
+				// silently trusting a stale snapshot.
+				log.Printf("computeFileSnapshot: lstat %q: %v — falling back to full hash", full, err)
 				return nil, err
 			}
-			writeLine(fmt.Sprintf("%s|%d|%d", rel, st.Size(), st.ModTime().UnixNano()))
+			writeLine(fmt.Sprintf("%s|%d|%d|%o", rel, st.Size(), st.ModTime().UnixNano(), st.Mode()))
 		}
 	}
 	return h.Sum(nil), nil

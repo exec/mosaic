@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // AppIndicatorExtensionUUID is the well-known shell-extension uuid that
@@ -60,11 +62,17 @@ func appIndicatorExtensionSearchPaths() []string {
 // still need to log out + back in for a freshly-enabled extension to
 // activate. Use Available() to test the actual runtime state.
 func AppIndicatorExtensionEnabled(ctx context.Context) bool {
+	bin, err := exec.LookPath("gnome-extensions")
+	if err != nil {
+		log.Debug().Err(err).Msg("tray: gnome-extensions CLI not on PATH; treating AppIndicator extension as not enabled")
+		return false
+	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "gnome-extensions", "list", "--enabled")
+	cmd := exec.CommandContext(cctx, bin, "list", "--enabled")
 	out, err := cmd.Output()
 	if err != nil {
+		log.Debug().Err(err).Msg("tray: gnome-extensions list --enabled failed; treating AppIndicator extension as not enabled")
 		return false
 	}
 	for _, line := range strings.Split(string(out), "\n") {
@@ -82,12 +90,13 @@ func AppIndicatorExtensionEnabled(ctx context.Context) bool {
 // the shell for the change to take effect — Mosaic's UI surfaces that
 // requirement after this returns.
 func EnableAppIndicatorExtension(ctx context.Context) error {
-	if _, err := exec.LookPath("gnome-extensions"); err != nil {
+	bin, err := exec.LookPath("gnome-extensions")
+	if err != nil {
 		return errors.New("gnome-extensions CLI not found on PATH")
 	}
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "gnome-extensions", "enable", AppIndicatorExtensionUUID)
+	cmd := exec.CommandContext(cctx, bin, "enable", AppIndicatorExtensionUUID)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("gnome-extensions enable: %w (%s)", err, strings.TrimSpace(string(out)))

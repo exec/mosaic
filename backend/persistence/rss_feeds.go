@@ -21,6 +21,25 @@ type Feeds struct{ db *DB }
 
 func NewFeeds(db *DB) *Feeds { return &Feeds{db: db} }
 
+// unixOrZero serializes a time.Time to a unix timestamp, mapping the zero
+// time.Time{} to 0 rather than the bogus -62135596800 that t.Unix() yields for
+// the zero value. The read side treats a stored 0 as the zero time.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+// timeFromUnix is the inverse of unixOrZero: a stored 0 round-trips back to the
+// zero time.Time{} (so IsZero() is true) rather than the 1970 epoch.
+func timeFromUnix(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
+}
+
 func (f *Feeds) Create(ctx context.Context, feed Feed) (int, error) {
 	interval := feed.IntervalMin
 	if interval <= 0 {
@@ -29,7 +48,7 @@ func (f *Feeds) Create(ctx context.Context, feed Feed) (int, error) {
 	res, err := f.db.SQL().ExecContext(ctx,
 		`INSERT INTO rss_feeds (url, name, interval_min, last_polled, etag, enabled)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		feed.URL, feed.Name, interval, feed.LastPolled.Unix(), feed.ETag, boolToInt(feed.Enabled))
+		feed.URL, feed.Name, interval, unixOrZero(feed.LastPolled), feed.ETag, boolToInt(feed.Enabled))
 	if err != nil {
 		return 0, err
 	}
@@ -50,7 +69,7 @@ func (f *Feeds) Get(ctx context.Context, id int) (Feed, error) {
 	if err != nil {
 		return feed, err
 	}
-	feed.LastPolled = time.Unix(lastPolled, 0)
+	feed.LastPolled = timeFromUnix(lastPolled)
 	feed.Enabled = enabled == 1
 	return feed, nil
 }
@@ -70,7 +89,7 @@ func (f *Feeds) List(ctx context.Context) ([]Feed, error) {
 		if err := rows.Scan(&feed.ID, &feed.URL, &feed.Name, &feed.IntervalMin, &lastPolled, &feed.ETag, &enabled); err != nil {
 			return nil, err
 		}
-		feed.LastPolled = time.Unix(lastPolled, 0)
+		feed.LastPolled = timeFromUnix(lastPolled)
 		feed.Enabled = enabled == 1
 		out = append(out, feed)
 	}
@@ -78,9 +97,13 @@ func (f *Feeds) List(ctx context.Context) ([]Feed, error) {
 }
 
 func (f *Feeds) Update(ctx context.Context, feed Feed) error {
+	interval := feed.IntervalMin
+	if interval <= 0 {
+		interval = 30
+	}
 	_, err := f.db.SQL().ExecContext(ctx,
 		`UPDATE rss_feeds SET url = ?, name = ?, interval_min = ?, enabled = ? WHERE id = ?`,
-		feed.URL, feed.Name, feed.IntervalMin, boolToInt(feed.Enabled), feed.ID)
+		feed.URL, feed.Name, interval, boolToInt(feed.Enabled), feed.ID)
 	return err
 }
 
@@ -92,6 +115,6 @@ func (f *Feeds) Delete(ctx context.Context, id int) error {
 func (f *Feeds) UpdatePollResult(ctx context.Context, id int, lastPolled time.Time, etag string) error {
 	_, err := f.db.SQL().ExecContext(ctx,
 		`UPDATE rss_feeds SET last_polled = ?, etag = ? WHERE id = ?`,
-		lastPolled.Unix(), etag, id)
+		unixOrZero(lastPolled), etag, id)
 	return err
 }

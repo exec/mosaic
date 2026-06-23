@@ -31,9 +31,15 @@ type BeeepNotifier struct{}
 // "" to use a platform default. Errors from the underlying delivery surface
 // are surfaced verbatim — the caller decides whether to log or ignore.
 func (BeeepNotifier) Notify(title, body, icon string) error {
+	// Hold the lock across BOTH the AppName assignment and the Notify call:
+	// beeep.Notify reads the package-global beeep.AppName internally, so
+	// releasing the lock before Notify would let a concurrent Notify (or a
+	// transitive dep) stomp the value mid-read — a data race that could also
+	// send the notification under the wrong app name. Serializing the whole
+	// section is cheap (notifications are infrequent) and race-free.
 	appNameMu.Lock()
+	defer appNameMu.Unlock()
 	beeep.AppName = mosaicAppName
-	appNameMu.Unlock()
 	if icon == "" {
 		return beeep.Notify(title, body, nil)
 	}

@@ -14,7 +14,7 @@ import (
 // logDir/mosaic.log and pretty console output to stderr in debug mode.
 // Returns a closer that flushes the file writer.
 func Init(logDir string, debug bool) (io.Closer, error) {
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return nil, err
 	}
 
