@@ -670,6 +670,8 @@ func (a *AnacrolixBackend) SetIPBlocklist(reader io.Reader) error {
 }
 
 func idFor(t *torrent.Torrent) TorrentID {
+	return TorrentID(t.InfoHash().HexString())
+}
 
 func (a *AnacrolixBackend) Close() error {
 	// Cancel engineCtx FIRST so verify goroutines stop dispatching new
@@ -755,10 +757,10 @@ func (a *AnacrolixBackend) find(id TorrentID) (*torrent.Torrent, bool) {
 	return nil, false
 }
 
-// DetailedSnapshot pulls files/peers/trackers from the underlying anacrolix
-// Torrent based on scope. We translate to our FileEntry/PeerEntry/TrackerEntry
-// domain types.
-
+// snapshotFor builds a Snapshot for a torrent. The down/up rate is supplied
+// by the caller from the centralized rate cache (see sampleRates) — this
+// function no longer computes or stores rate samples, so it is a pure read
+// of the torrent and is safe to call concurrently from any number of readers.
 func snapshotFor(t *torrent.Torrent, rate rateValue, paused bool, queuePos int, forceStart, sequential, queued, verifying, filesMissing bool) Snapshot {
 	stats := t.Stats()
 	name := t.Name()
