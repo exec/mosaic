@@ -87,4 +87,4 @@ Security: open a private advisory at [exec/mosaic/security/advisories/new](https
 
 ## License
 
-© 2026 Dylan Hart. See [LICENSE](./LICENSE) once added; otherwise all rights reserved pending an explicit license declaration.
+MIT — see [LICENSE](./LICENSE).
