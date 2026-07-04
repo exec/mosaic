@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+
 	"github.com/anacrolix/torrent"
 	anacrolix_types "github.com/anacrolix/torrent/types"
 )
