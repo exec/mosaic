@@ -20,6 +20,19 @@ The directory contains the following files:
 - `Info.plist` - the main plist file used for Mac builds. It is used when building using `wails build`.
 - `Info.dev.plist` - same as the main plist file but used when building using `wails dev`.
 
+The macOS-only Wails post-build hook (`scripts/macos-icon.swift`) renders the
+shared artwork onto an 824px tile, centered in a transparent 1024px canvas. It
+uses sRGB, includes a subtle shadow, supplies all standard/Retina ICNS sizes,
+and restores the ad-hoc signature before optional release signing. Windows
+and Linux retain their existing icon sizing.
+
+Apple’s current [app icon guidance](https://developer.apple.com/design/human-interface-guidelines/app-icons)
+uses full-bleed layers with Icon Composer for Liquid Glass. Those layers are
+not interchangeable with a flattened ICNS icon. This Wails build retains a
+legacy ICNS for macOS 12+; a layered migration requires modern Xcode/asset
+catalog compilation and testing on macOS 26+. The latest
+[Icon Composer](https://developer.apple.com/icon-composer/) requires macOS 26.4+.
+
 ## Windows
 
 The `windows` directory contains the manifest and rc files used when building with `wails build`.

@@ -5,6 +5,8 @@
 - Declare the imported BitTorrent file type in macOS production and development
   bundles so Finder recognizes `.torrent` files and offers Mosaic as a handler.
 - Add regression tests covering the file-type declarations in both bundles.
+- Size the macOS Dock/Finder icon on an inset tile with transparent margins,
+  sRGB color, and all standard/Retina representations instead of full-bleed artwork.
 
 On macOS, install this release from the DMG to apply the bundle metadata fix.
 The in-app updater replaces only the executable and cannot update `Info.plist`.
