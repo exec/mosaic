@@ -106,9 +106,10 @@ func TestLoad_ListenPortRangeValidated(t *testing.T) {
 }
 
 func TestLoad_NoHomeDirFailsWithoutConfiguredSavePath(t *testing.T) {
-	// With $HOME unset os.UserHomeDir errors; the old code silently fell
+	// Without a home directory os.UserHomeDir errors; the old code silently fell
 	// back to a CWD-relative "Downloads". Now it must fail loudly...
 	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
 	dir := t.TempDir()
 
 	_, err := Load(filepath.Join(dir, "missing.yaml"))
