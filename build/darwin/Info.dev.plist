@@ -19,6 +19,64 @@
         <string>iconfile</string>
         <key>LSMinimumSystemVersion</key>
         <string>12.0.0</string>
+        <key>CFBundleURLTypes</key>
+        <array>
+            <dict>
+                <key>CFBundleURLName</key>
+                <string>Magnet Link</string>
+                <key>CFBundleURLSchemes</key>
+                <array>
+                    <string>magnet</string>
+                </array>
+            </dict>
+        </array>
+        <key>UTImportedTypeDeclarations</key>
+        <array>
+            <dict>
+                <key>UTTypeIdentifier</key>
+                <string>org.bittorrent.torrent</string>
+                <key>UTTypeDescription</key>
+                <string>BitTorrent file</string>
+                <key>UTTypeConformsTo</key>
+                <array>
+                    <string>public.data</string>
+                </array>
+                <key>UTTypeTagSpecification</key>
+                <dict>
+                    <key>public.filename-extension</key>
+                    <array>
+                        <string>torrent</string>
+                    </array>
+                    <key>public.mime-type</key>
+                    <string>application/x-bittorrent</string>
+                </dict>
+            </dict>
+        </array>
+        <key>CFBundleDocumentTypes</key>
+        <array>
+            <dict>
+                <key>CFBundleTypeName</key>
+                <string>BitTorrent file</string>
+                <key>CFBundleTypeRole</key>
+                <string>Editor</string>
+                <key>LSHandlerRank</key>
+                <string>Default</string>
+                <key>CFBundleTypeExtensions</key>
+                <array>
+                    <string>torrent</string>
+                </array>
+                <key>CFBundleTypeMIMETypes</key>
+                <array>
+                    <string>application/x-bittorrent</string>
+                </array>
+                <key>CFBundleTypeIconFile</key>
+                <string>iconfile</string>
+                <key>LSItemContentTypes</key>
+                <array>
+                    <string>org.bittorrent.torrent</string>
+                </array>
+            </dict>
+        </array>
         <key>NSHighResolutionCapable</key>
         <string>true</string>
         <key>NSHumanReadableCopyright</key>

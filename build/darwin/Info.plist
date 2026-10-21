@@ -30,6 +30,28 @@
                 </array>
             </dict>
         </array>
+        <key>UTImportedTypeDeclarations</key>
+        <array>
+            <dict>
+                <key>UTTypeIdentifier</key>
+                <string>org.bittorrent.torrent</string>
+                <key>UTTypeDescription</key>
+                <string>BitTorrent file</string>
+                <key>UTTypeConformsTo</key>
+                <array>
+                    <string>public.data</string>
+                </array>
+                <key>UTTypeTagSpecification</key>
+                <dict>
+                    <key>public.filename-extension</key>
+                    <array>
+                        <string>torrent</string>
+                    </array>
+                    <key>public.mime-type</key>
+                    <string>application/x-bittorrent</string>
+                </dict>
+            </dict>
+        </array>
         <key>CFBundleDocumentTypes</key>
         <array>
             <dict>
