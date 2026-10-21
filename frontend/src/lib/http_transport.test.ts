@@ -1,4 +1,4 @@
-import {describe, expect, test, beforeEach} from 'vitest';
+import {describe, expect, test, beforeEach, vi} from 'vitest';
 import {makeHTTPTransport} from './http_transport';
 
 type FetchCall = {url: string; init: RequestInit};
@@ -233,5 +233,48 @@ describe('http_transport.on (WebSocket)', () => {
     expect(MockWS.instances[0].closed).toBe(false);
     off();
     expect(MockWS.instances[0].closed).toBe(true);
+  });
+
+  test('a delayed close from the previous subscription cannot replace the live socket', () => {
+    vi.useFakeTimers();
+    try {
+      const t = makeHTTPTransport('http://localhost', {wsCtor: MockWS as any});
+      const off = t.on('stats:tick', () => {});
+      const old = MockWS.instances[0];
+      off();
+      const received: any[] = [];
+      const offNew = t.on('stats:tick', (p) => received.push(p));
+      old.onclose?.({} as CloseEvent);
+      old.push({type: 'stats:tick', payload: 'stale'});
+      vi.advanceTimersByTime(30_000);
+      expect(MockWS.instances).toHaveLength(2);
+      MockWS.instances[1].push({type: 'stats:tick', payload: 'current'});
+      expect(received).toEqual(['current']);
+      offNew();
+      expect(MockWS.instances[1].closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('a failed connection reconnects with backoff and cancels on unsubscribe', () => {
+    vi.useFakeTimers();
+    try {
+      const t = makeHTTPTransport('http://localhost', {wsCtor: MockWS as any});
+      const off = t.on('stats:tick', () => {});
+      MockWS.instances[0].close();
+      vi.advanceTimersByTime(999);
+      expect(MockWS.instances).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(MockWS.instances).toHaveLength(2);
+      MockWS.instances[1].close();
+      vi.advanceTimersByTime(1999);
+      expect(MockWS.instances).toHaveLength(2);
+      off();
+      vi.advanceTimersByTime(30_000);
+      expect(MockWS.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

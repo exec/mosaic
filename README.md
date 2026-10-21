@@ -69,6 +69,10 @@ Each release publishes a `SHA256SUMS` manifest; verifying against it before runn
 
 ## Development
 
+Requires Go 1.26.10 or newer and Node.js 20 or newer. CI reads the Go version
+from `go.mod`. See [the 1.8.0 audit](docs/audit-1.8.0.md) and
+[release notes](CHANGELOG.md) for the reliability and OS integration changes.
+
 ```sh
 # Live dev (frontend hot reload + native shell)
 wails dev

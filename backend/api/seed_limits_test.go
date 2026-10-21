@@ -33,6 +33,7 @@ func TestCheckSeedLimits_RatioPausesWhenExceeded(t *testing.T) {
 	rec, err := svc.torrents.Get(ctx, string(id))
 	require.NoError(t, err)
 	require.Equal(t, int64(2<<30), rec.TotalUploaded)
+	require.True(t, rec.Paused, "seed-limit stops must survive a restart")
 }
 
 // TestCheckSeedLimits_RatioBelowLimitDoesNotPause is the negative control.

@@ -160,6 +160,7 @@ export function IconRail(props: Props) {
         <Tooltip label={meta.label} placement="right">
           <button
             type="button"
+            aria-label={meta.label}
             onClick={() => navigate(p.id)}
             class="relative grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-all duration-150 hover:text-zinc-200"
             classList={{
@@ -212,6 +213,7 @@ export function IconRail(props: Props) {
           <Tooltip label="Sign out" placement="right">
             <button
               type="button"
+              aria-label="Sign out"
               onClick={() => props.onLogout?.()}
               class="grid h-10 w-10 place-items-center rounded-lg text-zinc-500 transition-colors duration-150 hover:text-zinc-200"
             >

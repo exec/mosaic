@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"mosaic/backend/persistence"
@@ -180,12 +182,25 @@ func (s *Service) ReconcileLegacyAPIKey(ctx context.Context) error {
 // ─── Save path ───────────────────────────────────────────────────────────────
 
 func (s *Service) GetDefaultSavePath(ctx context.Context) (string, error) {
+	caller := CallerFrom(ctx)
+	if err := requireAuth(caller); err != nil {
+		return "", err
+	}
 	v, err := s.settings.Get(ctx, settingDefaultSavePath)
 	if errors.Is(err, persistence.ErrNotFound) {
-		return s.defaultSavePath, nil
+		v, err = s.defaultSavePath, nil
 	}
 	if err != nil {
 		return "", err
+	}
+	if !caller.IsAdmin() {
+		if strings.TrimSpace(v) == "" {
+			return "", fmt.Errorf("save path is empty")
+		}
+		if !filepath.IsLocal(caller.Username) || caller.Username == "." || strings.ContainsAny(caller.Username, `/\`) {
+			return "", ErrForbidden
+		}
+		v = filepath.Join(v, caller.Username)
 	}
 	return v, nil
 }

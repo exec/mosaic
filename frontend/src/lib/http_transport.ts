@@ -373,12 +373,19 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
   function ensureSocket() {
     if (socket || !wsCtor) return;
     if (handlers.size === 0) return; // nobody listening — don't (re)connect
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     const wsURL = origin.replace(/^http/, 'ws') + '/api/ws';
-    socket = new wsCtor(wsURL);
-    socket.onopen = () => {
+    const ws = new wsCtor(wsURL);
+    socket = ws;
+    ws.onopen = () => {
+      if (socket !== ws) return;
       reconnectDelayMs = RECONNECT_BASE_MS;
     };
-    socket.onmessage = (ev) => {
+    ws.onmessage = (ev) => {
+      if (socket !== ws) return;
       try {
         const env = JSON.parse(ev.data);
         const subs = handlers.get(env.type);
@@ -388,7 +395,8 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
         console.error('ws message decode', err);
       }
     };
-    socket.onclose = () => {
+    ws.onclose = () => {
+      if (socket !== ws) return;
       socket = null;
       // Reconnect with backoff if any handlers are still subscribed.
       if (handlers.size > 0) {
@@ -396,7 +404,7 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
         reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_MS);
       }
     };
-    socket.onerror = (e) => console.error('ws error', e);
+    ws.onerror = (e) => console.error('ws error', e);
   }
 
   return {
@@ -449,8 +457,9 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
             reconnectTimer = null;
           }
           if (socket) {
-            socket.close();
+            const ws = socket;
             socket = null;
+            ws.close();
           }
         }
       };

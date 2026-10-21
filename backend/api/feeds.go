@@ -201,9 +201,17 @@ func (s *Service) CreateFilter(ctx context.Context, dto FilterDTO) (int, error) 
 	if err := validateFilterRegex(dto.Regex); err != nil {
 		return 0, err
 	}
+	savePath := dto.SavePath
+	if !CallerFrom(ctx).IsAdmin() {
+		var err error
+		savePath, err = s.resolveSavePath(ctx, CallerFrom(ctx), savePath)
+		if err != nil {
+			return 0, err
+		}
+	}
 	return s.filters.Create(ctx, persistence.Filter{
 		FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,
-		SavePath: dto.SavePath, Enabled: dto.Enabled,
+		SavePath: savePath, Enabled: dto.Enabled,
 	})
 }
 
@@ -214,9 +222,17 @@ func (s *Service) UpdateFilter(ctx context.Context, dto FilterDTO) error {
 	if err := validateFilterRegex(dto.Regex); err != nil {
 		return err
 	}
+	savePath := dto.SavePath
+	if !CallerFrom(ctx).IsAdmin() {
+		var err error
+		savePath, err = s.resolveSavePath(ctx, CallerFrom(ctx), savePath)
+		if err != nil {
+			return err
+		}
+	}
 	return s.filters.Update(ctx, persistence.Filter{
 		ID: dto.ID, FeedID: dto.FeedID, Regex: dto.Regex, CategoryID: dto.CategoryID,
-		SavePath: dto.SavePath, Enabled: dto.Enabled,
+		SavePath: savePath, Enabled: dto.Enabled,
 	})
 }
 

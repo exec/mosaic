@@ -65,21 +65,9 @@ const (
 	writeTimeout = 1 * time.Second
 )
 
-type secondInstancePayload struct {
-	Args             []string `json:"args"`
-	WorkingDirectory string   `json:"working_directory"`
-}
-
 // EarlyForwardLaunchArgs implements the second-instance side. See the
 // package-level doc above.
 func EarlyForwardLaunchArgs(uniqueId string) bool {
-	if len(os.Args) <= 1 {
-		// No args to forward; let the normal startup flow run. The
-		// running instance won't gain anything from a notification, and
-		// the second instance will exit naturally when it discovers the
-		// pipe / port already in use.
-		return false
-	}
 	pipeName := pipePrefix + uniqueId
 
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
@@ -166,37 +154,5 @@ func acceptSecondInstances(listener net.Listener, out chan<- []string) {
 			return
 		}
 		go handleSecondInstanceConn(conn, out)
-	}
-}
-
-func handleSecondInstanceConn(conn net.Conn, out chan<- []string) {
-	defer conn.Close()
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	// Cap payload at 64 KiB. Real-world args are tiny; this guards
-	// against a wedged/hostile peer flooding us.
-	buf, err := io.ReadAll(io.LimitReader(conn, 64*1024))
-	if err != nil || len(buf) == 0 {
-		return
-	}
-	var payload secondInstancePayload
-	if err := json.Unmarshal(buf, &payload); err != nil {
-		return
-	}
-	if len(payload.Args) == 0 {
-		return
-	}
-	// Non-blocking send — if the consumer is wedged, drop. The
-	// consumer goroutine fans each invocation out to its own goroutine,
-	// so wedging is unlikely; the buffer of 16 covers any conceivable
-	// human-driven launch burst.
-	select {
-	case out <- payload.Args:
-	default:
-	}
-}
-
-func dispatchSecondInstances(in <-chan []string, onArgs func(args []string)) {
-	for args := range in {
-		go onArgs(args)
 	}
 }

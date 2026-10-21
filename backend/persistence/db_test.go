@@ -53,6 +53,26 @@ func TestOpen_RunsMigrations(t *testing.T) {
 	}, time.Second, 50*time.Millisecond)
 }
 
+func TestOpen_PathWithURLCharacters(t *testing.T) {
+	name := "mosaic?#%.db"
+	if runtime.GOOS == "windows" {
+		name = "mosaic#%.db" // '?' is not a valid Windows filename character.
+	}
+	path := filepath.Join(t.TempDir(), name)
+	db, err := Open(context.Background(), path)
+	require.NoError(t, err)
+	require.NoError(t, NewSettings(db).Set(context.Background(), "test", "saved"))
+	require.NoError(t, db.Close())
+	_, err = os.Stat(path)
+	require.NoError(t, err, "the database must use the literal filename")
+	db, err = Open(context.Background(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	value, err := NewSettings(db).Get(context.Background(), "test")
+	require.NoError(t, err)
+	require.Equal(t, "saved", value)
+}
+
 // TestOpen_BusyTimeoutSurvivesConcurrentWriters confirms the
 // busy_timeout=5000 PRAGMA in Open is enough to ride out the kind of
 // burst contention our DAO sees in production: the RSS poller batching

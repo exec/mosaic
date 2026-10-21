@@ -70,12 +70,6 @@ func ValidateSavePath(root, savePath string, restrictToRoot bool) (string, error
 	}
 	absRoot = filepath.Clean(absRoot)
 
-	// Lexical containment first — cheap and covers the dominant attack
-	// shapes (absolute paths outside root, ../ traversal).
-	if !pathContained(absRoot, absSave) {
-		return "", fmt.Errorf("save path %q escapes user root %q", savePath, absRoot)
-	}
-
 	// Symlink resolution. The leaf typically doesn't exist yet (MkdirAll
 	// is about to create it), so EvalSymlinks on absSave would error out
 	// and never run on the malicious symlink that already exists somewhere
@@ -92,11 +86,13 @@ func ValidateSavePath(root, savePath string, restrictToRoot bool) (string, error
 	if err != nil {
 		return "", fmt.Errorf("resolve save path symlinks: %w", err)
 	}
+	// Compare actual locations so a canonical path returned by an earlier
+	// add remains usable when the configured root contains a symlink.
 	if !pathContained(resolvedRoot, resolvedSave) {
 		return "", fmt.Errorf("save path %q escapes user root via symlink", savePath)
 	}
 
-	return absSave, nil
+	return resolvedSave, nil
 }
 
 // evalAncestorSymlinks resolves symlinks on the deepest ancestor of p that
@@ -131,11 +127,6 @@ func evalAncestorSymlinks(p string) (string, error) {
 		// `cur` was the existing ancestor; if EvalSymlinks fails here it's
 		// a genuine error (permissions, race, deleted between Lstat and
 		// EvalSymlinks). Surface it.
-		if os.IsNotExist(err) {
-			// Race: ancestor disappeared between Lstat and EvalSymlinks.
-			// Fall back to the lexical cleaned path.
-			return p, nil
-		}
 		return "", err
 	}
 	if len(missing) == 0 {

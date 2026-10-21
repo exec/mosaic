@@ -75,9 +75,12 @@ func safeRemovePath(saveTo, name string) (string, error) {
 		// Target doesn't exist — already removed, or never written. Lexical
 		// check passed, nothing to delete, but return the cleaned path so the
 		// caller's RemoveAll is a no-op rather than an error.
-		return cleanTarget, nil
+		if os.IsNotExist(err) {
+			return cleanTarget, nil
+		}
+		return "", fmt.Errorf("safeRemovePath: cannot resolve target %q: %w", cleanTarget, err)
 	}
-	if !pathContained(evalSaveTo, evalTarget) {
+	if evalTarget == evalSaveTo || !pathContained(evalSaveTo, evalTarget) {
 		return "", fmt.Errorf("safeRemovePath: %q resolves outside %q via symlink", name, saveTo)
 	}
 	return evalTarget, nil

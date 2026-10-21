@@ -5,8 +5,8 @@
 # install cleanly on minimal server distros.
 set -euo pipefail
 
-VERSION="${VERSION:-dev}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="${VERSION:-v$(cat "${ROOT}/VERSION")}"
 BIN_DIR="${ROOT}/build/bin"
 mkdir -p "${BIN_DIR}"
 
@@ -66,9 +66,10 @@ Contents:
 Quick start (no systemd):
   ./mosaicd --assets-dir ./dist --data-dir ./data --port 8080
 
-The first launch generates a random web-interface password and writes it to
-./data/mosaicd-credentials (mode 0600). Read it, log in at https://<host>:8080,
-then change the password from Settings -> Web Interface.
+The first launch prints a temporary web-interface password to stdout. Log in
+at http://127.0.0.1:8080, then change the password from Settings -> Users.
+Use --bind-all to serve HTTPS on other interfaces. The temporary password
+changes on each restart until you set a permanent one.
 
 Quick start (systemd):
   sudo cp mosaicd /usr/bin/mosaicd

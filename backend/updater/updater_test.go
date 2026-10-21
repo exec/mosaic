@@ -133,6 +133,9 @@ func TestCompareVersions(t *testing.T) {
 		// Build metadata is ignored for precedence.
 		{"v0.8.0+build5", "v0.8.0", 0},
 		{"v0.8.0-rc1+build5", "v0.8.0-rc1", 0},
+		{"v0.8.0-rc.10", "v0.8.0-rc.2", 1},
+		{"v0.8.0-rc.2", "v0.8.0-rc.10", -1},
+		{"not-a-version", "v0.8.0", 0},
 	}
 	sign := func(n int) int {
 		switch {

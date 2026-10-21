@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -15,7 +16,7 @@ import (
 // ─── Seed Policy ─────────────────────────────────────────────────────────────
 
 const (
-	settingSeedingRatioLimit  = "seeding.ratio_limit"   // float64 as string; "" = no global limit
+	settingSeedingRatioLimit    = "seeding.ratio_limit"    // float64 as string; "" = no global limit
 	settingSeedingTimeMiniLimit = "seeding.time_min_limit" // int (minutes) as string; "" = no global limit
 )
 
@@ -81,7 +82,7 @@ func (s *Service) GetTorrentSeedPolicy(ctx context.Context, infohash string) (Se
 		return SeedPolicyDTO{UseGlobal: true}, nil
 	}
 	var p seedPolicyJSON
-	if err := jsonUnmarshal([]byte(*rec.SeedPolicy), &p); err != nil {
+	if err := json.Unmarshal([]byte(*rec.SeedPolicy), &p); err != nil {
 		return SeedPolicyDTO{UseGlobal: true}, nil
 	}
 	return SeedPolicyDTO{
@@ -98,7 +99,7 @@ func (s *Service) SetTorrentSeedPolicy(ctx context.Context, infohash string, p S
 	if p.UseGlobal {
 		return s.torrents.SetSeedPolicy(ctx, infohash, nil)
 	}
-	raw, err := jsonMarshal(seedPolicyJSON{
+	raw, err := json.Marshal(seedPolicyJSON{
 		RatioLimit:   p.RatioLimit,
 		TimeMinLimit: p.TimeMinLimit,
 	})
@@ -156,7 +157,7 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 		var timeMinLimit *int
 		if rec.SeedPolicy != nil {
 			var p seedPolicyJSON
-			if jsonUnmarshal([]byte(*rec.SeedPolicy), &p) == nil {
+			if json.Unmarshal([]byte(*rec.SeedPolicy), &p) == nil {
 				ratioLimit = p.RatioLimit
 				timeMinLimit = p.TimeMinLimit
 			}
@@ -188,7 +189,7 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 			}
 		}
 		if exceeded {
-			if err := s.engine.Pause(snap.ID); err != nil {
+			if err := s.Pause(ctx, snap.ID); err != nil {
 				log.Warn().Err(err).Str("id", string(snap.ID)).Msg("seed policy: pause failed")
 			} else {
 				log.Info().Str("id", string(snap.ID)).Str("name", snap.Name).Msg("seed policy: paused torrent — limit reached")

@@ -316,6 +316,7 @@ export function createTorrentsStore() {
   const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
   const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
   const offI = onInspectorTick((detail) => {
+    if (detail.id !== state.inspectorOpenId) return;
     // Append to the ring imperatively (O(1), no shift), then bump the
     // reactive counter so the Speed-tab chart pulls the new sample.
     bandwidthRing.push(

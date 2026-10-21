@@ -44,7 +44,9 @@ Run the platform-specific helper script:
 - **Linux:** `bash scripts/build-linux.sh`
 - **Windows:** `pwsh scripts/build-windows.ps1`
 
-Set `VERSION=v0.8.0` to override the build-time version constant.
+Build helpers default to the version in the root `VERSION` file. Set
+`VERSION=v1.8.0` to override it. Keep `wails.json` and the frontend package
+version aligned when preparing a release; ordinary `wails dev` still uses `dev`.
 
 Signing requires the env vars documented in `.github/SIGNING.md`. Without
 them the script produces an unsigned binary (clearly logged).

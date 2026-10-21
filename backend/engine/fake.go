@@ -31,6 +31,9 @@ func (f *FakeBackend) AddMagnet(_ context.Context, magnet, savePath string) (Tor
 	id := hashOf(magnet)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if _, ok := f.torrents[id]; ok {
+		return id, nil
+	}
 	f.torrents[id] = &Snapshot{
 		ID:         id,
 		Name:       "fake-" + string(id[:8]),
@@ -46,6 +49,9 @@ func (f *FakeBackend) AddFile(_ context.Context, blob []byte, savePath string) (
 	id := hashOf(string(blob))
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if _, ok := f.torrents[id]; ok {
+		return id, nil
+	}
 	f.torrents[id] = &Snapshot{
 		ID: id, Name: "fake-file", SavePath: savePath, AddedAt: time.Now(),
 	}

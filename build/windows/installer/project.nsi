@@ -98,20 +98,12 @@ Section
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
 
-    # Register Mosaic as a magnet: URL handler. Always-on (no separate
-    # components page in this installer); paired with the DeleteRegKey in the
-    # uninstall section below.
-    WriteRegStr HKCR "magnet" "" "URL:Magnet Protocol"
-    WriteRegStr HKCR "magnet" "URL Protocol" ""
-    WriteRegStr HKCR "magnet\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXECUTABLE},0"
-    WriteRegStr HKCR "magnet\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXECUTABLE}" "%1"'
-
-    # .torrent file association: define a class then point .torrent at it.
-    WriteRegStr HKCR ".torrent" "" "MosaicTorrent"
-    WriteRegStr HKCR ".torrent" "Content Type" "application/x-bittorrent"
-    WriteRegStr HKCR "MosaicTorrent" "" "BitTorrent file"
-    WriteRegStr HKCR "MosaicTorrent\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXECUTABLE},0"
-    WriteRegStr HKCR "MosaicTorrent\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXECUTABLE}" "%1"'
+    # Register an option for Default Apps without taking over existing defaults.
+    WriteRegStr HKCU "Software\Classes\.torrent\OpenWithProgids" "MosaicTorrent" ""
+    WriteRegStr HKCU "Software\Classes\MosaicTorrent" "" "BitTorrent file"
+    WriteRegStr HKCU "Software\Classes\MosaicTorrent" "URL Protocol" ""
+    WriteRegStr HKCU "Software\Classes\MosaicTorrent\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXECUTABLE},0"
+    WriteRegStr HKCU "Software\Classes\MosaicTorrent\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXECUTABLE}" "%1"'
 
     # Register Mosaic in Windows's "Default apps" infrastructure so the user
     # can pick it as default for .torrent + magnet from Settings (Win10/11
@@ -140,9 +132,15 @@ Section "uninstall"
     !insertmacro wails.unassociateCustomProtocols
 
     # Clean up magnet handler + .torrent class + Default Apps registration.
-    DeleteRegKey HKCR "magnet"
-    DeleteRegKey HKCR ".torrent"
-    DeleteRegKey HKCR "MosaicTorrent"
+    DeleteRegValue HKCU "Software\Classes\.torrent\OpenWithProgids" "MosaicTorrent"
+    DeleteRegKey HKCU "Software\Classes\MosaicTorrent"
+    # Remove legacy defaults only while they still point to this installation.
+    ReadRegStr $0 HKCU "Software\Classes\magnet\shell\open\command" ""
+    StrCmp $0 '"$INSTDIR\${PRODUCT_EXECUTABLE}" "%1"' 0 +2
+    DeleteRegKey HKCU "Software\Classes\magnet"
+    ReadRegStr $0 HKCU "Software\Classes\.torrent" ""
+    StrCmp $0 "MosaicTorrent" 0 +2
+    DeleteRegValue HKCU "Software\Classes\.torrent" ""
     DeleteRegKey HKCU "SOFTWARE\${INFO_PRODUCTNAME}"
     DeleteRegValue HKCU "SOFTWARE\RegisteredApplications" "${INFO_PRODUCTNAME}"
 

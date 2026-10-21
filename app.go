@@ -103,13 +103,6 @@ func (a *App) startup(ctx context.Context) {
 	for _, args := range pending {
 		go a.HandleLaunchArgs(args)
 	}
-	// macOS routes Finder-clicked .torrent files and browser-clicked magnet:
-	// URLs through Apple Events, not argv. Register NSAppleEventManager
-	// handlers that funnel both into HandleLaunchArgs. No-op on other OSes.
-	platform.InstallAppleEventHandlers(
-		func(path string) { a.HandleLaunchArgs([]string{path}) },
-		func(url string) { a.HandleLaunchArgs([]string{url}) },
-	)
 	// Self-heal Windows file associations. Auto-update doesn't run installer
 	// code, so users on a stale install (or anyone who installed pre-v0.1.13
 	// before the NSIS file-association block existed) will never see Mosaic
@@ -155,7 +148,7 @@ func (a *App) HandleLaunchArgs(args []string) {
 	a.ctxMu.Unlock()
 	log.Info().Strs("args", args).Msg("HandleLaunchArgs invoked")
 	a.emitLaunchNotice(map[string]any{"event": "received", "count": len(args), "args": args})
-	for _, arg := range args {
+	for _, arg := range platform.NormalizeLaunchArgs(args, "") {
 		switch {
 		case strings.HasPrefix(arg, "magnet:"):
 			id, err := a.svc.AddMagnet(ctx, arg, "")
@@ -508,6 +501,7 @@ func (a *App) ShowWindow() {
 		return
 	}
 	a.setWindowVisible(true)
+	wailsruntime.Show(ctx)
 	wailsruntime.WindowUnminimise(ctx)
 	wailsruntime.WindowShow(ctx)
 }
@@ -520,6 +514,7 @@ func (a *App) ShowSettings() {
 		return
 	}
 	a.setWindowVisible(true)
+	wailsruntime.Show(ctx)
 	wailsruntime.WindowUnminimise(ctx)
 	wailsruntime.WindowShow(ctx)
 	wailsruntime.EventsEmit(ctx, "navigate:settings")

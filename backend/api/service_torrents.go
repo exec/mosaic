@@ -2,10 +2,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -85,6 +85,8 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 }
 
 func (s *Service) AddMagnet(ctx context.Context, magnet, savePath string) (engine.TorrentID, error) {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	caller := CallerFrom(ctx)
 	if !caller.CanAddTorrents() {
 		return "", ErrForbidden
@@ -136,14 +138,24 @@ func (s *Service) grantOwner(ctx context.Context, infohash string, caller Caller
 // anything that might have. Rollback errors are logged but not returned —
 // the original failure is what the caller needs to see.
 func (s *Service) persistAndGrantTorrent(ctx context.Context, id engine.TorrentID, caller Caller, rec persistence.TorrentRecord) error {
+	_, lookupErr := s.torrents.Get(context.WithoutCancel(ctx), string(id))
+	existing := lookupErr == nil
+	if lookupErr != nil && !errors.Is(lookupErr, persistence.ErrNotFound) {
+		return fmt.Errorf("lookup existing torrent: %w", lookupErr)
+	}
 	if err := s.torrents.Save(ctx, rec); err != nil {
-		if rmErr := s.engine.Remove(id, false); rmErr != nil {
-			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("add torrent: engine rollback after persist failure also failed; torrent will linger until restart")
+		if !existing {
+			if rmErr := s.engine.Remove(id, false); rmErr != nil {
+				log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("add torrent: engine rollback after persist failure also failed; torrent will linger until restart")
+			}
 		}
 		return fmt.Errorf("persist: %w", err)
 	}
 	if err := s.grantOwner(ctx, string(id), caller); err != nil {
-		if rmErr := s.torrents.Remove(ctx, string(id)); rmErr != nil {
+		if existing {
+			return fmt.Errorf("grant owner: %w", err)
+		}
+		if rmErr := s.torrents.Remove(context.WithoutCancel(ctx), string(id)); rmErr != nil {
 			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("add torrent: persist rollback after grant failure also failed; record will survive as orphaned")
 		}
 		if rmErr := s.engine.Remove(id, false); rmErr != nil {
@@ -170,10 +182,10 @@ func (s *Service) resolveSavePath(ctx context.Context, caller Caller, savePath s
 		}
 		return engine.ValidateSavePath("", savePath, false)
 	}
-	if caller.Username == "" || s.defaultSavePath == "" {
-		return "", ErrForbidden
+	userRoot, err := s.GetDefaultSavePath(ctx)
+	if err != nil {
+		return "", err
 	}
-	userRoot := filepath.Join(s.defaultSavePath, caller.Username)
 	if savePath == "" {
 		savePath = userRoot
 	}
@@ -202,38 +214,16 @@ func (s *Service) AddTorrentFile(ctx context.Context, filePath, savePath string)
 	if !caller.CanAddTorrents() {
 		return "", ErrForbidden
 	}
-	savePath, err := s.resolveSavePath(ctx, caller, savePath)
-	if err != nil {
-		return "", err
-	}
 	blob, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", fmt.Errorf("read torrent file: %w", err)
 	}
-	id, err := s.engine.AddFile(ctx, blob, savePath)
-	if err != nil {
-		return "", fmt.Errorf("add torrent: %w", err)
-	}
-	snap, err := s.engine.Snapshot(id)
-	if err != nil {
-		if rmErr := s.engine.Remove(id, false); rmErr != nil {
-			log.Warn().Err(rmErr).Str("infohash", string(id)).Msg("AddTorrentFile: engine rollback after snapshot failure also failed")
-		}
-		return "", err
-	}
-	if err := s.persistAndGrantTorrent(ctx, id, caller, persistence.TorrentRecord{
-		InfoHash: string(id),
-		Name:     snap.Name,
-		SavePath: savePath,
-		AddedAt:  time.Now(),
-		Metainfo: blob,
-	}); err != nil {
-		return "", err
-	}
-	return id, nil
+	return s.AddTorrentBytes(ctx, blob, savePath)
 }
 
 func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath string) (engine.TorrentID, error) {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	caller := CallerFrom(ctx)
 	if !caller.CanAddTorrents() {
 		return "", ErrForbidden
@@ -354,6 +344,8 @@ func (s *Service) AttachUpdateInstalledNotifier(n UpdateInstalledNotifier) {
 // any other user with access just loses their own grant — the torrent keeps
 // running for everyone else. A caller with no access gets ErrForbidden.
 func (s *Service) Remove(ctx context.Context, id engine.TorrentID, deleteFiles bool) error {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	caller := CallerFrom(ctx)
 	hash := string(id)
 	if !caller.SeesAllTorrents() {
@@ -511,9 +503,9 @@ type GlobalStats struct {
 	TotalTorrents     int   `json:"total_torrents"`
 	ActiveTorrents    int   `json:"active_torrents"`
 	SeedingTorrents   int   `json:"seeding_torrents"`
-	TotalDownloadRate  int64 `json:"total_download_rate"`
-	TotalUploadRate    int64 `json:"total_upload_rate"`
-	TotalPeers         int   `json:"total_peers"`
+	TotalDownloadRate int64 `json:"total_download_rate"`
+	TotalUploadRate   int64 `json:"total_upload_rate"`
+	TotalPeers        int   `json:"total_peers"`
 }
 
 // EngineSnapshots returns the engine's current per-torrent snapshot slice.
@@ -708,16 +700,16 @@ func detailToDTO(d engine.Detail, addedAt time.Time, completedAt *time.Time) Det
 		prog = float64(snap.BytesDone) / float64(snap.TotalBytes)
 	}
 	dto := DetailDTO{
-		ID:         string(snap.ID),
-		Name:       snap.Name,
-		Magnet:     snap.Magnet,
-		SavePath:   snap.SavePath,
-		TotalBytes: snap.TotalBytes,
-		BytesDone:  snap.BytesDone,
-		Progress:   prog,
-		Ratio:      ratioOf(snap.BytesDown, snap.BytesUp),
-		TotalDown:  snap.BytesDown,
-		TotalUp:    snap.BytesUp,
+		ID:           string(snap.ID),
+		Name:         snap.Name,
+		Magnet:       snap.Magnet,
+		SavePath:     snap.SavePath,
+		TotalBytes:   snap.TotalBytes,
+		BytesDone:    snap.BytesDone,
+		Progress:     prog,
+		Ratio:        ratioOf(snap.BytesDown, snap.BytesUp),
+		TotalDown:    snap.BytesDown,
+		TotalUp:      snap.BytesUp,
 		Peers:        snap.Peers,
 		Seeds:        snap.Seeds,
 		AddedAt:      unixOrZero(addedAt),

@@ -138,7 +138,28 @@ func TestValidateSavePath_NonExistentLeafIsOK(t *testing.T) {
 	root := t.TempDir()
 	got, err := ValidateSavePath(root, filepath.Join(root, "not-yet-created", "deep"), true)
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(got, filepath.Clean(root)))
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(resolvedRoot, "not-yet-created", "deep"), got)
+}
+
+func TestValidateSavePath_DanglingSymlinkFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "alias")))
+	_, err := ValidateSavePath(root, filepath.Join(root, "alias", "child"), true)
+	require.Error(t, err)
+}
+
+func TestValidateSavePath_CanonicalPathUnderSymlinkedRoot(t *testing.T) {
+	actual := t.TempDir()
+	root := filepath.Join(t.TempDir(), "alias")
+	require.NoError(t, os.Symlink(actual, root))
+	resolved, err := filepath.EvalSymlinks(actual)
+	require.NoError(t, err)
+	want := filepath.Join(resolved, "future")
+	got, err := ValidateSavePath(root, want, true)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 // TestValidateSavePath_EmptyRootWhenRestricted refuses to silently allow an

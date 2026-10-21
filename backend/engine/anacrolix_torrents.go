@@ -34,30 +34,30 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 		return "", err
 	}
 	spec.Storage = newFileStorage(savePath, a.pieceCompletion, a.preallocateFullFiles)
-	t, _, err := a.client.AddTorrentSpec(spec)
+	t, added, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
 	}
 	id := idFor(t)
+	if !added {
+		return id, nil
+	}
 	a.mu.Lock()
 	a.bySaveTo[id] = savePath
 	a.byID[id] = t
 	a.mu.Unlock()
 	a.installWriteErrorHook(id, t)
-	a.spawnVerify(ctx, id, t)
+	a.spawnVerify(id, t)
 	return id, nil
 }
 
-// spawnVerify runs verifyAndStart on a tracked goroutine so Close() can
-// wait for it to finish before tearing down the client + bolt. The
-// caller's ctx still governs the pre-GotInfo wait (so a Wails shutdown
-// or a slow magnet add can be cancelled during DHT lookup); past
-// GotInfo verifyAndStart switches to engineCtx, which Close() cancels.
-func (a *AnacrolixBackend) spawnVerify(ctx context.Context, id TorrentID, t *torrent.Torrent) {
+// spawnVerify tracks background verification for shutdown. Once an add has
+// succeeded, metadata retrieval must outlive the request that added it.
+func (a *AnacrolixBackend) spawnVerify(id TorrentID, t *torrent.Torrent) {
 	a.verifyWg.Add(1)
 	go func() {
 		defer a.verifyWg.Done()
-		a.verifyAndStart(ctx, id, t)
+		a.verifyAndStart(id, t)
 	}()
 }
 
@@ -65,21 +65,8 @@ func (a *AnacrolixBackend) spawnVerify(ctx context.Context, id TorrentID, t *tor
 // either kicks DownloadAll OR — if Service marked this torrent as previously
 // complete and verify finds <100% — flags FilesMissing and pauses so the
 // app doesn't silently redownload bytes the user just deleted.
-//
-// The caller's ctx is honored ONLY for the pre-GotInfo wait (so a Wails
-// shutdown / HTTP-handler return / RSS-poll-cycle end cancels DHT lookup
-// promptly). Past GotInfo we switch to context.Background() — verify and
-// priority-lift must complete regardless of who originated the Add, or
-// the torrent silently never downloads. Pre-fix: every Add path threaded
-// the caller's request-scoped ctx all the way through; HTTP handlers,
-// RSS PollNow, and any second-instance IPC dispatch returned before
-// verify finished, the cancelled-ctx check before setAllFilesPriority
-// bailed, file priorities stayed at PiecePriorityNone, and peers
-// connected but no pieces were ever requested. The Wails GUI happened
-// to dodge it because app.go threads the long-lived a.ctx.
-// Anacrolix's own goroutines are cancelled on Client.Close (which
-// Engine.Close calls), so Background ctx is shutdown-safe.
-func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *torrent.Torrent) {
+func (a *AnacrolixBackend) verifyAndStart(id TorrentID, t *torrent.Torrent) {
+	ctx := a.engineCtx
 	// Wait for metainfo. AddFile already has it (channel is pre-closed);
 	// AddMagnet has to fetch it via DHT/PEX before we can hash anything.
 	// Listen on engineCtx too: anacrolix's gotMetainfoC is closed by
@@ -92,18 +79,11 @@ func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *
 	// promptly so verifyWg drains in milliseconds.
 	select {
 	case <-t.GotInfo():
+	case <-t.Closed():
+		return
 	case <-ctx.Done():
 		return
-	case <-a.engineCtx.Done():
-		return
 	}
-	// Past GotInfo — switch from the caller's ctx (which an HTTP handler
-	// or RSS poller will cancel as soon as the call returns) to the
-	// engine's lifetime ctx (which Close() cancels). Verify must outlive
-	// any specific request, but it MUST NOT outlive the engine — Close
-	// closes the bolt + anacrolix client, and an in-flight verify dispatch
-	// would crash or hang otherwise.
-	ctx = a.engineCtx
 
 	a.setVerifying(id, true)
 	defer a.setVerifying(id, false)
@@ -257,7 +237,7 @@ func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torre
 	if saved {
 		return
 	}
-	if t.BytesMissing() != 0 {
+	if t.Info() == nil || t.BytesMissing() != 0 {
 		return
 	}
 	if !a.writeSnapshot(id, t, true) {
@@ -277,6 +257,9 @@ func (a *AnacrolixBackend) saveSnapshotIfComplete(id TorrentID, t *torrent.Torre
 // is mid-flight (capturing a half-verified state would replay
 // nonsense). wasComplete is recorded honestly.
 func (a *AnacrolixBackend) saveSnapshotForCheckpoint(id TorrentID, t *torrent.Torrent) {
+	if t.Info() == nil {
+		return // BytesMissing requires metadata, which pending magnets do not have.
+	}
 	a.verifyMu.RLock()
 	verifying := a.verifying[id]
 	a.verifyMu.RUnlock()
@@ -472,11 +455,14 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	}
 	spec := torrent.TorrentSpecFromMetaInfo(mi)
 	spec.Storage = newFileStorage(savePath, a.pieceCompletion, a.preallocateFullFiles)
-	t, _, err := a.client.AddTorrentSpec(spec)
+	t, added, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
 	}
 	id := idFor(t)
+	if !added {
+		return id, nil
+	}
 	a.mu.Lock()
 	a.bySaveTo[id] = savePath
 	a.byID[id] = t
@@ -484,7 +470,7 @@ func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath st
 	a.installWriteErrorHook(id, t)
 	// Same verify-then-start flow as AddMagnet — the GotInfo wait inside
 	// verifyAndStart is a no-op here since metainfo is already attached.
-	a.spawnVerify(ctx, id, t)
+	a.spawnVerify(id, t)
 	return id, nil
 }
 
@@ -811,4 +797,3 @@ func prioToAnacrolix(p Priority) anacrolix_types.PiecePriority {
 	}
 	return anacrolix_types.PiecePriorityNormal
 }
-

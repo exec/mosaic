@@ -67,19 +67,11 @@ func (se *ScheduleEngine) tick(ctx context.Context) {
 		return
 	}
 	now := time.Now().In(se.location)
-	dayBit := 1 << int(now.Weekday())
-	minutes := now.Hour()*60 + now.Minute()
 
 	var active *persistence.ScheduleRule
 	for i := range rules {
 		r := &rules[i]
-		if !r.Enabled {
-			continue
-		}
-		if r.DaysMask&dayBit == 0 {
-			continue
-		}
-		if !ruleWindowContains(r.StartMin, r.EndMin, minutes) {
+		if !ruleActiveAt(*r, now) {
 			continue
 		}
 		active = r
@@ -115,6 +107,16 @@ func (se *ScheduleEngine) tick(ctx context.Context) {
 	_ = se.svc.engine.SetGlobalRateLimits(active.DownKbps*1024, active.UpKbps*1024)
 	log.Info().Int("rule_id", active.ID).Int("down", active.DownKbps).Int("up", active.UpKbps).
 		Msg("schedule_engine: applied rule")
+}
+
+func ruleActiveAt(r persistence.ScheduleRule, now time.Time) bool {
+	minutes := now.Hour()*60 + now.Minute()
+	day := now.Weekday()
+	// The morning half of an overnight rule belongs to its starting day.
+	if r.StartMin > r.EndMin && minutes < r.EndMin {
+		day = (day + 6) % 7
+	}
+	return r.Enabled && r.DaysMask&(1<<int(day)) != 0 && ruleWindowContains(r.StartMin, r.EndMin, minutes)
 }
 
 // ruleWindowContains reports whether a rule's [startMin, endMin) window

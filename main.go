@@ -35,21 +35,22 @@ var assets embed.FS
 var version = "dev"
 
 func main() {
-	// On Windows + Linux, when the file manager launches us with a
-	// .torrent path while another Mosaic is already running, we MUST
-	// forward args + exit before touching anacrolix's listen port. A
-	// failed port-bind is no longer fatal (the engine falls back to an
-	// OS-picked ephemeral — see backend/engine/anacrolix.go), but a second
-	// instance that gets that far still opens the shared DB, re-announces
-	// every torrent, and runs on a throwaway port before Wails's
-	// SingleInstanceLock can dispatch it. Windows uses Wails's
-	// mutex+WM_COPYDATA wire; Linux uses our own Unix socket because
-	// Wails's D-Bus single-instance silently fails on common setups
-	// (Wayland, sandboxed launchers, missing XDG_RUNTIME_DIR). See
-	// backend/platform/single_instance_*.go. No-op on macOS.
+	// Claim desktop IPC before opening the database or binding torrent ports.
 	if platform.EarlyForwardLaunchArgs("io.github.exec.mosaic") {
-		os.Exit(0)
+		return
 	}
+	app := NewApp(nil, nil)
+	if err := platform.StartSecondInstanceListener("io.github.exec.mosaic", func(args []string) {
+		app.ShowWindow()
+		app.HandleLaunchArgs(args)
+	}); err != nil {
+		// Another process may have won the listener between our probe and bind.
+		if platform.EarlyForwardLaunchArgs("io.github.exec.mosaic") {
+			return
+		}
+		log.Warn().Err(err).Msg("single-instance listener unavailable")
+	}
+	defer platform.CleanupSingleInstance()
 
 	paths, err := platform.Paths("Mosaic")
 	if err != nil {
@@ -106,23 +107,7 @@ func main() {
 		log.Warn().Err(err).Msg("remote: bootstrap failed (port likely in use) — desktop UI is unaffected")
 	}
 
-	app := NewApp(svc, back.Hub)
-
-	// Linux second-instance listener. Bound here (after the early-forward
-	// check has returned false, so we know we're the first instance) so any
-	// file-handler launches that fire while we're booting are queued and
-	// dispatched as soon as app.HandleLaunchArgs is safe to call. No-op on
-	// Windows + macOS — both rely on Wails's own second-instance plumbing.
-	if err := platform.StartSecondInstanceListener("io.github.exec.mosaic", app.HandleLaunchArgs); err != nil {
-		log.Warn().Err(err).Msg("single-instance listener failed; .torrent forwards from a running instance won't work")
-	}
-	// Close the listener on shutdown so the Accept goroutine returns and
-	// the OS releases the named pipe / socket file. Without this on
-	// Windows the pipe stays held until process termination, and the
-	// goroutine blocked on Accept can keep the Go runtime alive past
-	// the visible main-window close — surfacing as a lingering
-	// "mosaic.exe" in Task Manager.
-	defer platform.CleanupSingleInstance()
+	app.svc, app.hub = svc, back.Hub
 
 	// Desktop integration: notifications subscriber + system tray.
 	//
@@ -177,9 +162,6 @@ func main() {
 				"gnome-shell-extension-appindicator (and enable it via " +
 				"the Extensions app) to get a tray icon.",
 		)
-	}
-	if desktopCfg.TrayEnabled && trayAvailable {
-		trayHandle.Start()
 	}
 	defer trayHandle.Stop()
 
@@ -306,7 +288,7 @@ func main() {
 	// frontend still mounts and connects to the WS / fetches state on
 	// load — only the OS window is hidden until the user opens it from
 	// the tray.
-	startHidden := desktopCfg.StartMinimized && desktopCfg.TrayEnabled && trayAvailable && goruntime.GOOS != "darwin"
+	startHidden := desktopCfg.StartMinimized && (goruntime.GOOS == "darwin" || (desktopCfg.TrayEnabled && trayAvailable))
 	if startHidden {
 		// Suppress Wails tick emission until the tray shows the window.
 		app.setWindowVisible(false)
@@ -329,13 +311,8 @@ func main() {
 		Mac: &mac.Options{
 			TitleBar:   mac.TitleBarHiddenInset(),
 			Appearance: mac.NSAppearanceNameDarkAqua,
-			// Wails's AppDelegate implements application:openFile: and routes
-			// magnet:// via continueUserActivity / its own AppleEvent handler.
-			// Both intercept the AppKit dispatch BEFORE our NSAppleEventManager
-			// +load handler can see kAEOpenDocuments / kAEGetURL — that's why
-			// our custom bridge never fired in v0.1.13–v0.2.4. Use the proper
-			// Wails hooks here. Buffered until OnStartup (Wails enforces this),
-			// so app.HandleLaunchArgs is safe to call.
+			// Wails owns Apple Event delivery and buffers launch events until
+			// OnStartup. Keep a single file/URL handler at this boundary.
 			OnFileOpen: func(path string) { app.HandleLaunchArgs([]string{path}) },
 			OnUrlOpen:  func(url string) { app.HandleLaunchArgs([]string{url}) },
 		},
@@ -349,10 +326,15 @@ func main() {
 			UniqueId: "io.github.exec.mosaic",
 			OnSecondInstanceLaunch: func(d options.SecondInstanceData) {
 				app.ShowWindow()
-				go app.HandleLaunchArgs(d.Args)
+				go app.HandleLaunchArgs(platform.NormalizeLaunchArgs(d.Args, d.WorkingDirectory))
 			},
 		},
-		OnStartup: app.startup,
+		OnStartup: func(ctx context.Context) {
+			app.startup(ctx)
+			if desktopCfg.TrayEnabled && trayAvailable {
+				trayHandle.Start()
+			}
+		},
 		// OnShutdown cancels the tick goroutines and grants a short grace so
 		// in-flight ticks drain before the deferred cleanup above closes the
 		// hub/engine/DB they're reading — see App.shutdown.

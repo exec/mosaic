@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,12 @@ import (
 )
 
 func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
+	t.Helper()
+	svc, fb, _ := newTestServiceWithDB(t)
+	return svc, fb
+}
+
+func newTestServiceWithDB(t *testing.T) (*Service, *engine.FakeBackend, *persistence.DB) {
 	t.Helper()
 	db, err := persistence.Open(sysCtx(), filepath.Join(t.TempDir(), "t.db"))
 	require.NoError(t, err)
@@ -36,7 +43,7 @@ func newTestService(t *testing.T) (*Service, *engine.FakeBackend) {
 		persistence.NewTorrentTrackers(db),
 		nil, // no scheduler in unit tests
 		"/tmp/dl")
-	return svc, fb
+	return svc, fb, db
 }
 
 func TestService_AddMagnet_PersistsAndAddsToEngine(t *testing.T) {
@@ -64,6 +71,50 @@ func TestService_AddMagnet_UsesDefaultSavePathWhenEmpty(t *testing.T) {
 	rows, err := svc.ListTorrents(sysCtx())
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/dl", rows[0].SavePath)
+}
+
+func TestAddFailureOnlyRollsBackNewTorrents(t *testing.T) {
+	for _, table := range []string{"torrents", "torrent_access"} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing=%t", table, existing), func(t *testing.T) {
+				svc, fb, db := newTestServiceWithDB(t)
+				ctx := sysCtx()
+				magnet := "magnet:?xt=urn:btih:rollback"
+				var original engine.TorrentID
+				if existing {
+					var err error
+					original, err = svc.AddMagnet(ctx, magnet, "")
+					require.NoError(t, err)
+					require.NoError(t, svc.Pause(ctx, original))
+				}
+				_, err := db.SQL().ExecContext(ctx, "CREATE TRIGGER fail_add BEFORE INSERT ON "+table+" BEGIN SELECT RAISE(ABORT, 'injected write failure'); END")
+				require.NoError(t, err)
+				_, err = svc.AddMagnet(ctx, magnet, "")
+				require.Error(t, err)
+				if existing {
+					require.Len(t, fb.List(), 1)
+					rec, err := svc.torrents.Get(ctx, string(original))
+					require.NoError(t, err)
+					require.True(t, rec.Paused)
+					require.True(t, fb.List()[0].Paused)
+				} else {
+					require.Empty(t, fb.List())
+					records, err := svc.torrents.List(ctx)
+					require.NoError(t, err)
+					require.Empty(t, records)
+				}
+			})
+		}
+	}
+}
+
+func TestCanceledAddDoesNotLeaveAnUnpersistedTorrent(t *testing.T) {
+	svc, fb := newTestService(t)
+	ctx, cancel := context.WithCancel(sysCtx())
+	cancel()
+	_, err := svc.AddMagnet(ctx, "magnet:?xt=urn:btih:canceled", "")
+	require.Error(t, err)
+	require.Empty(t, fb.List())
 }
 
 func TestService_AddTorrentFile_PersistsAndAddsToEngine(t *testing.T) {

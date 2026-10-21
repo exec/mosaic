@@ -125,3 +125,19 @@ func TestSafeRemovePath_NormalNameUnderRealSaveTo(t *testing.T) {
 		got == evalSaveTo || strings.HasPrefix(got, evalSaveTo+string(filepath.Separator)),
 		"got %q should live under %q", got, evalSaveTo)
 }
+
+func TestSafeRemovePath_SymlinkToSaveRootIsRejected(t *testing.T) {
+	saveTo := t.TempDir()
+	require.NoError(t, os.Symlink(saveTo, filepath.Join(saveTo, "torrent")))
+	path, err := safeRemovePath(saveTo, "torrent")
+	require.Error(t, err)
+	require.Empty(t, path)
+}
+
+func TestSafeRemovePath_SymlinkLoopFailsClosed(t *testing.T) {
+	saveTo := t.TempDir()
+	require.NoError(t, os.Symlink("torrent", filepath.Join(saveTo, "torrent")))
+	path, err := safeRemovePath(saveTo, "torrent")
+	require.Error(t, err)
+	require.Empty(t, path)
+}

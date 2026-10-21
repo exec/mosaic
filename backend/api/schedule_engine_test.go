@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"mosaic/backend/persistence"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,6 +90,26 @@ func TestRuleWindowContains(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, ruleWindowContains(tc.startMin, tc.endMin, tc.minutes))
+		})
+	}
+}
+
+func TestOvernightRuleUsesStartingDay(t *testing.T) {
+	r := persistence.ScheduleRule{DaysMask: 1 << int(time.Saturday), StartMin: 22 * 60, EndMin: 6 * 60, Enabled: true}
+	for _, tc := range []struct {
+		at   string
+		want bool
+	}{
+		{"2026-10-24T21:59:00Z", false},
+		{"2026-10-24T22:00:00Z", true},
+		{"2026-10-25T03:00:00Z", true},
+		{"2026-10-25T06:00:00Z", false},
+		{"2026-10-24T03:00:00Z", false},
+	} {
+		t.Run(tc.at, func(t *testing.T) {
+			at, err := time.Parse(time.RFC3339, tc.at)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ruleActiveAt(r, at))
 		})
 	}
 }

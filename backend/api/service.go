@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"sync"
 	"time"
 
@@ -10,15 +9,11 @@ import (
 	"mosaic/backend/updater"
 )
 
-// jsonMarshal / jsonUnmarshal are thin wrappers so we can add logging later
-// without touching every callsite.
-var jsonMarshal   = json.Marshal
-var jsonUnmarshal = json.Unmarshal
-
 // Service is the only place business logic lives. Wails handlers and (later)
 // HTTP handlers are thin adapters that translate transport shapes into Service
 // calls.
 type Service struct {
+	torrentMu       sync.Mutex // serialize add/remove persistence and ownership changes
 	engine          *engine.Engine
 	torrents        *persistence.Torrents
 	categories      *persistence.Categories
@@ -151,21 +146,21 @@ func NewService(
 	defaultSavePath string,
 ) *Service {
 	return &Service{
-		engine:          eng,
-		torrents:        torrents,
-		categories:      categories,
-		tags:            tags,
-		settings:        settings,
-		scheduleRules:   scheduleRules,
-		feeds:           feeds,
-		filters:         filters,
-		users:           users,
-		access:          access,
-		trackers:        trackers,
-		scheduler:       scheduler,
-		defaultSavePath: defaultSavePath,
-		focus:           make(map[int]focusState),
-		callers:         newCallerCache(),
+		engine:           eng,
+		torrents:         torrents,
+		categories:       categories,
+		tags:             tags,
+		settings:         settings,
+		scheduleRules:    scheduleRules,
+		feeds:            feeds,
+		filters:          filters,
+		users:            users,
+		access:           access,
+		trackers:         trackers,
+		scheduler:        scheduler,
+		defaultSavePath:  defaultSavePath,
+		focus:            make(map[int]focusState),
+		callers:          newCallerCache(),
 		lastSeedCounters: make(map[string]sessionCounters),
 	}
 }
@@ -204,15 +199,15 @@ const (
 	settingBlocklistURL     = "blocklist_url"
 	settingBlocklistEnabled = "blocklist_enabled"
 
-	settingPeerListenPort      = "peer_listen_port"
-	settingMaxPeersPerTorrent  = "peers_max_per_torrent"
-	settingDHTEnabled          = "dht_enabled"
-	settingEncryptionEnabled   = "encryption_enabled"
-	settingUPnPEnabled         = "upnp_enabled"
+	settingPeerListenPort     = "peer_listen_port"
+	settingMaxPeersPerTorrent = "peers_max_per_torrent"
+	settingDHTEnabled         = "dht_enabled"
+	settingEncryptionEnabled  = "encryption_enabled"
+	settingUPnPEnabled        = "upnp_enabled"
 
-	settingWebEnabled  = "web_enabled"
-	settingWebPort     = "web_port"
-	settingWebBindAll  = "web_bind_all"
+	settingWebEnabled     = "web_enabled"
+	settingWebPort        = "web_port"
+	settingWebBindAll     = "web_bind_all"
 	settingWebUsername    = "web_username"
 	settingWebPassHash    = "web_password_hash"
 	settingWebAPIKey      = "web_api_key"
@@ -223,9 +218,9 @@ const (
 	settingUpdaterLastChecked     = "updater_last_checked_at"
 	settingUpdaterLastSeenVersion = "updater_last_seen_version"
 
-	settingWatchFolderPath          = "watch_folder.path"
+	settingWatchFolderPath           = "watch_folder.path"
 	settingWatchFolderDeleteAfterAdd = "watch_folder.delete_after_add"
-	settingWatchFolderEnabled       = "watch_folder.enabled"
+	settingWatchFolderEnabled        = "watch_folder.enabled"
 
 	// Desktop integration (system tray + notifications + close-to-tray).
 	// Stored as bool strings via setBoolSetting; reads are presence-aware so

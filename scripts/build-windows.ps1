@@ -1,7 +1,7 @@
 # Build a signed mosaic.exe + NSIS installer.
 #
 # Required env:
-#   VERSION  e.g. v0.8.0 (defaults to "dev")
+#   VERSION  defaults to v + the repository VERSION
 #
 # Optional (all required for signing):
 #   AZURE_KEY_VAULT_URI
@@ -12,9 +12,8 @@
 
 $ErrorActionPreference = "Stop"
 $Version = $env:VERSION
-if (-not $Version) { $Version = "dev" }
-
 $Root = Resolve-Path "$PSScriptRoot/.."
+if (-not $Version) { $Version = "v" + (Get-Content "$Root/VERSION" -Raw).Trim() }
 Set-Location $Root
 $BinDir = "$Root/build/bin"
 

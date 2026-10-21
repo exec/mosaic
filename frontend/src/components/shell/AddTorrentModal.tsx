@@ -98,7 +98,7 @@ export function AddTorrentModal(props: Props) {
                   <FileDown class="h-4 w-4 text-accent-500" />
                   Add torrent
                 </Dialog.Title>
-                <Dialog.CloseButton class="grid h-7 w-7 place-items-center rounded-md text-zinc-500 hover:bg-white/[.06] hover:text-zinc-100">
+                <Dialog.CloseButton aria-label="Close add torrent" class="grid h-7 w-7 place-items-center rounded-md text-zinc-500 hover:bg-white/[.06] hover:text-zinc-100">
                   <X class="h-4 w-4" />
                 </Dialog.CloseButton>
               </div>
@@ -126,6 +126,7 @@ export function AddTorrentModal(props: Props) {
 
                 <Show when={source() === 'magnet'}>
                   <textarea
+                    aria-label="Magnet link"
                     class="mt-3 h-24 w-full resize-none rounded-md border border-white/[.06] bg-black/30 p-3 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
                     placeholder="magnet:?xt=urn:btih:..."
                     value={magnet()}
@@ -141,6 +142,7 @@ export function AddTorrentModal(props: Props) {
                 <Show when={source() === 'file' && !isWails}>
                   <input
                     type="file"
+                    aria-label="Torrent file"
                     accept=".torrent"
                     class="mt-3 block w-full text-xs text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-white/[.06] file:px-3 file:py-1.5 file:text-xs file:text-zinc-100 hover:file:bg-white/[.10]"
                     onChange={(e) => {
@@ -162,6 +164,7 @@ export function AddTorrentModal(props: Props) {
                   <FolderOpen class="h-3.5 w-3.5 text-zinc-500" />
                   <input
                     type="text"
+                    aria-label="Save path"
                     class={inputClass}
                     value={savePath()}
                     onInput={(e) => setSavePath(e.currentTarget.value)}

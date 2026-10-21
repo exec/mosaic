@@ -17,7 +17,7 @@ set -euo pipefail
 # read-only UDZO for distribution.
 #
 # Required env:
-#   VERSION                              e.g. v0.8.0 (defaults to "dev")
+#   VERSION                              defaults to v + the repository VERSION
 #
 # Optional (set together for signing):
 #   APPLE_DEVELOPER_ID                   "Developer ID Application: Dylan Hart (ABCDE12345)"
@@ -27,12 +27,18 @@ set -euo pipefail
 #   APPLE_TEAM_ID
 #   APPLE_APP_SPECIFIC_PASSWORD
 
-VERSION="${VERSION:-dev}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="${VERSION:-v$(cat "${ROOT}/VERSION")}"
 BIN_DIR="${ROOT}/build/bin"
 VOLNAME="Mosaic"
 
 cd "${ROOT}"
+
+# Match Go's supported minimum and prevent Wails's older linker default.
+export MACOSX_DEPLOYMENT_TARGET=12.0
+export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=12.0"
+export CGO_CXXFLAGS="${CGO_CXXFLAGS:-} -mmacosx-version-min=12.0"
+export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=12.0"
 
 echo "==> build frontend first so main.go's go:embed has its target"
 (cd frontend && npm run build)
@@ -109,15 +115,14 @@ else
     echo "==> codesign skipped (APPLE_DEVELOPER_ID unset) — UNSIGNED dev build"
 fi
 
-echo "==> free disk before DMG step (macos-14 runners are tight ~14GB free)"
-# The Go module + build caches accumulate ~5–8GB by this point on a cold
-# runner; clear what we don't need anymore so create-dmg's hdiutil scratch
-# space doesn't trip 'No space left'.
-df -h / 2>/dev/null | tail -1 || true
-go clean -cache 2>/dev/null || true
-go clean -modcache 2>/dev/null || true
-rm -rf /tmp/go-link-* /tmp/go-build* 2>/dev/null || true
-df -h / 2>/dev/null | tail -1 || true
+if [[ "${CI:-}" == "true" ]]; then
+    echo "==> free disk before DMG step (macos-14 runners are tight ~14GB free)"
+    # CI runners are disposable; local builds must preserve shared Go caches.
+    df -h / 2>/dev/null | tail -1 || true
+    go clean -cache 2>/dev/null || true
+    go clean -modcache 2>/dev/null || true
+    df -h / 2>/dev/null | tail -1 || true
+fi
 
 # ─── DMG via sindresorhus/create-dmg ───────────────────────────────────────
 # create-dmg auto-generates a clean drag-to-Applications layout (default
@@ -129,12 +134,6 @@ df -h / 2>/dev/null | tail -1 || true
 # CI runners and local macs render the same window. Trade-off accepted: we
 # give up the bespoke purple gradient + drawn arrow in exchange for a layout
 # that actually works on every macOS version we ship for.
-echo "==> install create-dmg"
-# create-dmg is a Node.js CLI. The macos runners ship Node by default; if
-# absent we'd need 'brew install create-dmg', but global npm install is the
-# more portable option for CI.
-npm install --global create-dmg 2>&1 | tail -5
-
 # Defensive: detach any leftover /Volumes/Mosaic from a previous CI run.
 hdiutil detach "/Volumes/${VOLNAME}" -force 2>/dev/null || true
 
@@ -146,7 +145,7 @@ echo "==> build DMG via create-dmg"
 # --no-code-sign: signing is handled below if APPLE_DEVELOPER_ID is set; we
 #              keep the existing flow rather than splitting it between tools.
 DMG_TMP_DIR="$(mktemp -d)"
-create-dmg --overwrite --no-code-sign "${APP}" "${DMG_TMP_DIR}"
+npm exec --yes --package=create-dmg@8.1.0 -- create-dmg --overwrite --no-code-sign "${APP}" "${DMG_TMP_DIR}"
 CREATED_DMG=$(ls "${DMG_TMP_DIR}"/*.dmg | head -1)
 [ -n "${CREATED_DMG}" ] || { echo "create-dmg produced no .dmg"; exit 1; }
 mv "${CREATED_DMG}" "${DMG_OUT}"

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -43,6 +44,43 @@ func nonAdminCtx(t *testing.T, svc *Service) (context.Context, UserDTO) {
 		PermAddTorrents: true,
 	})
 	return asUser(t, svc, u.ID), u
+}
+
+func TestMemberDefaultPathCanBeUsedByAddDialog(t *testing.T) {
+	svc, _ := newTestService(t)
+	root := t.TempDir()
+	require.NoError(t, svc.SetDefaultSavePath(sysCtx(), root))
+	ctx, _ := nonAdminCtx(t, svc)
+	path, err := svc.GetDefaultSavePath(ctx)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(root, "regular"), path)
+	_, err = svc.AddMagnet(ctx, "magnet:?xt=urn:btih:member-default", path)
+	require.NoError(t, err)
+	_, err = svc.AddMagnet(ctx, "magnet:?xt=urn:btih:member-escape", root)
+	require.Error(t, err)
+}
+
+func TestMemberRSSFiltersCannotDelegateAnUnrestrictedSavePath(t *testing.T) {
+	svc, _ := newTestService(t)
+	root := t.TempDir()
+	require.NoError(t, svc.SetDefaultSavePath(sysCtx(), root))
+	u := mkUser(t, svc, UserInput{Username: "rss-user", Password: "password123", Role: persistence.RoleUser, PermManageRSS: true})
+	ctx := asUser(t, svc, u.ID)
+	feedID, err := svc.CreateFeed(ctx, FeedDTO{URL: "https://example.com/rss"})
+	require.NoError(t, err)
+	filter := FilterDTO{FeedID: feedID, Regex: ".*", SavePath: t.TempDir(), Enabled: true}
+	_, err = svc.CreateFilter(ctx, filter)
+	require.Error(t, err)
+	filter.SavePath = ""
+	id, err := svc.CreateFilter(ctx, filter)
+	require.NoError(t, err)
+	stored, err := svc.filters.Get(ctx, id)
+	require.NoError(t, err)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(resolvedRoot, u.Username), stored.SavePath)
+	filter.ID, filter.SavePath = id, t.TempDir()
+	require.Error(t, svc.UpdateFilter(ctx, filter))
 }
 
 func TestAuthz_SetWebConfig_NonAdminForbidden(t *testing.T) {

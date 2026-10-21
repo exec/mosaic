@@ -54,23 +54,9 @@ const (
 	writeTimeout = 1 * time.Second
 )
 
-type secondInstancePayload struct {
-	Args             []string `json:"args"`
-	WorkingDirectory string   `json:"working_directory"`
-}
-
 // EarlyForwardLaunchArgs implements the second-instance side of our Linux
 // single-instance contract. See the package-level doc above.
 func EarlyForwardLaunchArgs(uniqueId string) bool {
-	if len(os.Args) <= 1 {
-		// No args to forward. The launcher probably just opened Mosaic
-		// without a torrent path — let the normal flow run and Wails will
-		// handle "raise the running window" via its own SingleInstanceLock
-		// (which works for the no-args case since it doesn't need to
-		// transmit anything).
-		return false
-	}
-
 	socketPath := singleInstanceSocketPath(uniqueId)
 	conn, err := net.DialTimeout("unix", socketPath, connectTimeout)
 	if err != nil {
@@ -146,6 +132,7 @@ func StartSecondInstanceListener(uniqueId string, onArgs func(args []string)) er
 	// bindSingleInstanceSocket.
 	cleanupMu.Lock()
 	registeredCleanupSocket = socketPath
+	registeredCleanupListener = listener
 	cleanupMu.Unlock()
 	return nil
 }
@@ -155,16 +142,22 @@ func StartSecondInstanceListener(uniqueId string, onArgs func(args []string)) er
 func CleanupSingleInstance() {
 	cleanupMu.Lock()
 	path := registeredCleanupSocket
+	listener := registeredCleanupListener
 	registeredCleanupSocket = ""
+	registeredCleanupListener = nil
 	cleanupMu.Unlock()
+	if listener != nil {
+		_ = listener.Close()
+	}
 	if path != "" {
 		_ = os.Remove(path)
 	}
 }
 
 var (
-	cleanupMu               sync.Mutex
-	registeredCleanupSocket string
+	cleanupMu                 sync.Mutex
+	registeredCleanupSocket   string
+	registeredCleanupListener net.Listener
 )
 
 // verifyPrivateDir checks that path is a real directory (not a symlink)
@@ -239,39 +232,6 @@ func acceptSecondInstances(listener net.Listener, out chan<- []string) {
 			return
 		}
 		go handleSecondInstanceConn(conn, out)
-	}
-}
-
-func handleSecondInstanceConn(conn net.Conn, out chan<- []string) {
-	defer conn.Close()
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	// Cap payload at 64 KiB. Real-world args are tiny; this guards against
-	// a wedged/hostile peer flooding us.
-	buf, err := io.ReadAll(io.LimitReader(conn, 64*1024))
-	if err != nil || len(buf) == 0 {
-		return
-	}
-	var payload secondInstancePayload
-	if err := json.Unmarshal(buf, &payload); err != nil {
-		return
-	}
-	if len(payload.Args) == 0 {
-		return
-	}
-	// Non-blocking send — if the consumer is wedged, we drop. The consumer
-	// goroutine should never wedge because it spawns its callback in a sub-
-	// goroutine. 16 buffer slots is plenty for human-driven launches.
-	select {
-	case out <- payload.Args:
-	default:
-	}
-}
-
-func dispatchSecondInstances(in <-chan []string, onArgs func(args []string)) {
-	for args := range in {
-		// Spawn each invocation so a slow onArgs (waiting on a context, etc.)
-		// can't backpressure the queue.
-		go onArgs(args)
 	}
 }
 

@@ -6,7 +6,9 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -25,7 +27,16 @@ type DB struct {
 // goose migrations from the embedded migrations dir. WAL mode is enabled so
 // concurrent reads don't block writes.
 func Open(ctx context.Context, path string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)", path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sqlite path: %w", err)
+	}
+	uriPath := filepath.ToSlash(absPath)
+	if uriPath[0] != '/' {
+		uriPath = "/" + uriPath
+	}
+	uri := url.URL{Scheme: "file", Path: uriPath, RawQuery: "_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"}
+	dsn := uri.String()
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)

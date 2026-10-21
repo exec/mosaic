@@ -33,6 +33,7 @@ export function TopToolbar(props: Props) {
         <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
         <input
           type="text"
+          aria-label="Search torrents"
           placeholder="Search torrents…"
           value={props.searchQuery}
           onInput={(e) => props.onSearch(e.currentTarget.value)}
@@ -54,6 +55,8 @@ export function TopToolbar(props: Props) {
 
         <Tooltip label={`Alt-speed limits ${props.altSpeedActive ? 'on' : 'off'}`}>
           <button
+            aria-label="Toggle alternative speed limits"
+            aria-pressed={props.altSpeedActive}
             class="grid h-7 w-7 place-items-center rounded-md transition-colors duration-150"
             classList={{
               'bg-accent-500/[.15] text-accent-300': props.altSpeedActive,

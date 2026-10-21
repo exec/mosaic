@@ -26,6 +26,10 @@ import (
 // Our writes just register Mosaic as an option; the user still confirms
 // the default via Settings → Default apps.
 func EnsureFileAssociations(exePath string) error {
+	return ensureFileAssociations(registry.CURRENT_USER, exePath)
+}
+
+func ensureFileAssociations(root registry.Key, exePath string) error {
 	cmd := fmt.Sprintf(`"%s" "%%1"`, exePath)
 	icon := fmt.Sprintf(`%s,0`, exePath)
 	const classes = `Software\Classes`
@@ -35,16 +39,10 @@ func EnsureFileAssociations(exePath string) error {
 		name  string
 		value string
 	}{
-		// magnet: URL scheme handler
-		{classes + `\magnet`, "", "URL:Magnet Protocol"},
-		{classes + `\magnet`, "URL Protocol", ""},
-		{classes + `\magnet\DefaultIcon`, "", icon},
-		{classes + `\magnet\shell\open\command`, "", cmd},
-
-		// .torrent file extension → MosaicTorrent ProgID
-		{classes + `\.torrent`, "", "MosaicTorrent"},
-		{classes + `\.torrent`, "Content Type", "application/x-bittorrent"},
+		// Register our own handler without replacing another client's defaults.
+		{classes + `\.torrent\OpenWithProgids`, "MosaicTorrent", ""},
 		{classes + `\MosaicTorrent`, "", "BitTorrent file"},
+		{classes + `\MosaicTorrent`, "URL Protocol", ""},
 		{classes + `\MosaicTorrent\DefaultIcon`, "", icon},
 		{classes + `\MosaicTorrent\shell\open\command`, "", cmd},
 
@@ -58,7 +56,7 @@ func EnsureFileAssociations(exePath string) error {
 	}
 
 	for _, w := range writes {
-		k, _, err := registry.CreateKey(registry.CURRENT_USER, w.path, registry.SET_VALUE)
+		k, _, err := registry.CreateKey(root, w.path, registry.SET_VALUE)
 		if err != nil {
 			return fmt.Errorf("create %q: %w", w.path, err)
 		}
