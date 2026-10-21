@@ -45,7 +45,7 @@ Run the platform-specific helper script:
 - **Windows:** `pwsh scripts/build-windows.ps1`
 
 Build helpers default to the version in the root `VERSION` file. Set
-`VERSION=v1.8.0` to override it. Keep `wails.json` and the frontend package
+`VERSION=v1.8.1` to override it. Keep `wails.json` and the frontend package
 version aligned when preparing a release; ordinary `wails dev` still uses `dev`.
 
 Signing requires the env vars documented in `.github/SIGNING.md`. Without

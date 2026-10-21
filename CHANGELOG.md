@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.1 — 2026-10-21
+
+- Declare the imported BitTorrent file type in macOS production and development
+  bundles so Finder recognizes `.torrent` files and offers Mosaic as a handler.
+- Add regression tests covering the file-type declarations in both bundles.
+
+On macOS, install this release from the DMG to apply the bundle metadata fix.
+The in-app updater replaces only the executable and cannot update `Info.plist`.
+
 ## 1.8.0 — 2026-10-21
 
 Compatible reliability and OS integration release. No database migration or API
