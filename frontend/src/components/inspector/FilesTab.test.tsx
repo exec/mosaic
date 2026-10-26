@@ -1,5 +1,10 @@
 import {expect, test, vi} from 'vitest';
 import {render} from 'solid-js/web';
+import {api} from '../../lib/bindings';
+import {toast} from 'solid-sonner';
+vi.mock('../../lib/bindings', () => ({api: {openTorrentFile: vi.fn(), openFolder: vi.fn()}}));
+vi.mock('../../lib/runtime', () => ({isWailsRuntime: () => true}));
+vi.mock('solid-sonner', () => ({toast: {error: vi.fn(), success: vi.fn()}}));
 import {FilesTab} from './FilesTab';
 import type {DetailDTO} from '../../lib/bindings';
 
@@ -53,3 +58,22 @@ test('folder actions use one batch and search preserves the selected size', () =
     expect(onSetPriority).not.toHaveBeenCalled();
   } finally {dispose();document.body.innerHTML = '';}
 });
+
+ test('failed native actions offer the torrent download folder without losing the error', async () => {
+  const detail = {id: 'torrent-id', save_path: '/downloads', files: [{index: 0, path: 'folder/movie.mkv', size: 1, bytes_done: 1, progress: 1, priority: 'normal'}]} as DetailDTO;
+  vi.mocked(api.openTorrentFile).mockRejectedValue(new Error('File moved; locate existing files'));
+  vi.mocked(api.openFolder).mockResolvedValue(undefined);
+  const dispose = render(() => <FilesTab canEdit detail={detail} onSetPriority={() => {}} />, document.body);
+  try {
+   for (const action of ['Open', 'Reveal']) {
+    document.querySelector<HTMLButtonElement>(`[aria-label="${action} folder/movie.mkv"]`)!.click();
+    await vi.waitFor(() => expect(toast.error).toHaveBeenLastCalledWith(`Couldn't ${action.toLowerCase()} file`, expect.objectContaining({description: 'File moved; locate existing files'})));
+    const options = vi.mocked(toast.error).mock.lastCall![1]!;
+    const folderAction = options.action as {label: string; onClick: () => void};
+    expect(folderAction.label).toBe('Open download folder');
+    folderAction.onClick();
+    expect(api.openFolder).toHaveBeenLastCalledWith('/downloads');
+   }
+   expect(api.openTorrentFile).toHaveBeenCalledWith('torrent-id', 0, true);
+  } finally {dispose(); document.body.innerHTML = '';}
+ });

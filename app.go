@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -631,19 +629,7 @@ func (a *App) WindowClose() {
 // OpenFolder reveals the given path in the OS file manager. Desktop-only —
 // browser shells have no equivalent affordance.
 func (a *App) OpenFolder(path string) error {
-	if path == "" {
-		return fmt.Errorf("empty path")
-	}
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", path)
-	case "windows":
-		cmd = exec.Command("explorer", path)
-	default:
-		cmd = exec.Command("xdg-open", path)
-	}
-	return cmd.Start()
+	return platform.OpenPath(path, false)
 }
 
 // GetSeedingDefaults returns global seeding stop-condition defaults.
@@ -760,23 +746,7 @@ func (a *App) OpenTorrentFile(id string, index int, reveal bool) error {
 	if err != nil {
 		return err
 	}
-	switch runtime.GOOS {
-	case "darwin":
-		if reveal {
-			return exec.Command("open", "-R", path).Run()
-		}
-		return exec.Command("open", path).Run()
-	case "windows":
-		if reveal {
-			return exec.Command("explorer.exe", "/select,"+path).Start()
-		}
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", path).Start()
-	default:
-		if reveal {
-			path = filepath.Dir(path)
-		}
-		return exec.Command("xdg-open", path).Start()
-	}
+	return platform.OpenPath(path, reveal)
 }
 
 func (a *App) GetTransferStatistics() (api.TransferStatisticsDTO, error) {

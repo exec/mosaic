@@ -59,8 +59,18 @@ export function FilesTab(props: Props) {
     </Show>;
   };
   const fileAction = async (index: number, reveal: boolean) => {
-    try { await api.openTorrentFile(props.detail!.id, index, reveal); }
-    catch (err) { toast.error(`Couldn't open file — ${userErr(err)}`); }
+    const detail = props.detail;
+    if (!detail) return;
+    try { await api.openTorrentFile(detail.id, index, reveal); }
+    catch (err) {
+      toast.error(`Couldn't ${reveal ? 'reveal' : 'open'} file`, {
+        description: userErr(err),
+        action: {
+          label: 'Open download folder',
+          onClick: () => { void api.openFolder(detail.save_path).catch(e => toast.error(userErr(e))); },
+        },
+      });
+    }
   };
   const Branch = (p: {node: Node}) => <Show when={matches(p.node)}>
     <Show when={p.node.index === undefined} fallback={(() => {

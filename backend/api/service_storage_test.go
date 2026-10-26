@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"fmt"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"os"
@@ -133,6 +134,9 @@ func TestNativeFilePathOnlyAllowsCompleteContainedFiles(t *testing.T) {
 	_, err = svc.TorrentFilePath(ctx, string(id), 0)
 	require.ErrorContains(t, err, "not complete")
 	require.NoError(t, os.Remove(path))
+	_, err = svc.TorrentFilePath(ctx, string(id), 1)
+	require.ErrorContains(t, err, "Locate existing files")
+	require.NotContains(t, err.Error(), root)
 	outside := filepath.Join(t.TempDir(), "outside")
 	require.NoError(t, os.WriteFile(outside, []byte("private"), 0600))
 	require.NoError(t, os.Symlink(outside, path))
@@ -162,4 +166,45 @@ func TestRelocationFailureRestoresSavedPathDespiteCanceledRequest(t *testing.T) 
 	rec, err := svc.torrents.Get(sysCtx(), string(id))
 	require.NoError(t, err)
 	require.Equal(t, old, rec.SavePath)
+}
+
+func TestNativeFilePathMatchesRealTorrentStorage(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		t.Run(fmt.Sprint("multi=", multi), func(t *testing.T) {
+			svc, _, _ := newTestServiceWithDB(t)
+			be, err := engine.NewAnacrolixBackend(engine.AnacrolixConfig{DataDir: t.TempDir()})
+			require.NoError(t, err)
+			svc.engine = engine.NewEngine(be, time.Second)
+			defer svc.engine.Close()
+			root := t.TempDir()
+			name := "Movie folder"
+			relative := name
+			piece := sha1.Sum([]byte("x"))
+			info := metainfo.Info{Name: name, Length: 1, PieceLength: 16384, Pieces: piece[:]}
+			if multi {
+				info.Length = 0
+				info.Files = []metainfo.FileInfo{{Path: []string{"Nested folder", "Film café #1 %.mkv"}, Length: 1}}
+				relative = filepath.Join(name, "Nested folder", "Film café #1 %.mkv")
+			}
+			path := filepath.Join(root, relative)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+			require.NoError(t, os.WriteFile(path, []byte("x"), 0600))
+			encoded, err := bencode.Marshal(info)
+			require.NoError(t, err)
+			mi := metainfo.MetaInfo{InfoBytes: encoded}
+			var blob bytes.Buffer
+			require.NoError(t, mi.Write(&blob))
+			id, err := svc.PrepareTorrent(sysCtx(), PrepareTorrentRequest{TorrentFile: blob.Bytes(), SavePath: root})
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				d, err := svc.GetTorrentDetail(sysCtx(), id)
+				return err == nil && len(d.Files) == 1 && d.Files[0].BytesDone == 1
+			}, 5*time.Second, 10*time.Millisecond)
+			actual, err := svc.TorrentFilePath(sysCtx(), id, 0)
+			require.NoError(t, err)
+			expected, err := filepath.EvalSymlinks(path)
+			require.NoError(t, err)
+			require.Equal(t, expected, actual)
+		})
+	}
 }

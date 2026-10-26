@@ -6,6 +6,12 @@ A feature release focused on a more capable inspector, safer torrent and file
 management, useful diagnostics, and a compact interface. Desktop and browser
 clients share the new backend capabilities.
 
+### File opening fixes
+
+- Fixed opening and revealing files in multi-file torrents: paths now include the torrent's top-level folder and match the actual download layout.
+- Native launchers handle spaces, Unicode and punctuation without a command shell: Finder on macOS, Windows default apps and Explorer selection, and GNOME/KDE file-manager selection with a parent-folder fallback on Linux.
+- Missing or moved files show a concise recovery message with an Open download folder action, instead of exposing a long filesystem error. Incomplete files and paths outside the download folder remain protected.
+
 ### Inspector, peers, and trackers
 
 - Prevent long addresses, paths, tracker URLs, and inspector controls from

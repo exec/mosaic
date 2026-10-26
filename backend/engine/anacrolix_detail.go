@@ -47,7 +47,7 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 		for i, f := range t.Files() {
 			d.Files = append(d.Files, FileEntry{
 				Index:     i,
-				Path:      f.DisplayPath(),
+				Path:      f.Path(),
 				Size:      f.Length(),
 				BytesDone: f.BytesCompleted(),
 				Priority:  prioFromAnacrolix(f.Priority()),

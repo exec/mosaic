@@ -171,15 +171,19 @@ func (s *Service) TorrentFilePath(ctx context.Context, id string, index int) (st
 			if f.BytesDone < f.Size {
 				return "", errors.New("file is not complete yet")
 			}
-			// DisplayPath includes the torrent root, matching storage's on-disk layout.
-			path := filepath.Join(d.SavePath, filepath.FromSlash(f.Path))
+			// The engine file path includes the torrent root, matching storage layout.
+			relative := filepath.FromSlash(f.Path)
+			if !filepath.IsLocal(relative) {
+				return "", errors.New("file escapes download folder")
+			}
+			path := filepath.Join(d.SavePath, relative)
 			resolved, err := filepath.EvalSymlinks(path)
 			if err != nil {
-				return "", err
+				return "", nativeFileAccessError(err)
 			}
 			root, err := filepath.EvalSymlinks(d.SavePath)
 			if err != nil {
-				return "", err
+				return "", nativeFileAccessError(err)
 			}
 			rel, err := filepath.Rel(root, resolved)
 			if err != nil || rel == ".." || len(rel) > 3 && rel[:3] == ".."+string(os.PathSeparator) {
@@ -187,7 +191,7 @@ func (s *Service) TorrentFilePath(ctx context.Context, id string, index int) (st
 			}
 			st, err := os.Stat(resolved)
 			if err != nil {
-				return "", err
+				return "", nativeFileAccessError(err)
 			}
 			if !st.Mode().IsRegular() {
 				return "", errors.New("not a regular file")
@@ -196,4 +200,14 @@ func (s *Service) TorrentFilePath(ctx context.Context, id string, index int) (st
 		}
 	}
 	return "", errors.New("file not found")
+}
+
+func nativeFileAccessError(err error) error {
+	if os.IsNotExist(err) {
+		return errors.New("file not found in its download folder. It may have been moved or renamed; use Locate existing files in Storage & location, then recheck")
+	}
+	if os.IsPermission(err) {
+		return errors.New("Mosaic cannot access this file. Check the download folder permissions and try again")
+	}
+	return errors.New("file could not be accessed. Check the download folder and try again")
 }
