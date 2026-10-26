@@ -17,23 +17,30 @@ import (
 )
 
 func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath string) (TorrentID, error) {
-	// SECURITY: savePath is caller-controlled. In multi-user mosaicd a
-	// non-admin must NOT be able to MkdirAll into arbitrary daemon-writable
-	// paths (/etc/cron.d, ~root/.ssh, another user's home). Callers in
-	// api/service.go must funnel non-admin save paths through
-	// engine.ValidateSavePath(userRoot, savePath, /*restrictToRoot=*/ true)
-	// BEFORE invoking AddMagnet. Admin and single-user-desktop callers
-	// pass restrictToRoot=false to keep the current unrestricted behavior.
-	// This function intentionally does not re-validate because the engine
-	// doesn't know the caller's role/userID — that context lives in api/.
-	if err := os.MkdirAll(savePath, 0o755); err != nil {
-		return "", err
+	return a.Add(ctx, AddRequest{Magnet: magnet, SavePath: savePath})
+}
+
+func (a *AnacrolixBackend) Add(ctx context.Context, req AddRequest) (TorrentID, error) {
+	var spec *torrent.TorrentSpec
+	var err error
+	if len(req.TorrentFile) > 0 {
+		mi, e := metainfo.Load(bytes.NewReader(req.TorrentFile))
+		if e != nil {
+			return "", e
+		}
+		spec, err = torrent.TorrentSpecFromMetaInfoErr(mi)
+	} else {
+		spec, err = torrent.TorrentSpecFromMagnetUri(req.Magnet)
 	}
-	spec, err := torrent.TorrentSpecFromMagnetUri(magnet)
 	if err != nil {
 		return "", err
 	}
-	spec.Storage = newFileStorage(savePath, a.pieceCompletion, a.preallocateFullFiles)
+	if err = os.MkdirAll(req.SavePath, 0755); err != nil {
+		return "", err
+	}
+	spec.DisallowDataDownload = true // Verification and file choices precede payload requests.
+	spec.DisallowDataUpload = req.Paused
+	spec.Storage = newFileStorage(req.SavePath, a.pieceCompletion, a.preallocateFullFiles)
 	t, added, err := a.client.AddTorrentSpec(spec)
 	if err != nil {
 		return "", err
@@ -43,9 +50,19 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 		return id, nil
 	}
 	a.mu.Lock()
-	a.bySaveTo[id] = savePath
+	a.bySaveTo[id] = req.SavePath
 	a.byID[id] = t
 	a.mu.Unlock()
+	a.pausedMu.Lock()
+	a.paused[id] = req.Paused
+	if a.filePriorities == nil {
+		a.filePriorities = make(map[TorrentID]map[int]Priority)
+	}
+	a.filePriorities[id] = make(map[int]Priority)
+	for i, p := range req.Priorities {
+		a.filePriorities[id][i] = p
+	}
+	a.pausedMu.Unlock()
 	a.installWriteErrorHook(id, t)
 	a.spawnVerify(id, t)
 	return id, nil
@@ -54,19 +71,59 @@ func (a *AnacrolixBackend) AddMagnet(ctx context.Context, magnet, savePath strin
 // spawnVerify tracks background verification for shutdown. Once an add has
 // succeeded, metadata retrieval must outlive the request that added it.
 func (a *AnacrolixBackend) spawnVerify(id TorrentID, t *torrent.Torrent) {
+	_ = a.startVerification(id, t, func(ctx context.Context) { a.verifyAndStart(ctx, id, t, true) })
+}
+
+// A remove cancels and drains our verifier before closing the library's storage.
+func (a *AnacrolixBackend) startVerification(id TorrentID, t *torrent.Torrent, task func(context.Context)) error {
+	a.verifyMu.Lock()
+	if a.verifyCancel[id] != nil {
+		a.verifyMu.Unlock()
+		return errors.New("verification already running")
+	}
+	if a.verifyCancel == nil {
+		a.verifyCancel = make(map[TorrentID]context.CancelFunc)
+		a.verifyDone = make(map[TorrentID]chan struct{})
+	}
+	ctx, cancel := context.WithCancel(a.engineCtx)
+	done := make(chan struct{})
+	a.verifyCancel[id] = cancel
+	a.verifyDone[id] = done
+	a.verifying[id] = true
 	a.verifyWg.Add(1)
+	a.verifyMu.Unlock()
 	go func() {
 		defer a.verifyWg.Done()
-		a.verifyAndStart(id, t)
+		task(ctx)
+		a.mu.Lock()
+		a.verifyMu.Lock()
+		if a.byID[id] == t {
+			delete(a.verifying, id)
+		}
+		delete(a.verifyCancel, id)
+		delete(a.verifyDone, id)
+		a.verifyMu.Unlock()
+		a.mu.Unlock()
+		cancel()
+		close(done)
 	}()
+	return nil
+}
+func (a *AnacrolixBackend) stopVerification(id TorrentID) {
+	a.verifyMu.RLock()
+	cancel, done := a.verifyCancel[id], a.verifyDone[id]
+	a.verifyMu.RUnlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
 }
 
 // verifyAndStart hashes existing files (so resume picks up partials), then
 // either kicks DownloadAll OR — if Service marked this torrent as previously
 // complete and verify finds <100% — flags FilesMissing and pauses so the
 // app doesn't silently redownload bytes the user just deleted.
-func (a *AnacrolixBackend) verifyAndStart(id TorrentID, t *torrent.Torrent) {
-	ctx := a.engineCtx
+func (a *AnacrolixBackend) verifyAndStart(ctx context.Context, id TorrentID, t *torrent.Torrent, allowResume bool) {
 	// Wait for metainfo. AddFile already has it (channel is pre-closed);
 	// AddMagnet has to fetch it via DHT/PEX before we can hash anything.
 	// Listen on engineCtx too: anacrolix's gotMetainfoC is closed by
@@ -85,28 +142,6 @@ func (a *AnacrolixBackend) verifyAndStart(id TorrentID, t *torrent.Torrent) {
 		return
 	}
 
-	a.setVerifying(id, true)
-	defer a.setVerifying(id, false)
-
-	// Disk-space precheck. Once metadata is in we know how many bytes
-	// the torrent will need; if the save path's filesystem can't fit
-	// what's missing (BytesMissing already discounts what's on disk),
-	// fail fast with a clear error rather than letting anacrolix start
-	// requesting and surfacing ENOSPC chunk-write errors mid-flight.
-	// 64 MB headroom for filesystem overhead and a margin against
-	// concurrent writers; we'd rather error a borderline torrent than
-	// silently disable it after consuming the last few hundred MB.
-	if info := t.Info(); info != nil {
-		if needed := t.BytesMissing(); needed > 0 {
-			if free := diskFreeBytes(a.saveDirFor(id)); free >= 0 && free < needed+(64<<20) {
-				t.DisallowDataDownload()
-				a.raiseError(id, fmt.Errorf("insufficient disk space: %d bytes free, need %d (+64 MB headroom) for %q",
-					free, needed, info.Name))
-				return
-			}
-		}
-	}
-
 	// Fast-resume: if we have a snapshot from a prior session and the
 	// on-disk file state still matches, replay the saved per-piece
 	// bitmap into bolt to undo anacrolix's setCompletionFromPartFiles
@@ -121,7 +156,7 @@ func (a *AnacrolixBackend) verifyAndStart(id TorrentID, t *torrent.Torrent) {
 	// off-Mosaic between sessions), we fall through to verifyDataParallel
 	// — the bitmap would be lying about what's on disk. Same fall-through
 	// applies if no snapshot was ever saved (legacy or first-Add).
-	if a.snapshotStore != nil {
+	if a.snapshotStore != nil && allowResume {
 		if snap, wasComplete, bitmap, ok := a.snapshotStore.LoadPieceBitmap(id); ok {
 			if bitmap == nil {
 				log.Printf("verify: snapshot exists but no bitmap for %s — falling through to full hash", id)
@@ -166,7 +201,9 @@ func (a *AnacrolixBackend) verifyAndStart(id TorrentID, t *torrent.Torrent) {
 	}
 
 	verifyDataParallel(ctx, t)
-
+	if ctx.Err() != nil {
+		return
+	}
 	a.verifyMu.RLock()
 	wasComplete := a.expectedComplete[id]
 	a.verifyMu.RUnlock()
@@ -182,6 +219,7 @@ func (a *AnacrolixBackend) verifyAndStart(id TorrentID, t *torrent.Torrent) {
 		a.paused[id] = true
 		a.pausedMu.Unlock()
 		t.SetMaxEstablishedConns(0)
+		a.applyPostVerifyPriorities(id, t)
 		return
 	}
 
@@ -197,14 +235,30 @@ func (a *AnacrolixBackend) verifyAndStart(id TorrentID, t *torrent.Torrent) {
 // every file to Normal here would silently revert the sequential gradient, so
 // re-apply it instead when the flag is set.
 func (a *AnacrolixBackend) applyPostVerifyPriorities(id TorrentID, t *torrent.Torrent) {
-	a.pausedMu.RLock()
-	sequential := a.sequential[id]
-	a.pausedMu.RUnlock()
-	if sequential {
-		applySequentialPriorities(t, true)
+	a.pausedMu.Lock()
+	setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
+	for i, p := range a.filePriorities[id] {
+		if i >= 0 && i < len(t.Files()) {
+			t.Files()[i].SetPriority(prioToAnacrolix(p))
+		}
+	}
+	applySequentialPriorities(t, a.sequential[id])
+	if a.paused[id] {
+		t.SetMaxEstablishedConns(0)
+		a.pausedMu.Unlock()
 		return
 	}
-	setAllFilesPriority(t, anacrolix_types.PiecePriorityNormal)
+	a.pausedMu.Unlock()
+	if err := a.checkSelectedSpace(id, t); err != nil {
+		a.raiseError(id, err)
+		return
+	}
+	a.pausedMu.RLock()
+	defer a.pausedMu.RUnlock()
+	if !a.paused[id] {
+		t.AllowDataDownload()
+		t.AllowDataUpload()
+	}
 }
 
 // setAllFilesPriority is the file-aware replacement for t.DownloadAll().
@@ -416,20 +470,26 @@ func verifyDataParallel(ctx context.Context, t *torrent.Torrent) {
 		go func(idx int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_ = t.Piece(idx).VerifyDataContext(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			piece := t.Piece(idx)
+			if err := piece.VerifyDataContext(ctx); err != nil {
+				return
+			}
+			// VerifyDataContext can return while MarkComplete/MarkNotComplete is still writing.
+			for state := piece.State(); state.Marking || state.Hashing || state.QueuedForHash; state = piece.State() {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.Closed():
+					return
+				case <-time.After(time.Millisecond):
+				}
+			}
 		}(i)
 	}
 	wg.Wait()
-}
-
-func (a *AnacrolixBackend) setVerifying(id TorrentID, v bool) {
-	a.verifyMu.Lock()
-	if v {
-		a.verifying[id] = true
-	} else {
-		delete(a.verifying, id)
-	}
-	a.verifyMu.Unlock()
 }
 
 // MarkExpectedComplete marks this torrent as having been 100% on a prior
@@ -443,35 +503,7 @@ func (a *AnacrolixBackend) MarkExpectedComplete(id TorrentID) {
 }
 
 func (a *AnacrolixBackend) AddFile(ctx context.Context, blob []byte, savePath string) (TorrentID, error) {
-	// SECURITY: same caller-controlled-path concern as AddMagnet. See the
-	// note there. The api/service.go AddTorrentFile / AddTorrentBytes paths
-	// are expected to ValidateSavePath before calling in.
-	if err := os.MkdirAll(savePath, 0o755); err != nil {
-		return "", err
-	}
-	mi, err := metainfo.Load(bytes.NewReader(blob))
-	if err != nil {
-		return "", err
-	}
-	spec := torrent.TorrentSpecFromMetaInfo(mi)
-	spec.Storage = newFileStorage(savePath, a.pieceCompletion, a.preallocateFullFiles)
-	t, added, err := a.client.AddTorrentSpec(spec)
-	if err != nil {
-		return "", err
-	}
-	id := idFor(t)
-	if !added {
-		return id, nil
-	}
-	a.mu.Lock()
-	a.bySaveTo[id] = savePath
-	a.byID[id] = t
-	a.mu.Unlock()
-	a.installWriteErrorHook(id, t)
-	// Same verify-then-start flow as AddMagnet — the GotInfo wait inside
-	// verifyAndStart is a no-op here since metainfo is already attached.
-	a.spawnVerify(id, t)
-	return id, nil
+	return a.Add(ctx, AddRequest{TorrentFile: blob, SavePath: savePath})
 }
 
 func (a *AnacrolixBackend) Pause(id TorrentID) error {
@@ -494,10 +526,11 @@ func (a *AnacrolixBackend) Pause(id TorrentID) error {
 	// resumes piece requests because the priority lift is still in place.
 	// User sees a paused torrent that's still downloading. Disallow
 	// closes the gap regardless of conn-cap thrashing.
-	t.DisallowDataDownload()
-	t.SetMaxEstablishedConns(0)
 	a.pausedMu.Lock()
 	a.paused[id] = true
+	t.DisallowDataDownload()
+	t.DisallowDataUpload()
+	t.SetMaxEstablishedConns(0)
 	a.pausedMu.Unlock()
 	// Checkpoint the file state + per-piece bitmap. The bitmap is what
 	// makes fast-resume work for partial torrents post-anacrolix's
@@ -513,10 +546,21 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 	if !ok {
 		return errors.New("not found")
 	}
-	t.SetMaxEstablishedConns(int(a.maxConnsPerTorrent.Load()))
+	a.verifyMu.RLock()
+	verifying := a.verifying[id]
+	a.verifyMu.RUnlock()
+	if t.Info() != nil && !verifying {
+		if err := a.checkSelectedSpace(id, t); err != nil {
+			return err
+		}
+	}
 	a.pausedMu.Lock()
 	a.paused[id] = false
 	delete(a.scheduledPause, id)
+	t.SetMaxEstablishedConns(int(a.maxConnsPerTorrent.Load()))
+	// Resume is explicit permission to transfer; file priorities remain gated by verification.
+	t.AllowDataDownload()
+	t.AllowDataUpload()
 	a.pausedMu.Unlock()
 	// If this resume comes after a FilesMissing flag (user wants to redownload
 	// after files were deleted), clear the flag — VerifyData will rerun if
@@ -528,7 +572,6 @@ func (a *AnacrolixBackend) Resume(id TorrentID) error {
 	// stoppage: AllowDataDownload clears the dataDownloadDisallowed flag
 	// our write-error hook (and anacrolix's storage-completion error
 	// path) sets. Idempotent if it was never disallowed.
-	t.AllowDataDownload()
 	return nil
 }
 
@@ -583,21 +626,12 @@ func (a *AnacrolixBackend) Recheck(id TorrentID) error {
 	delete(a.snapshotSaved, id)
 	delete(a.snapshotRetryAt, id)
 	a.snapshotMu.Unlock()
-	a.setVerifying(id, true)
-	a.verifyWg.Add(1)
-	go func() {
-		defer a.verifyWg.Done()
-		defer a.setVerifying(id, false)
-		verifyDataParallel(a.engineCtx, t)
-		// Don't snapshot if the engine is shutting down — saveSnapshotIfComplete
-		// writes to the snapshot store, which Close will tear down right after
-		// it cancels engineCtx and waits on verifyWg.
-		if a.engineCtx.Err() != nil {
-			return
+	return a.startVerification(id, t, func(ctx context.Context) {
+		verifyDataParallel(ctx, t)
+		if ctx.Err() == nil {
+			a.saveSnapshotIfComplete(id, t)
 		}
-		a.saveSnapshotIfComplete(id, t)
-	}()
-	return nil
+	})
 }
 
 func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
@@ -605,18 +639,41 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	if !ok {
 		return errors.New("not found")
 	}
+	saveTo := a.saveDirFor(id)
+	var deletePaths []string
+	if deleteFiles && t.Info() != nil {
+		if err := sanityCheckSaveTo(saveTo); err != nil {
+			return err
+		}
+		for _, name := range contentPaths(t.Info().BestName(), t.Info().IsDir()) {
+			path, err := safeRemovePath(saveTo, name)
+			if err != nil {
+				return err
+			}
+			deletePaths = append(deletePaths, path)
+		}
+	}
+	a.stopVerification(id)
+	if _, err := a.quiesceSnapshots(a.engineCtx, id); err != nil {
+		return err
+	}
 	a.mu.Lock()
-	saveTo := a.bySaveTo[id]
 	delete(a.bySaveTo, id)
 	delete(a.byID, id)
 	a.mu.Unlock()
 	a.pausedMu.Lock()
+	delete(a.filePriorities, id)
 	delete(a.paused, id)
 	delete(a.queuePos, id)
 	delete(a.forceStart, id)
 	delete(a.sequential, id)
 	delete(a.scheduledPause, id)
 	a.pausedMu.Unlock()
+	a.verifyMu.Lock()
+	delete(a.verifying, id)
+	delete(a.expectedComplete, id)
+	delete(a.filesMissing, id)
+	a.verifyMu.Unlock()
 	a.snapshotMu.Lock()
 	delete(a.snapshotSaved, id)
 	delete(a.snapshotRetryAt, id)
@@ -649,34 +706,16 @@ func (a *AnacrolixBackend) Remove(id TorrentID, deleteFiles bool) error {
 	case <-time.After(5 * time.Second):
 		log.Printf("remove: t.Drop timeout for %s — proceeding without waiting", id)
 	}
-	if deleteFiles && saveTo != "" {
-		if info := t.Info(); info != nil {
-			// Path-traversal defense: a malicious .torrent's info.Name can be
-			// "../../something" — joining it raw would let RemoveAll walk above
-			// saveTo and delete arbitrary files. safeRemovePath validates
-			// containment (resolving symlinks on both ends when present) and
-			// returns an error we log+skip on. The in-memory unsubscribe
-			// (t.Drop, the map deletes above) has already happened — only the
-			// disk delete is conditional on validation.
-			//
-			// Additional defense-in-depth: saveTo itself was caller-controlled
-			// at Add time. In multi-user mode the api/ layer is expected to
-			// validate it via engine.ValidateSavePath before AddMagnet/AddFile,
-			// but we sanity-check here too — a saveTo that's empty, relative,
-			// contains NUL, or resolves to a filesystem root must not have
-			// RemoveAll fired on it under any circumstances.
-			if err := sanityCheckSaveTo(saveTo); err != nil {
-				log.Printf("refusing to delete files for torrent: saveTo=%q error=%v", saveTo, err)
-			} else {
-				path, err := safeRemovePath(saveTo, info.Name)
-				if err != nil {
-					log.Printf("refusing to delete files for torrent: name=%q error=%v", info.Name, err)
-				} else {
-					_ = os.RemoveAll(path)
-				}
+	if deleteFiles {
+		// Wait for storage closure even if tracker shutdown takes longer than five seconds.
+		<-dropDone
+		for _, path := range deletePaths {
+			if err := os.RemoveAll(path); err != nil {
+				return &RemoveFilesError{Err: err}
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -726,7 +765,13 @@ const snapshotSaveRetryBackoff = 30 * time.Second
 // goroutines several times per second forever, each taking the client lock.
 // Failures back off for snapshotSaveRetryBackoff before the next attempt.
 func (a *AnacrolixBackend) spawnSnapshotSave(id TorrentID, t *torrent.Torrent) {
+	a.mu.Lock()
+	if a.byID[id] != t {
+		a.mu.Unlock()
+		return
+	}
 	a.snapshotMu.Lock()
+	a.mu.Unlock()
 	if a.snapshotSaved[id] || a.snapshotInflight[id] || time.Now().Before(a.snapshotRetryAt[id]) {
 		a.snapshotMu.Unlock()
 		return
@@ -778,11 +823,20 @@ func (a *AnacrolixBackend) SetFilePriorities(id TorrentID, prios map[int]Priorit
 	}
 	files := t.Files()
 	for idx, p := range prios {
-		if idx < 0 || idx >= len(files) {
-			continue
+		if idx < 0 || idx >= len(files) || p < PrioritySkip || p > PriorityMax {
+			return errors.New("invalid file priority or index")
 		}
+	}
+	a.pausedMu.Lock()
+	if a.filePriorities[id] == nil {
+		a.filePriorities[id] = make(map[int]Priority)
+	}
+	for idx, p := range prios {
+		a.filePriorities[id][idx] = p
 		files[idx].SetPriority(prioToAnacrolix(p))
 	}
+	applySequentialPriorities(t, a.sequential[id])
+	a.pausedMu.Unlock()
 	return nil
 }
 
@@ -796,4 +850,48 @@ func prioToAnacrolix(p Priority) anacrolix_types.PiecePriority {
 		return anacrolix_types.PiecePriorityNow
 	}
 	return anacrolix_types.PiecePriorityNormal
+}
+
+// RemoveFilesError means the torrent stopped, but some downloaded data remains.
+type RemoveFilesError struct{ Err error }
+
+func (e *RemoveFilesError) Error() string {
+	return "torrent removed, but deleting files failed: " + e.Err.Error()
+}
+func (e *RemoveFilesError) Unwrap() error { return e.Err }
+
+func (a *AnacrolixBackend) checkSelectedSpace(id TorrentID, t *torrent.Torrent) error {
+	var needed int64
+	for _, f := range t.Files() {
+		if f.Priority() != anacrolix_types.PiecePriorityNone {
+			needed += f.Length() - f.BytesCompleted()
+		}
+	}
+	if free := FreeSpace(a.saveDirFor(id)); needed > 0 && free >= 0 && free < needed+(64<<20) {
+		return fmt.Errorf("insufficient disk space: %d bytes free, need %d (+64 MB headroom)", free, needed)
+	}
+	return nil
+}
+
+func (a *AnacrolixBackend) quiesceSnapshots(ctx context.Context, id TorrentID) (wasSaved bool, err error) {
+	a.snapshotMu.Lock()
+	wasSaved = a.snapshotSaved[id]
+	a.snapshotSaved[id] = true
+	a.snapshotMu.Unlock()
+	for {
+		a.snapshotMu.Lock()
+		busy := a.snapshotInflight[id]
+		a.snapshotMu.Unlock()
+		if !busy {
+			return wasSaved, nil
+		}
+		select {
+		case <-ctx.Done():
+			a.snapshotMu.Lock()
+			a.snapshotSaved[id] = wasSaved
+			a.snapshotMu.Unlock()
+			return wasSaved, ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
 }

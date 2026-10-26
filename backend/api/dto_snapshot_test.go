@@ -67,7 +67,7 @@ func dtoSnapshotCases() []snapshotCase {
 	}}
 	peers := []PeerDTO{{
 		IP: "10.0.0.1", Port: 51413, Client: "qBittorrent", Flags: "uTPex",
-		Progress: 0.42, DownloadRate: 1024, UploadRate: 2048, Country: "US",
+		Progress: 0.42, DownloadRate: 1024, UploadRate: 2048, Downloaded: 4096, Uploaded: 8192, Country: "US",
 	}}
 	trackers := []TrackerDTO{{
 		URL: "udp://tracker.example.com:1337", Status: "ok", Seeds: 10, Peers: 20,

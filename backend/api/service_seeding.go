@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -32,9 +33,11 @@ type SeedingDefaultsDTO struct {
 type SeedPolicyDTO struct {
 	// UseGlobal, when true, means the per-torrent override is cleared —
 	// the torrent reverts to global defaults.
-	UseGlobal    bool     `json:"use_global"`
-	RatioLimit   *float64 `json:"ratio_limit"`
-	TimeMinLimit *int     `json:"time_min_limit"`
+	UseGlobal             bool     `json:"use_global"`
+	RatioLimit            *float64 `json:"ratio_limit"`
+	TimeMinLimit          *int     `json:"time_min_limit"`
+	EffectiveRatioLimit   *float64 `json:"effective_ratio_limit,omitempty"`
+	EffectiveTimeMinLimit *int     `json:"effective_time_min_limit,omitempty"`
 }
 
 func (s *Service) GetSeedingDefaults(ctx context.Context) SeedingDefaultsDTO {
@@ -55,6 +58,9 @@ func (s *Service) GetSeedingDefaults(ctx context.Context) SeedingDefaultsDTO {
 func (s *Service) SetSeedingDefaults(ctx context.Context, d SeedingDefaultsDTO) error {
 	if !CallerFrom(ctx).CanChangeSettings() {
 		return ErrForbidden
+	}
+	if err := validateSeedLimits(d.RatioLimit, d.TimeMinLimit); err != nil {
+		return err
 	}
 	ratioStr := ""
 	if d.RatioLimit != nil {
@@ -78,23 +84,26 @@ func (s *Service) GetTorrentSeedPolicy(ctx context.Context, infohash string) (Se
 	if err != nil {
 		return SeedPolicyDTO{}, err
 	}
+	defaults := s.GetSeedingDefaults(ctx)
+	dto := SeedPolicyDTO{UseGlobal: true, EffectiveRatioLimit: defaults.RatioLimit, EffectiveTimeMinLimit: defaults.TimeMinLimit}
 	if rec.SeedPolicy == nil {
-		return SeedPolicyDTO{UseGlobal: true}, nil
+		return dto, nil
 	}
 	var p seedPolicyJSON
 	if err := json.Unmarshal([]byte(*rec.SeedPolicy), &p); err != nil {
-		return SeedPolicyDTO{UseGlobal: true}, nil
+		return dto, nil
 	}
-	return SeedPolicyDTO{
-		UseGlobal:    false,
-		RatioLimit:   p.RatioLimit,
-		TimeMinLimit: p.TimeMinLimit,
-	}, nil
+	return SeedPolicyDTO{UseGlobal: false, RatioLimit: p.RatioLimit, TimeMinLimit: p.TimeMinLimit, EffectiveRatioLimit: p.RatioLimit, EffectiveTimeMinLimit: p.TimeMinLimit}, nil
 }
 
 func (s *Service) SetTorrentSeedPolicy(ctx context.Context, infohash string, p SeedPolicyDTO) error {
 	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
 		return err
+	}
+	if !p.UseGlobal {
+		if err := validateSeedLimits(p.RatioLimit, p.TimeMinLimit); err != nil {
+			return err
+		}
 	}
 	if p.UseGlobal {
 		return s.torrents.SetSeedPolicy(ctx, infohash, nil)
@@ -127,6 +136,11 @@ type seedPolicyJSON struct {
 // ratio computed from it restarted at 0 on every launch and ratio limits
 // effectively never fired across sessions.
 func (s *Service) CheckSeedLimits(ctx context.Context) {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
+	if err := s.torrents.PruneTransferDays(ctx); err != nil {
+		log.Warn().Err(err).Msg("prune transfer history failed")
+	}
 	ctx = WithCaller(ctx, SystemCaller)
 	defaults := s.GetSeedingDefaults(ctx)
 	snaps := s.engine.List()
@@ -148,7 +162,7 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		totalUp := s.checkpointTransferTotals(ctx, &rec, snap)
+		totalUp, _ := s.checkpointTransferTotals(ctx, &rec, snap)
 		if !snap.Completed || snap.Paused {
 			continue
 		}
@@ -189,7 +203,7 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 			}
 		}
 		if exceeded {
-			if err := s.Pause(ctx, snap.ID); err != nil {
+			if err := s.pauseTorrent(ctx, snap.ID); err != nil {
 				log.Warn().Err(err).Str("id", string(snap.ID)).Msg("seed policy: pause failed")
 			} else {
 				log.Info().Str("id", string(snap.ID)).Str("name", snap.Name).Msg("seed policy: paused torrent — limit reached")
@@ -203,6 +217,7 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 	for hash := range s.lastSeedCounters {
 		if _, ok := live[hash]; !ok {
 			delete(s.lastSeedCounters, hash)
+			delete(s.sessionBaseline, hash)
 		}
 	}
 	s.seedCheckMu.Unlock()
@@ -210,15 +225,18 @@ func (s *Service) CheckSeedLimits(ctx context.Context) {
 
 // checkpointTransferTotals persists the delta between the engine's
 // session-scoped transfer counters and the last value this process observed
-// for the torrent, returning the updated cumulative uploaded total. A counter
+// for the torrent, returning the updated cumulative uploaded total and any persistence error. A counter
 // lower than the last observation means the engine restarted (counters reset
 // to zero) — the full current value is the delta. On a write failure the
 // observation is rolled back so the delta is retried next pass instead of
 // being lost.
-func (s *Service) checkpointTransferTotals(ctx context.Context, rec *persistence.TorrentRecord, snap engine.Snapshot) int64 {
+func (s *Service) checkpointTransferTotals(ctx context.Context, rec *persistence.TorrentRecord, snap engine.Snapshot) (int64, error) {
 	hash := string(snap.ID)
 	s.seedCheckMu.Lock()
 	last, seen := s.lastSeedCounters[hash]
+	if _, ok := s.sessionBaseline[hash]; !ok {
+		s.sessionBaseline[hash] = sessionCounters{up: rec.TotalUploaded, down: rec.TotalDownloaded}
+	}
 	upDelta, downDelta := snap.BytesUp-last.up, snap.BytesDown-last.down
 	if upDelta < 0 {
 		upDelta = snap.BytesUp
@@ -229,7 +247,7 @@ func (s *Service) checkpointTransferTotals(ctx context.Context, rec *persistence
 	s.lastSeedCounters[hash] = sessionCounters{up: snap.BytesUp, down: snap.BytesDown}
 	s.seedCheckMu.Unlock()
 	if upDelta == 0 && downDelta == 0 {
-		return rec.TotalUploaded
+		return rec.TotalUploaded, nil
 	}
 	if err := s.torrents.AddTransferTotals(ctx, hash, upDelta, downDelta); err != nil {
 		log.Warn().Err(err).Str("id", hash).Msg("seed policy: persist transfer totals failed")
@@ -240,9 +258,19 @@ func (s *Service) checkpointTransferTotals(ctx context.Context, rec *persistence
 			delete(s.lastSeedCounters, hash)
 		}
 		s.seedCheckMu.Unlock()
-		return rec.TotalUploaded
+		return rec.TotalUploaded, err
 	}
 	rec.TotalUploaded += upDelta
 	rec.TotalDownloaded += downDelta
-	return rec.TotalUploaded
+	return rec.TotalUploaded, nil
+}
+
+func validateSeedLimits(ratio *float64, minutes *int) error {
+	if ratio != nil && (math.IsNaN(*ratio) || math.IsInf(*ratio, 0) || *ratio < 0) {
+		return fmt.Errorf("seed ratio must be finite and non-negative")
+	}
+	if minutes != nil && *minutes < 1 {
+		return fmt.Errorf("seed time must be at least one minute")
+	}
+	return nil
 }

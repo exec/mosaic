@@ -1,4 +1,4 @@
-import {For, Show, type Component} from 'solid-js';
+import {createSignal, createUniqueId, For, Show, type Component} from 'solid-js';
 import {ChevronDown, ListFilter, Folder, Tag} from 'lucide-solid';
 import type {StatusFilter, TorrentCounts} from '../../lib/store';
 import type {CategoryDTO, TagDTO} from '../../lib/bindings';
@@ -31,22 +31,21 @@ type Props = {
   onNavigateSettingsPane: (p: SettingsPane) => void;
 };
 
-const Section: Component<{icon: typeof ListFilter; title: string; count?: number; children?: any}> = (p) => (
-  <div class="px-2">
-    <div class="flex items-center justify-between px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-      <span class="inline-flex items-center gap-1.5">
-        <p.icon class="h-3 w-3" />
-        {p.title}
-      </span>
-      <ChevronDown class="h-3 w-3 text-zinc-600" />
-    </div>
-    {p.children}
-  </div>
-);
+const Section: Component<{icon: typeof ListFilter; title: string; children?: any}> = (p) => {
+ const key=`mosaic.sidebar.${p.title.toLowerCase()}`,id=createUniqueId();
+ const [open,setOpen]=createSignal((()=>{try{return localStorage.getItem(key)!=='collapsed';}catch{return true;}})());
+ const toggle=()=>{setOpen(v=>!v);try{localStorage.setItem(key,open()?'open':'collapsed');}catch{}};
+ return <div class="px-2">
+  <button type="button" aria-expanded={open()} aria-controls={id} onClick={toggle} class="flex w-full items-center justify-between rounded px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 hover:bg-white/[.04] hover:text-zinc-300">
+   <span class="inline-flex items-center gap-1.5"><p.icon class="h-3 w-3"/>{p.title}</span><ChevronDown class="h-3 w-3 transition-transform" classList={{'-rotate-90':!open()}}/>
+  </button>
+  <div id={id} hidden={!open()}>{p.children}</div>
+ </div>;
+};
 
 export function FilterRail(props: Props) {
   return (
-    <aside class="flex h-full w-60 shrink-0 flex-col gap-3 border-r border-white/[.04] bg-white/[.01] pt-10 pb-3">
+    <aside class="flex h-full w-60 shrink-0 overflow-y-auto flex-col gap-3 border-r border-white/[.04] bg-white/[.01] pt-10 pb-3">
       <Section icon={ListFilter} title="Status">
         <ul class="flex flex-col gap-px">
           <For each={statusItems}>

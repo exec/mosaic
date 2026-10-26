@@ -1,13 +1,23 @@
-import {createEffect, createSignal, on, Show} from 'solid-js';
+import {createEffect, createMemo, createSignal, on, Show} from 'solid-js';
+import {SeedPolicySection} from './SeedPolicySection';
+import {HealthPanel} from './HealthPanel';
+import {StorageSection} from './StorageSection';
 import {Copy} from 'lucide-solid';
 import {toast} from 'solid-sonner';
-import type {DetailDTO, SeedPolicyDTO} from '../../lib/bindings';
+import type {DetailDTO, InspectorTab, SeedingDefaultsDTO} from '../../lib/bindings';
 import {api} from '../../lib/bindings';
 import {fmtBytes, fmtPercent, fmtTimestamp} from '../../lib/format';
+import {isWailsRuntime} from '../../lib/runtime';
 import {userErr} from '../../lib/errors';
 
 type Props = {
   detail: DetailDTO | null;
+  canEdit: boolean;
+  seedingDefaults?: SeedingDefaultsDTO;
+  canRelocate?: boolean;
+  canChangeSettings?: boolean;
+  downloadRate?: number;
+  onTabChange: (tab: InspectorTab) => void;
   sequential: boolean;
   onToggleSequential: () => void;
 };
@@ -15,8 +25,8 @@ type Props = {
 function Row(props: {label: string; children: any}) {
   return (
     <div class="flex justify-between gap-3 border-b border-white/[.03] py-2 text-xs">
-      <span class="text-zinc-500">{props.label}</span>
-      <span class="text-right font-mono tabular-nums text-zinc-200 break-all">{props.children}</span>
+      <span class="shrink-0 text-zinc-500">{props.label}</span>
+      <span class="min-w-0 text-right font-mono tabular-nums text-zinc-200 break-all">{props.children}</span>
     </div>
   );
 }
@@ -49,10 +59,11 @@ function RateLimitRow(props: {
 
   return (
     <div class="flex justify-between gap-3 border-b border-white/[.03] py-2 text-xs items-center">
-      <span class="text-zinc-500">{props.label}</span>
+      <span class="shrink-0 text-zinc-500">{props.label}</span>
       <span class="flex items-center gap-1.5">
         <input
           type="number"
+          aria-label={props.label}
           min="0"
           step="1"
           class="w-20 rounded border border-white/[.06] bg-black/30 px-1.5 py-0.5 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -79,6 +90,7 @@ function ToggleRow(props: {label: string; description: string; checked: boolean;
         type="button"
         role="switch"
         aria-checked={props.checked}
+        aria-label={props.label}
         onClick={props.onChange}
         class={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/20 ${props.checked ? 'bg-accent-500' : 'bg-white/10'}`}
       >
@@ -87,128 +99,6 @@ function ToggleRow(props: {label: string; description: string; checked: boolean;
         />
       </button>
     </div>
-  );
-}
-
-function SeedPolicySection(props: {infohash: string; completed: boolean}) {
-  const [, setPolicy] = createSignal<SeedPolicyDTO | null>(null);
-  const [useGlobal, setUseGlobal] = createSignal(true);
-  const [noLimit, setNoLimit] = createSignal(false);
-  const [ratioEnabled, setRatioEnabled] = createSignal(false);
-  const [ratio, setRatio] = createSignal('');
-  const [timeEnabled, setTimeEnabled] = createSignal(false);
-  const [timeMin, setTimeMin] = createSignal('');
-
-  createEffect(() => {
-    const hash = props.infohash;
-    if (!hash) return;
-    api.getTorrentSeedPolicy(hash).then((p) => {
-      setPolicy(p);
-      if (p.use_global) {
-        setUseGlobal(true);
-        setNoLimit(false);
-        setRatioEnabled(false);
-        setTimeEnabled(false);
-      } else {
-        setUseGlobal(false);
-        const hasRatio = p.ratio_limit !== null && p.ratio_limit !== undefined;
-        const hasTime = p.time_min_limit !== null && p.time_min_limit !== undefined;
-        if (!hasRatio && !hasTime) {
-          setNoLimit(true);
-          setRatioEnabled(false);
-          setTimeEnabled(false);
-        } else {
-          setNoLimit(false);
-          setRatioEnabled(hasRatio);
-          setRatio(hasRatio ? String(p.ratio_limit) : '');
-          setTimeEnabled(hasTime);
-          setTimeMin(hasTime ? String(p.time_min_limit) : '');
-        }
-      }
-    }).catch(() => {});
-  });
-
-  const save = async () => {
-    const hash = props.infohash;
-    if (!hash) return;
-    let dto: SeedPolicyDTO;
-    if (useGlobal()) {
-      dto = {use_global: true, ratio_limit: null, time_min_limit: null};
-    } else if (noLimit()) {
-      dto = {use_global: false, ratio_limit: null, time_min_limit: null};
-    } else {
-      const r = ratioEnabled() && ratio() !== '' ? parseFloat(ratio()) : null;
-      const t = timeEnabled() && timeMin() !== '' ? parseInt(timeMin(), 10) : null;
-      dto = {use_global: false, ratio_limit: r, time_min_limit: t};
-    }
-    try {
-      await api.setTorrentSeedPolicy(hash, dto);
-      setPolicy(dto);
-      toast.success('Seed policy saved');
-    } catch (e) {
-      toast.error(`Couldn't save seed policy — ${String(e)}`);
-    }
-  };
-
-  return (
-    <Show when={props.completed}>
-      <div class="mt-3 border-t border-white/[.04] pt-3">
-        <div class="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">Seeding limits</div>
-        <div class="flex flex-col gap-1 mb-2">
-          <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
-            <input type="radio" name="seed-mode" checked={useGlobal()}
-              onChange={() => { setUseGlobal(true); setNoLimit(false); }}
-              class="accent-accent-500" />
-            Use global defaults
-          </label>
-          <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
-            <input type="radio" name="seed-mode" checked={!useGlobal() && noLimit()}
-              onChange={() => { setUseGlobal(false); setNoLimit(true); }}
-              class="accent-accent-500" />
-            No limit
-          </label>
-          <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
-            <input type="radio" name="seed-mode" checked={!useGlobal() && !noLimit()}
-              onChange={() => { setUseGlobal(false); setNoLimit(false); }}
-              class="accent-accent-500" />
-            Custom
-          </label>
-        </div>
-        <Show when={!useGlobal() && !noLimit()}>
-          <div class="flex flex-col gap-2 pl-1 mb-2">
-            <label class="flex items-center gap-2 text-xs text-zinc-300">
-              <input type="checkbox" checked={ratioEnabled()}
-                onChange={(e) => setRatioEnabled(e.currentTarget.checked)}
-                class="accent-accent-500" />
-              Stop at ratio
-              <Show when={ratioEnabled()}>
-                <input type="number" min={0} step={0.1}
-                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none"
-                  value={ratio()} placeholder="e.g. 2.0"
-                  onInput={(e) => setRatio(e.currentTarget.value)} />
-              </Show>
-            </label>
-            <label class="flex items-center gap-2 text-xs text-zinc-300">
-              <input type="checkbox" checked={timeEnabled()}
-                onChange={(e) => setTimeEnabled(e.currentTarget.checked)}
-                class="accent-accent-500" />
-              Stop after
-              <Show when={timeEnabled()}>
-                <input type="number" min={1}
-                  class="w-20 rounded border border-white/[.06] bg-black/30 px-2 py-0.5 text-right font-mono text-xs tabular-nums text-zinc-100 focus:border-accent-500/60 focus:outline-none"
-                  value={timeMin()} placeholder="minutes"
-                  onInput={(e) => setTimeMin(e.currentTarget.value)} />
-                <span class="text-zinc-500">min</span>
-              </Show>
-            </label>
-          </div>
-        </Show>
-        <button type="button" onClick={save}
-          class="mt-1 rounded bg-accent-500/20 px-3 py-1 text-xs font-medium text-accent-400 hover:bg-accent-500/30 transition-colors">
-          Save
-        </button>
-      </div>
-    </Show>
   );
 }
 
@@ -221,7 +111,8 @@ export function OverviewTab(props: Props) {
   // limits once per second for as long as the tab was open. Responses that
   // arrive after the user switched torrents are discarded so a slow reply
   // for torrent A can't populate B's inputs.
-  createEffect(on(() => props.detail?.id, (id) => {
+  const torrentID = createMemo(() => props.detail?.id);
+  createEffect(on(torrentID, (id) => {
     if (!id) return;
     api.getTorrentRateLimits(id).then((limits) => {
       if (props.detail?.id !== id) return; // stale — torrent changed mid-flight
@@ -232,7 +123,7 @@ export function OverviewTab(props: Props) {
 
   const saveDown = async (kbps: number) => {
     const id = props.detail?.id;
-    if (!id) return;
+    if (!id || !props.canEdit) return;
     await api.setTorrentRateLimits(id, kbps, upKbps());
     setDownKbps(kbps);
     toast.success(kbps === 0 ? 'Download limit removed' : `Download limited to ${kbps} KB/s`);
@@ -240,7 +131,7 @@ export function OverviewTab(props: Props) {
 
   const saveUp = async (kbps: number) => {
     const id = props.detail?.id;
-    if (!id) return;
+    if (!id || !props.canEdit) return;
     await api.setTorrentRateLimits(id, downKbps(), kbps);
     setUpKbps(kbps);
     toast.success(kbps === 0 ? 'Upload limit removed' : `Upload limited to ${kbps} KB/s`);
@@ -253,8 +144,16 @@ export function OverviewTab(props: Props) {
     >
       {(d) => (
         <div class="px-4 py-2">
-          <Row label="Save path">{d().save_path}</Row>
-          <Row label="Size">{fmtBytes(d().total_bytes)}</Row>
+          <HealthPanel detail={d()} rate={props.downloadRate ?? 0} canEdit={props.canEdit} onTabChange={props.onTabChange} />
+          <Row label="Save path">
+            <button type="button" class="break-all text-accent-300 hover:underline" title={isWailsRuntime() ? 'Open download folder' : 'Copy save path'} onClick={async () => {
+              try {
+                if (isWailsRuntime()) await api.openFolder(d().save_path);
+                else { await navigator.clipboard.writeText(d().save_path); toast.success('Save path copied'); }
+              } catch (err) { toast.error(`Couldn't access folder — ${userErr(err)}`); }
+            }}>{d().save_path}</button>
+          </Row>
+          <Row label="Size"><button type="button" class="text-accent-300 hover:underline" title="View files" onClick={() => props.onTabChange('files')}>{fmtBytes(d().total_bytes)} · Files</button></Row>
           <Row label="Done">
             {fmtBytes(d().bytes_done)} ({fmtPercent(d().progress)})
           </Row>
@@ -263,37 +162,36 @@ export function OverviewTab(props: Props) {
             {fmtBytes(d().total_down)} / {fmtBytes(d().total_up)}
           </Row>
           <Row label="Peers / Seeds">
-            {d().peers} / {d().seeds}
+            <button type="button" class="text-accent-300 hover:underline" title="View connected peers" onClick={() => props.onTabChange('peers')}>{d().peers} / {d().seeds}</button>
           </Row>
           <Row label="Added">{fmtTimestamp(d().added_at)}</Row>
           <Show when={d().completed_at}>
             <Row label="Completed">{fmtTimestamp(d().completed_at!)}</Row>
           </Show>
-          <RateLimitRow label="↓ Speed limit" kbps={downKbps()} onSave={saveDown} />
-          <RateLimitRow label="↑ Speed limit" kbps={upKbps()} onSave={saveUp} />
-          <ToggleRow
-            label="Sequential download"
-            description="Download pieces in order (useful for streaming media)"
-            checked={props.sequential}
-            onChange={props.onToggleSequential}
-          />
-          <Row label="Magnet">
-            <span class="inline-flex items-center gap-1.5">
-              <button
-                type="button"
-                class="grid h-5 w-5 place-items-center rounded text-zinc-500 hover:bg-white/[.06] hover:text-zinc-200"
-                onClick={() => {
-                  navigator.clipboard.writeText(d().magnet);
-                  toast.success('Magnet copied');
-                }}
-                title="Copy magnet"
-              >
-                <Copy class="h-3 w-3" />
-              </button>
-              <span class="max-w-[180px] truncate text-zinc-400">{d().magnet || '—'}</span>
-            </span>
+          <fieldset disabled={!props.canEdit} aria-label="Torrent transfer settings" class="min-w-0">
+            <RateLimitRow label="↓ Speed limit" kbps={downKbps()} onSave={saveDown} />
+            <RateLimitRow label="↑ Speed limit" kbps={upKbps()} onSave={saveUp} />
+            <ToggleRow
+              label="Sequential download"
+              description="Download pieces in order (useful for streaming media)"
+              checked={props.sequential}
+              onChange={() => { if (props.canEdit) props.onToggleSequential(); }}
+            />
+          </fieldset>
+          <Row label="Info hash">
+            <button type="button" class="inline-flex max-w-full items-center gap-1.5 text-zinc-400 hover:text-zinc-100" title="Copy info hash" onClick={async () => {
+              try { await navigator.clipboard.writeText(d().id); toast.success('Info hash copied'); }
+              catch (err) { toast.error(`Couldn't copy info hash — ${userErr(err)}`); }
+            }}><span class="truncate">{d().id}</span><Copy class="h-3 w-3 shrink-0" /></button>
           </Row>
-          <SeedPolicySection infohash={d().id} completed={d().completed} />
+          <Row label="Magnet">
+            <button type="button" disabled={!d().magnet} class="inline-flex max-w-full items-center gap-1.5 text-accent-300 hover:underline disabled:opacity-40" title="Copy magnet link" onClick={async () => {
+              try { await navigator.clipboard.writeText(d().magnet); toast.success('Magnet copied'); }
+              catch (err) { toast.error(`Couldn't copy magnet — ${userErr(err)}`); }
+            }}><span>Copy magnet link</span><Copy class="h-3 w-3 shrink-0" /></button>
+          </Row>
+          <StorageSection detail={d()} canRelocate={props.canRelocate ?? false} canChangeSettings={props.canChangeSettings ?? false} />
+          <SeedPolicySection canEdit={props.canEdit} infohash={d().id} defaults={props.seedingDefaults} />
         </div>
       )}
     </Show>

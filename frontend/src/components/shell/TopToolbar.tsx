@@ -1,9 +1,11 @@
+import {Show} from 'solid-js';
 import {Search, Magnet, FileDown, LayoutGrid, List, Zap} from 'lucide-solid';
 import {Button} from '../ui/Button';
 import {Tooltip} from '../ui/Tooltip';
 import type {Density} from '../../lib/store';
 
 type Props = {
+  selectedCount: number;
   searchQuery: string;
   onSearch: (q: string) => void;
   onAddMagnet: () => void;
@@ -29,7 +31,7 @@ export function TopToolbar(props: Props) {
           intercepted by the overlay and clicks would be interpreted as
           window drags. The toolbar's bare flex padding remains under the
           overlay, so dragging from empty toolbar space still works. */}
-      <div class="relative z-30 flex-1 max-w-md" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
+      <div class="relative z-30 min-w-0 flex-1 max-w-md" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
         <input
           type="text"
@@ -41,6 +43,9 @@ export function TopToolbar(props: Props) {
         />
       </div>
 
+      <Show when={props.selectedCount > 0}>
+        <span role="status" class="shrink-0 text-xs text-zinc-400">{props.selectedCount} selected</span>
+      </Show>
       <div class="relative z-30 flex items-center gap-1.5" style={{'--wails-draggable': 'no-drag', '-webkit-app-region': 'no-drag'}}>
         <Button variant="secondary" onClick={props.onAddTorrent}>
           <FileDown class="h-3.5 w-3.5" />

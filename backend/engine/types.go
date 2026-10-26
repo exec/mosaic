@@ -15,31 +15,38 @@ type AddRequest struct {
 	TorrentFile []byte
 	SavePath    string
 	Paused      bool
+	Priorities  map[int]Priority
 }
 
 // Snapshot is a point-in-time view of a torrent's state, suitable for the UI.
 type Snapshot struct {
-	ID            TorrentID
-	Name          string
-	Magnet        string
-	SavePath      string
-	TotalBytes    int64
-	BytesDone     int64
-	BytesDown     int64 // cumulative bytes downloaded this session
-	BytesUp       int64 // cumulative bytes uploaded this session
-	RateDown      int64 // instantaneous bytes/sec
-	RateUp        int64
-	Peers         int
-	Seeds         int
-	Paused        bool
-	Completed     bool
-	AddedAt       time.Time
-	QueuePosition int  // 0 = top of queue
-	ForceStart    bool
-	Sequential    bool // true if sequential piece download is enabled
-	Queued        bool // true if scheduler is holding it back
-	Verifying     bool // hashing existing files against the metainfo
-	FilesMissing  bool // was-complete on prior session, now isn't (user deleted files)
+	ID                TorrentID
+	Name              string
+	Magnet            string
+	SavePath          string
+	TotalBytes        int64
+	BytesDone         int64
+	BytesDown         int64 // cumulative bytes downloaded this session
+	BytesUp           int64 // cumulative bytes uploaded this session
+	RateDown          int64 // instantaneous bytes/sec
+	RateUp            int64
+	Peers             int
+	Seeds             int
+	Paused            bool
+	Completed         bool
+	AddedAt           time.Time
+	QueuePosition     int // 0 = top of queue
+	ForceStart        bool
+	Sequential        bool // true if sequential piece download is enabled
+	Queued            bool // true if scheduler is holding it back
+	Verifying         bool // hashing existing files against the metainfo
+	SelectionEmpty    bool
+	SelectionComplete bool
+	MetadataReady     bool
+	LastError         string
+	ErrorAt           time.Time
+	ErrorActive       bool
+	FilesMissing      bool // was-complete on prior session, now isn't (user deleted files)
 }
 
 // EventKind enumerates the kinds of EngineEvent.
@@ -64,6 +71,8 @@ type EngineEvent struct {
 // library. The production implementation wraps anacrolix/torrent; tests use a
 // fake.
 type Backend interface {
+	Add(ctx context.Context, req AddRequest) (TorrentID, error)
+	Relocate(ctx context.Context, id TorrentID, savePath string, move bool) error
 	AddMagnet(ctx context.Context, magnet, savePath string) (TorrentID, error)
 	AddFile(ctx context.Context, blob []byte, savePath string) (TorrentID, error)
 	Pause(id TorrentID) error
@@ -80,7 +89,8 @@ type Backend interface {
 	// uses DisallowDataDownload / AllowDataDownload / DisallowDataUpload /
 	// AllowDataUpload to implement a duty-cycle approximation.
 	SetTorrentRateLimits(id TorrentID, downBytesPerSec, upBytesPerSec int64) error
-	SetIPBlocklist(reader io.Reader) error                        // nil clears
+	SetBlockedPeers(ips []string)          // canonical IPs; independent of the downloaded blocklist
+	SetIPBlocklist(reader io.Reader) error // nil clears
 	// ApplyPerTorrentMaxPeers updates the established-connection cap for every
 	// running torrent. Pass 0 to fall back to the engine's default (anacrolix
 	// uses 80). New torrents added afterwards inherit this value via the
@@ -138,7 +148,10 @@ type PeerEntry struct {
 	Progress     float64 // 0..1
 	DownloadRate int64   // bytes/sec from this peer
 	UploadRate   int64   // bytes/sec to this peer
-	CountryCode  string  // ISO-3166 alpha-2; empty if unknown
+	// shortcut: totals reset on reconnect; persist peer history if lifetime accounting is needed.
+	Downloaded  int64  // useful payload bytes received on this connection
+	Uploaded    int64  // payload bytes sent on this connection
+	CountryCode string // ISO-3166 alpha-2; empty if unknown
 }
 
 // TrackerEntry is one tracker URL announced by the torrent.

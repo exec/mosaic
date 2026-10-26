@@ -71,8 +71,8 @@ func (a *AnacrolixBackend) SetTorrentRateLimits(id TorrentID, downBPS, upBPS int
 		if !ok {
 			return nil
 		}
-		t.AllowDataDownload()
-		t.AllowDataUpload()
+		a.allowTransferIfReady(id, t, false)
+		a.allowTransferIfReady(id, t, true)
 	}
 	return nil
 }
@@ -114,15 +114,25 @@ func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent
 		case <-a.engineCtx.Done():
 			// Engine shutting down — re-enable before exit so state is clean.
 			if dlBlocked {
-				t.AllowDataDownload()
+				a.allowTransferIfReady(id, t, false)
 			}
 			if ulBlocked {
-				t.AllowDataUpload()
+				a.allowTransferIfReady(id, t, true)
 			}
 			return
 		case <-ticker.C:
 		}
 
+		current, ok := a.find(id)
+		if !ok {
+			return
+		}
+		if current != t {
+			t = current
+			prevDown, prevUp = readStats()
+			dlBlocked = false
+			ulBlocked = false
+		}
 		a.perLimitMu.RLock()
 		downLimit := a.perTorrentDown[id]
 		upLimit := a.perTorrentUp[id]
@@ -145,10 +155,10 @@ func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent
 			delete(a.limiterRunning, id)
 			a.perLimitMu.Unlock()
 			if dlBlocked {
-				t.AllowDataDownload()
+				a.allowTransferIfReady(id, t, false)
 			}
 			if ulBlocked {
-				t.AllowDataUpload()
+				a.allowTransferIfReady(id, t, true)
 			}
 			return
 		}
@@ -179,13 +189,13 @@ func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent
 				} else {
 					// Under budget — allow.
 					if dlBlocked {
-						t.AllowDataDownload()
+						a.allowTransferIfReady(id, t, false)
 						dlBlocked = false
 					}
 				}
 			}
 		} else if dlBlocked {
-			t.AllowDataDownload()
+			a.allowTransferIfReady(id, t, false)
 			dlBlocked = false
 		}
 
@@ -198,12 +208,12 @@ func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent
 				}
 			} else {
 				if ulBlocked {
-					t.AllowDataUpload()
+					a.allowTransferIfReady(id, t, true)
 					ulBlocked = false
 				}
 			}
 		} else if ulBlocked {
-			t.AllowDataUpload()
+			a.allowTransferIfReady(id, t, true)
 			ulBlocked = false
 		}
 	}
@@ -212,3 +222,21 @@ func (a *AnacrolixBackend) runPerTorrentLimiter(id TorrentID, t *torrent.Torrent
 // AddTracker adds a single tracker URL to an existing torrent in its own tier.
 // anacrolix's AddTrackers takes a slice of tiers ([][]string); we pass one
 // tier containing the single URL so it doesn't compete with metainfo trackers.
+
+// Pause/verification gates take precedence over the rate limiter's allow phase.
+func (a *AnacrolixBackend) allowTransferIfReady(id TorrentID, t *torrent.Torrent, upload bool) {
+	a.pausedMu.RLock()
+	defer a.pausedMu.RUnlock()
+	a.verifyMu.RLock()
+	verifying := a.verifying[id]
+	a.verifyMu.RUnlock()
+	current, ok := a.find(id)
+	if !ok || current != t || a.paused[id] || verifying {
+		return
+	}
+	if upload {
+		t.AllowDataUpload()
+	} else {
+		t.AllowDataDownload()
+	}
+}

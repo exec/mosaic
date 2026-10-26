@@ -111,9 +111,17 @@ func applySequentialPriorities(t *torrent.Torrent, sequential bool) {
 	if !sequential {
 		// Reset to Normal so the default rarest-first strategy takes over.
 		for i := 0; i < n; i++ {
-			t.Piece(i).SetPriority(anacrolix_types.PiecePriorityNormal)
+			t.Piece(i).SetPriority(anacrolix_types.PiecePriorityNone)
 		}
 		return
+	}
+	wanted := make([]bool, n)
+	for _, f := range t.Files() {
+		if f.Priority() != anacrolix_types.PiecePriorityNone {
+			for i := f.BeginPieceIndex(); i < f.EndPieceIndex() && i < n; i++ {
+				wanted[i] = true
+			}
+		}
 	}
 	// Divide pieces into up to 5 buckets mapped to priority levels
 	// PiecePriorityNow (5) → PiecePriorityNormal (1).
@@ -126,6 +134,9 @@ func applySequentialPriorities(t *torrent.Torrent, sequential bool) {
 		}
 		// prio: levels (Now) for bucket 0, 1 (Normal) for bucket levels-1
 		prio := anacrolix_types.PiecePriority(levels - bucket)
+		if !wanted[i] {
+			prio = anacrolix_types.PiecePriorityNone
+		}
 		t.Piece(i).SetPriority(prio)
 	}
 }

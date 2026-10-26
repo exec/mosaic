@@ -283,23 +283,17 @@ jobs:
           find dist -type f -exec cp {} out/ \;
           cd out
           sha256sum * > SHA256SUMS
+      - name: Prepare complete release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_release_notes.py'
+          python3 scripts/release_notes.py "$RELEASE_TAG" > release-notes.md
       - name: Draft GitHub release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           files: |
             out/*
-          generate_release_notes: true
-          body: |
-            ## Mosaic ${{ github.ref_name }}
-
-            ### Downloads
-
-            - **macOS:** `Mosaic-${{ github.ref_name }}-darwin-universal.dmg`
-            - **Linux (GUI):** `.deb`, `.rpm`, `.AppImage`
-            - **Linux (headless daemon):** `Mosaic-${{ github.ref_name }}-linux-amd64-mosaicd.{deb,rpm}` + `mosaicd-${{ github.ref_name }}-linux-amd64.tar.gz`
-            - **Windows:** installer + portable `.exe`
-
-            See `SHA256SUMS` for checksum verification.
-
-            (Auto-update users: Mosaic will pick this up within 24h. Use Settings → Updates → Check now to fetch immediately.)
+          generate_release_notes: false
+          body_path: release-notes.md

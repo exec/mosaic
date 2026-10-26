@@ -27,7 +27,7 @@ export function InspectorTabs(props: Props) {
           // Active tab: tinted bg + accent text + an inset 2px accent underline
           // via box-shadow. The underline gives the 5-tab strip a clear "you are
           // here" anchor that the previous flat-panel treatment lacked.
-          class="flex-1 rounded px-2 py-1 text-xs text-zinc-400 transition-colors duration-100 hover:text-zinc-100 data-[pressed]:bg-white/10 data-[pressed]:text-accent-200 data-[pressed]:shadow-[inset_0_-2px_0_var(--color-accent-500)]"
+          class="min-w-0 flex-1 rounded px-1 py-1 text-xs text-zinc-400 transition-colors duration-100 hover:text-zinc-100 data-[pressed]:bg-white/10 data-[pressed]:text-accent-200 data-[pressed]:shadow-[inset_0_-2px_0_var(--color-accent-500)]"
         >
           {it.label}
         </ToggleGroup.Item>

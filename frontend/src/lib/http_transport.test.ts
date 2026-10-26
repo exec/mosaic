@@ -28,6 +28,7 @@ function makeMockFetch(responses: MockResp[]) {
 class MockWS {
   static instances: MockWS[] = [];
   url: string;
+  onopen: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   onclose: ((ev: CloseEvent) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
@@ -277,4 +278,51 @@ describe('http_transport.on (WebSocket)', () => {
       vi.useRealTimers();
     }
   });
+});
+
+test('peer block methods use the shared web endpoint', async () => {
+  const {fetchImpl, calls} = makeMockFetch([{body: ['2001:db8::1']}, {body: {ok: true}}]);
+  const t = makeHTTPTransport('http://localhost', {fetchImpl, wsCtor: MockWS as any});
+  expect(await t.invoke('ListBlockedPeers')).toEqual(['2001:db8::1']);
+  await t.invoke('SetPeerBlocked', '2001:db8::1', false);
+  expect(calls.map((c) => [c.init.method, c.url])).toEqual([
+    ['GET', 'http://localhost/api/peers/blocked'], ['PUT', 'http://localhost/api/peers/blocked'],
+  ]);
+  expect(JSON.parse(calls[1].init.body as string)).toEqual({ip: '2001:db8::1', blocked: false});
+});
+
+test('preparation and storage APIs use matching web routes and preserve options', async () => {
+  const {fetchImpl, calls} = makeMockFetch([{body: {id: 'prepared'}}, {body: {id: 'prepared', metadata_ready: true}}, {body: {free_bytes: 123, preallocate: false}}, {body: {ok: true}}, {body: {ok: true}}]);
+  const t = makeHTTPTransport('http://localhost', {fetchImpl, wsCtor: MockWS as any});
+  const request = {magnet: '', torrent_file: btoa('torrent'), save_path: '/downloads'};
+  expect(await t.invoke('PrepareTorrent', request)).toBe('prepared');
+  await t.invoke('GetTorrentDetail', 'prepared');await t.invoke('GetStorage', 'prepared');
+  await t.invoke('RelocateTorrent', 'prepared', '/new', false);await t.invoke('SetPreallocate', true);
+  expect(calls.map((c) => [c.init.method, c.url])).toEqual([
+    ['POST', 'http://localhost/api/torrents/prepare'], ['GET', 'http://localhost/api/torrents/prepared/detail'], ['GET', 'http://localhost/api/torrents/prepared/storage'], ['POST', 'http://localhost/api/torrents/prepared/relocate'], ['PUT', 'http://localhost/api/storage/preallocate'],
+  ]);
+  expect(JSON.parse(calls[0].init.body as string)).toEqual(request);
+  expect(JSON.parse(calls[3].init.body as string)).toEqual({path: '/new', move: false});
+  expect(JSON.parse(calls[4].init.body as string)).toEqual({enabled: true});
+});
+
+
+test('connection state tracks recovery, last data, silent sockets, and timer cleanup', () => {
+ vi.useFakeTimers();MockWS.instances=[];
+ try {
+  const t=makeHTTPTransport('http://localhost',{wsCtor:MockWS as any});
+  const states:any[]=[];const off=t.on('connection:state',v=>states.push(v));
+  expect(states.at(-1).status).toBe('connecting');
+  const first=MockWS.instances[0];first.onopen?.({} as Event);
+  expect(states.at(-1)).toMatchObject({status:'connected',epoch:1,lastUpdateAt:0});
+  vi.advanceTimersByTime(10_000);first.push({type:'torrents:tick',payload:[]});
+  const last=states.at(-1).lastUpdateAt;expect(last).toBe(Date.now());
+  vi.advanceTimersByTime(10_000);expect(first.closed).toBe(false);
+  vi.advanceTimersByTime(5_000);expect(first.closed).toBe(true);
+  expect(states.at(-1)).toMatchObject({status:'reconnecting',lastUpdateAt:last});
+  vi.advanceTimersByTime(1000);const second=MockWS.instances[1];second.onopen?.({} as Event);
+  expect(states.at(-1)).toMatchObject({status:'connected',epoch:2});
+  first.push({type:'torrents:tick',payload:[]});expect(states.at(-1).lastUpdateAt).toBe(last);
+  off();expect(vi.getTimerCount()).toBe(0);expect(second.closed).toBe(true);
+ } finally {vi.useRealTimers();}
 });

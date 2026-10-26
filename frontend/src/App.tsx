@@ -10,11 +10,14 @@ import './lib/appearance';
 import {BrowserAuthGate} from './components/auth/BrowserAuthGate';
 import {WindowShell} from './components/shell/WindowShell';
 import {GnomeTrayPrompt} from './components/shell/GnomeTrayPrompt';
+import {TransferStatisticsModal} from './components/shell/TransferStatisticsModal';
+import {BulkActions} from './components/shell/BulkActions';
+import {RemoveTorrentModal} from './components/shell/RemoveTorrentModal';
 import {AddTorrentModal} from './components/shell/AddTorrentModal';
 import {ShareTorrentModal} from './components/shell/ShareTorrentModal';
 import {UpdateToast} from './components/shell/UpdateToast';
 import {TorrentList} from './components/list/TorrentList';
-import {canShare} from './lib/permissions';
+import {canChangeSettings, canShare} from './lib/permissions';
 import {userErr} from './lib/errors';
 import {Inspector} from './components/inspector/Inspector';
 import './index.css';
@@ -45,10 +48,19 @@ export default function App() {
 
 function AuthenticatedApp() {
   const store = createTorrentsStore();
+  const [statisticsOpen, setStatisticsOpen] = createSignal(false);
+  const [droppedFilename,setDroppedFilename]=createSignal('');
+  let droppedResolve:((added:boolean)=>void)|undefined,dropSucceeded=false;
+  const closeAddModal=()=>{setAddModalOpen(false);const resolve=droppedResolve;droppedResolve=undefined;resolve?.(dropSucceeded);};
+  onCleanup(()=>{droppedResolve?.(false);droppedResolve=undefined;});
   const [addModalOpen, setAddModalOpen] = createSignal(false);
   const [addModalSource, setAddModalSource] = createSignal<'magnet' | 'file'>('magnet');
+  const [droppedMagnet, setDroppedMagnet] = createSignal('');
+  const [droppedBytes, setDroppedBytes] = createSignal<Uint8Array>();
   const [platform, setPlatform] = createSignal('');
   // shareId holds the torrent currently open in the Share dialog (null = closed).
+  const [removeIDs, setRemoveIDs] = createSignal<string[]>([]);
+  const removeTorrents = createMemo(() => store.state.torrents.filter((t) => removeIDs().includes(t.id)));
   const [shareId, setShareId] = createSignal<string | null>(null);
   onCleanup(() => store.dispose());
 
@@ -109,6 +121,14 @@ function AuthenticatedApp() {
     )
   );
 
+  const visibleSelection = createMemo(() => new Set(
+    filtered().filter((t) => store.state.selection.has(t.id)).map((t) => t.id),
+  ));
+  const canEditInspector = () => {
+    const torrent = store.state.torrents.find((t) => t.id === store.state.inspectorOpenId);
+    return torrent?.access === 'owner' || torrent?.access === 'editor';
+  };
+
   // All badge tallies (5 status + per-category + per-tag + queued) computed
   // in one pass over the torrent list per tick, instead of one .filter()
   // scan per badge in FilterRail / StatusBar.
@@ -159,38 +179,44 @@ function AuthenticatedApp() {
   };
 
   const handleAddTorrent = () => {
+    setDroppedMagnet('');setDroppedBytes(undefined);
     setAddModalSource('file');
     setAddModalOpen(true);
   };
 
   const handleAddMagnet = () => {
+    setDroppedMagnet('');setDroppedBytes(undefined);
     setAddModalSource('magnet');
     setAddModalOpen(true);
   };
 
   const handleMagnetDropped = async (m: string) => {
-    await store.addMagnet(m, '');
-    toast.success('Magnet added');
+    setDroppedMagnet(m);setDroppedBytes(undefined);setAddModalSource('magnet');setAddModalOpen(true);
   };
 
   // Global keyboard shortcuts
   onMount(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.defaultPrevented || e.isComposing || e.repeat || e.altKey || store.state.view !== 'torrents' || addModalOpen() || shareId() || removeIDs().length || statisticsOpen()) return;
+      if (e.target instanceof Element && e.target.closest(
+        'input, textarea, select, button, a[href], [contenteditable]:not([contenteditable="false"]), [role="button"], [role="switch"], [role="combobox"], [role="menu"], [role="menuitem"], [role="dialog"], [role="separator"]',
+      )) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
         e.preventDefault();
         store.selectAll();
+      } else if (e.metaKey || e.ctrlKey) {
+        return;
       } else if (e.key === 'Escape') {
         if (store.state.inspectorOpenId) store.closeInspector();
         else store.clearSelection();
       } else if (e.key === ' ') {
         e.preventDefault();
-        // Pause/resume the entire selection. Aggregate any failures into a
+        // Pause/resume the visible selection. Aggregate any failures into a
         // single toast so partial-success isn't invisible.
         const failures: string[] = [];
-        Promise.all([...store.state.selection].map(async (id) => {
+        Promise.all([...visibleSelection()].map(async (id) => {
           const t = store.state.torrents.find((x) => x.id === id);
-          if (!t) return;
+          if (!t || (t.access !== 'owner' && t.access !== 'editor')) return;
           try {
             await (t.paused ? store.resume(id) : store.pause(id));
           } catch (err) {
@@ -202,23 +228,10 @@ function AuthenticatedApp() {
           }
         });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        const ids = [...store.state.selection];
+        const ids = [...visibleSelection()];
         if (ids.length === 0) return;
         e.preventDefault();
-        // Bulk removal is destructive and a stray keystroke away — confirm
-        // first, matching the confirm() pattern used by the settings panes'
-        // destructive actions. A single torrent stays one keystroke.
-        if (ids.length > 1 && !confirm(`Remove ${ids.length} torrents from the list? Downloaded files are kept.`)) return;
-        const failures: string[] = [];
-        Promise.all(ids.map(async (id) => {
-          try { await store.remove(id, false); }
-          catch (err) { failures.push(`${id.slice(0, 8)}: ${String(err)}`); }
-        })).then(() => {
-          if (failures.length > 0) {
-            toast.error(`${failures.length} remove failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '…' : ''}`);
-          }
-        });
-        store.clearSelection();
+        setRemoveIDs(ids);
       }
     };
     window.addEventListener('keydown', handler);
@@ -257,6 +270,11 @@ function AuthenticatedApp() {
             : undefined
         }
         filteredTorrents={filtered()}
+        onOpenStatistics={() => setStatisticsOpen(true)}
+        connection={store.state.connection}
+        onRetryConnection={() => void store.refreshConnection()}
+        selectedCount={visibleSelection().size}
+        selectionToolbar={<BulkActions torrents={filtered().filter((t) => visibleSelection().has(t.id))} categories={store.state.categories} tags={store.state.tags} onClear={store.clearSelection} onRemove={() => setRemoveIDs([...visibleSelection()])} />}
         stats={store.state.stats}
         density={store.state.density}
         statusFilter={store.state.statusFilter}
@@ -273,17 +291,17 @@ function AuthenticatedApp() {
         onAddMagnet={handleAddMagnet}
         onAddTorrent={handleAddTorrent}
         onMagnetDropped={handleMagnetDropped}
-        onTorrentBytesDropped={async (bytes) => {
-          try {
-            await store.addTorrentBytes(bytes, '');
-            toast.success('Torrent added');
-          } catch (err) { toast.error(`Couldn't add torrent — ${userErr(err)}`); }
-        }}
+        onTorrentBytesDropped={(bytes,name) => new Promise<boolean>(resolve=>{
+          if(addModalOpen()){resolve(false);return;}
+          droppedResolve=resolve;dropSucceeded=false;setDroppedFilename(name??'');
+          setDroppedMagnet('');setDroppedBytes(bytes);setAddModalSource('file');setAddModalOpen(true);
+        })}
         altSpeedActive={store.state.limits.alt_active}
         onToggleAltSpeed={() => store.toggleAltSpeed()}
         counts={counts()}
         webConfig={store.state.webConfig}
         dhtEnabled={store.state.peerLimits.dht_enabled}
+        onNavigateConnectionSettings={()=>{store.setView('settings');store.setSettingsPane('connection');}}
         onNavigateWebSettings={() => {
           store.setView('settings');
           store.setSettingsPane('web');
@@ -351,6 +369,10 @@ function AuthenticatedApp() {
         inspector={
           <Inspector
             open={store.state.inspectorOpenId !== null}
+            seedingDefaults={store.state.seedingDefaults}
+            canEdit={canEditInspector()}
+            canRelocate={store.state.torrents.find((t) => t.id === store.state.inspectorOpenId)?.access === 'owner'}
+            canBlockPeers={canChangeSettings(store.state.currentUser)}
             detail={store.state.inspectorDetail}
             downloadRate={store.state.torrents.find((t) => t.id === store.state.inspectorOpenId)?.download_rate ?? 0}
             tab={store.state.inspectorTab}
@@ -361,14 +383,14 @@ function AuthenticatedApp() {
             onClose={() => store.closeInspector()}
             onSetFilePriority={async (index, priority) => {
               const id = store.state.inspectorOpenId;
-              if (!id) return;
+              if (!id || !canEditInspector()) return;
               try {
                 await store.setFilePriorities(id, {[index]: priority});
               } catch (err) { toast.error(`Couldn't set file priority — ${userErr(err)}`); }
             }}
             onToggleSequential={async () => {
               const id = store.state.inspectorOpenId;
-              if (!id) return;
+              if (!id || !canEditInspector()) return;
               const t = store.state.torrents.find((x) => x.id === id);
               if (!t) return;
               try {
@@ -381,20 +403,19 @@ function AuthenticatedApp() {
         <TorrentList
           torrents={filtered()}
           density={store.state.density}
-          selection={store.state.selection}
+          selection={visibleSelection()}
           categories={store.state.categories}
           tags={store.state.tags}
           onSelect={handleSelect}
+          onKeyboardSelect={(id,extend,ids)=>extend?store.extendSelectTo(id,ids):store.select(id)}
+          onInspect={id=>store.openInspector(id)}
           onPause={(id) => store.pause(id)}
           onResume={(id) => store.resume(id)}
           onRecheck={async (id) => {
             try { await api.recheck(id); toast.success('Recheck started'); }
             catch (err) { toast.error(`Recheck failed — ${userErr(err)}`); }
           }}
-          onRemove={async (id) => {
-            try { await store.remove(id, false); toast.success('Torrent removed'); }
-            catch (err) { toast.error(`Couldn't remove — ${userErr(err)}`); }
-          }}
+          onRemove={(id) => setRemoveIDs([id])}
           onSetCategory={async (id, categoryID) => {
             try {
               await store.setTorrentCategory(id, categoryID);
@@ -420,30 +441,30 @@ function AuthenticatedApp() {
           onShare={canShare(store.state.currentUser) ? (id) => setShareId(id) : undefined}
         />
       </WindowShell>
+      <TransferStatisticsModal open={statisticsOpen()} onClose={() => setStatisticsOpen(false)} />
       <AddTorrentModal
         open={addModalOpen()}
         initialSource={addModalSource()}
         defaultSavePath={store.state.defaultSavePath}
         categories={store.state.categories}
         tags={store.state.tags}
-        onClose={() => setAddModalOpen(false)}
-        onSubmitMagnet={async (m, savePath, categoryID, tagIDs) => {
-          const id = await store.addMagnet(m, savePath);
+        onClose={closeAddModal}
+        initialMagnet={droppedMagnet()}
+        initialBytes={droppedBytes()}
+        initialFilename={droppedFilename()}
+        onAdded={async (id, categoryID, tagIDs) => {
           await applyOrganization(id, categoryID, tagIDs);
-          toast.success('Magnet added');
-        }}
-        onPickAndAddTorrent={async (savePath, categoryID, tagIDs) => {
-          const id = await store.pickAndAddTorrent(savePath);
-          if (!id) return; // user cancelled
-          await applyOrganization(id, categoryID, tagIDs);
-          toast.success('Torrent added');
-        }}
-        onAddTorrentBytes={async (bytes, savePath, categoryID, tagIDs) => {
-          const id = await store.addTorrentBytes(bytes, savePath);
-          await applyOrganization(id, categoryID, tagIDs);
-          toast.success('Torrent added');
+          dropSucceeded=true;toast.success('Torrent added');
         }}
       />
+      <RemoveTorrentModal torrents={removeTorrents()} onClose={() => setRemoveIDs([])} onRemove={async (deleteFiles) => {
+        const selected = [...removeTorrents()];
+        const results = await Promise.allSettled(selected.map((t) => store.remove(t.id, deleteFiles)));
+        const failed = results.flatMap((r, i) => r.status === 'rejected' ? [{id: selected[i].id, reason: `${selected[i].name}: ${userErr(r.reason)}`}] : []);
+        setRemoveIDs(failed.map((f) => f.id));
+        if (failed.length) toast.error(`${failed.length} removal failed: ${failed.slice(0, 3).map((f) => f.reason).join('; ')}`);
+        else {store.clearSelection();toast.success(`${selected.length} removed${deleteFiles ? ' with downloaded files' : ' · files kept'}`);}
+      }} />
       <ShareTorrentModal
         open={shareId() !== null}
         torrentID={shareId()}

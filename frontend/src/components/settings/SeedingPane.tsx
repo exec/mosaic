@@ -68,7 +68,7 @@ export function SeedingPane(props: Props) {
 
       <Field
         label="Ratio limit"
-        help="Stop seeding when uploaded / downloaded ≥ this value. 0 = disabled."
+        help="Stop after uploading this multiple of the completed torrent size. Uncheck to disable."
       >
         <div class="flex items-center gap-2">
           <label class="flex items-center gap-2 text-sm text-zinc-200">
@@ -96,7 +96,7 @@ export function SeedingPane(props: Props) {
 
       <Field
         label="Time limit"
-        help="Stop seeding after this many minutes of seeding. 0 = disabled."
+        help="Stop seeding after this many minutes. Uncheck to disable."
       >
         <div class="flex items-center gap-2">
           <label class="flex items-center gap-2 text-sm text-zinc-200">

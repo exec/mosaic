@@ -16,6 +16,8 @@ type Props = {
   tags: TagDTO[];
   // visibleIds is the id list in the on-screen (filtered + sorted) order, so
   // shift-click range select extends over exactly the rows the user sees.
+  onKeyboardSelect?: (id:string,extend:boolean,ids:string[])=>void;
+  onInspect?: (id:string)=>void;
   onSelect: (id: string, e: MouseEvent, visibleIds: string[]) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
@@ -119,6 +121,8 @@ export function TorrentList(props: Props) {
             torrents={props.torrents}
             selection={props.selection}
             onRowClick={props.onSelect}
+            onKeyboardSelect={props.onKeyboardSelect}
+            onInspect={props.onInspect}
           />
         </Match>
       </Switch>

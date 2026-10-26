@@ -1,0 +1,34 @@
+import {afterEach,beforeEach,expect,test,vi} from 'vitest';
+import {createSignal} from 'solid-js';
+import {render} from 'solid-js/web';
+import {api} from '../../lib/bindings';
+import {TransferStatisticsModal} from './TransferStatisticsModal';
+vi.mock('../../lib/bindings',()=>({api:{getTransferStatistics:vi.fn()}}));
+let dispose:()=>void;
+const totals={downloaded:1024,uploaded:2048};
+const data={session:totals,today:totals,lifetime:totals,session_started_at:Date.UTC(2026,9,24)/1000,sampled_at:Date.UTC(2026,9,25,1)/1000,days:[{day:'2026-10-25',...totals}]};
+beforeEach(()=>{vi.resetAllMocks();vi.mocked(api.getTransferStatistics).mockResolvedValue(data);});
+afterEach(()=>{dispose?.();document.body.innerHTML='';vi.useRealTimers();});
+test('fills missing UTC days and retains totals after refresh failure',async()=>{
+ dispose=render(()=><TransferStatisticsModal open onClose={()=>{}}/>,document.body);
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Library lifetime'));
+ expect(document.querySelectorAll('[aria-label="Daily transferred bytes"] button')).toHaveLength(30);
+ const select=document.querySelector<HTMLSelectElement>('[aria-label="History date range"]')!;
+ select.value='7';select.dispatchEvent(new Event('change',{bubbles:true}));
+ const days=document.querySelectorAll<HTMLButtonElement>('[aria-label="Daily transferred bytes"] button');
+ expect(days).toHaveLength(7);expect(days[0].getAttribute('aria-label')).toContain('2026-10-19');
+ days[6].click();expect(days[6].getAttribute('aria-pressed')).toBe('true');
+ vi.mocked(api.getTransferStatistics).mockRejectedValueOnce(new Error('Offline'));
+ Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Refresh statistics')!.click();
+ await vi.waitFor(()=>expect(document.querySelector('[role="alert"]')?.textContent).toContain('Offline'));
+ expect(document.body.textContent).toContain('Library lifetime');
+});
+test('closing cancels polling and ignores a pending response',async()=>{
+ vi.useFakeTimers();let resolve!:(v:any)=>void;
+ vi.mocked(api.getTransferStatistics).mockImplementation(()=>new Promise(r=>resolve=r));
+ const [open,setOpen]=createSignal(true);
+ dispose=render(()=><TransferStatisticsModal open={open()} onClose={()=>setOpen(false)}/>,document.body);
+ await Promise.resolve();expect(api.getTransferStatistics).toHaveBeenCalledTimes(1);
+ setOpen(false);resolve(data);await Promise.resolve();vi.advanceTimersByTime(90_000);
+ expect(api.getTransferStatistics).toHaveBeenCalledTimes(1);expect(document.body.textContent).not.toContain('Library lifetime');
+});

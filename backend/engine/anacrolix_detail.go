@@ -30,6 +30,17 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	filesMissing := a.filesMissing[id]
 	a.verifyMu.RUnlock()
 	snap := snapshotFor(t, a.rateFor(id), paused, queuePos, forceStart, sequential, queued, verifying, filesMissing)
+	var wanted, wantedDone int64
+	files := t.Files()
+	for _, f := range files {
+		if f.Priority() != anacrolix_types.PiecePriorityNone {
+			wanted += f.Length()
+			wantedDone += f.BytesCompleted()
+		}
+	}
+
+	snap.SelectionEmpty = len(files) > 0 && wanted == 0
+	snap.SelectionComplete = wanted > 0 && wanted == wantedDone
 	d := Detail{Snapshot: snap}
 
 	if scope.Files {
@@ -107,6 +118,8 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 				Progress:     pieceProgressOf(t, pc),
 				DownloadRate: dlRate,
 				UploadRate:   clampRate(peerStats.LastWriteUploadRate),
+				Downloaded:   cumDown,
+				Uploaded:     peerStats.ConnStats.BytesWrittenData.Int64(),
 				CountryCode:  "",
 			})
 		}
@@ -118,15 +131,8 @@ func (a *AnacrolixBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (De
 	}
 
 	if scope.Trackers {
-		// anacrolix v1.61 doesn't expose per-tracker announce state; the best
-		// signal we have is whether metadata has loaded (Info != nil). Before
-		// metadata, no tracker has produced a useful response yet → "Updating".
-		// After metadata, fall back to "OK" (best-effort). A future plan or
-		// upstream PR can refine this with real per-tracker error state.
-		status := "OK"
-		if t.Info() == nil {
-			status = "Updating"
-		}
+		// Metadata can arrive from peers, so it cannot prove any tracker succeeded.
+		status := "Status unavailable"
 		mi := t.Metainfo()
 		for _, tier := range mi.AnnounceList {
 			for _, url := range tier {

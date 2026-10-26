@@ -191,6 +191,14 @@ func Init(ctx context.Context, cfg Config) (*Backend, func(), error) {
 		sched,
 		cfg.EngineConfig.DefaultSavePath,
 	)
+	// Save the final observed transfer deltas before the engine and DB close.
+	closers = append(closers, func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := svc.GetTransferStatistics(api.WithCaller(flushCtx, api.SystemCaller)); err != nil {
+			log.Warn().Err(err).Msg("shutdown: checkpoint transfer totals failed")
+		}
+	})
 	// Set the build version up-front so AppVersion() / /api/version /
 	// the SPA's About pane all see it regardless of whether the updater
 	// is wired (the daemon never wires it). Desktop's AttachUpdater

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -721,4 +723,76 @@ func (a *App) streamWailsEvents(ctx context.Context) {
 			wailsruntime.EventsEmit(ctx, "inspector:tick", detail)
 		}
 	}
+}
+
+func (a *App) ListBlockedPeers() ([]string, error) {
+	return a.svc.ListBlockedPeers(a.context())
+}
+
+func (a *App) SetPeerBlocked(ip string, blocked bool) error {
+	return a.svc.SetPeerBlocked(a.context(), ip, blocked)
+}
+
+func (a *App) PrepareTorrent(req api.PrepareTorrentRequest) (string, error) {
+	return a.svc.PrepareTorrent(a.context(), req)
+}
+func (a *App) GetTorrentDetail(id string) (*api.DetailDTO, error) {
+	return a.svc.GetTorrentDetail(a.context(), id)
+}
+func (a *App) GetStorage(id string) (api.StorageDTO, error) { return a.svc.GetStorage(a.context(), id) }
+func (a *App) SetPreallocate(enabled bool) error            { return a.svc.SetPreallocate(a.context(), enabled) }
+func (a *App) RelocateTorrent(id, path string, move bool) error {
+	return a.svc.RelocateTorrent(a.context(), id, path, move)
+}
+func (a *App) PickTorrentFile() (string, error) {
+	path, err := wailsruntime.OpenFileDialog(a.context(), wailsruntime.OpenDialogOptions{Title: "Select .torrent file", Filters: []wailsruntime.FileFilter{{DisplayName: "Torrent files", Pattern: "*.torrent"}}})
+	if err != nil || path == "" {
+		return "", err
+	}
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(blob), nil
+}
+func (a *App) OpenTorrentFile(id string, index int, reveal bool) error {
+	path, err := a.svc.TorrentFilePath(a.context(), id, index)
+	if err != nil {
+		return err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		if reveal {
+			return exec.Command("open", "-R", path).Run()
+		}
+		return exec.Command("open", path).Run()
+	case "windows":
+		if reveal {
+			return exec.Command("explorer.exe", "/select,"+path).Start()
+		}
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", path).Start()
+	default:
+		if reveal {
+			path = filepath.Dir(path)
+		}
+		return exec.Command("xdg-open", path).Start()
+	}
+}
+
+func (a *App) GetTransferStatistics() (api.TransferStatisticsDTO, error) {
+	return a.svc.GetTransferStatistics(a.context())
+}
+
+func (a *App) PreviewRSSFilter(f api.FilterDTO) (api.FilterPreviewDTO, error) {
+	return a.svc.PreviewRSSFilter(a.context(), f)
+}
+func (a *App) ExportSettings() (api.SettingsBackupDTO, error) {
+	return a.svc.ExportSettings(a.context())
+}
+func (a *App) ImportSettings(b api.SettingsBackupDTO) error {
+	return a.svc.ImportSettings(a.context(), b)
+}
+func (a *App) ExportTorrent(id string) (string, error) { return a.svc.ExportTorrent(a.context(), id) }
+func (a *App) GetConnectionDiagnostics() (engine.ConnectionDiagnostics, error) {
+	return a.svc.GetConnectionDiagnostics(a.context())
 }

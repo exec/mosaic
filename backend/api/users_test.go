@@ -168,3 +168,22 @@ func TestUsers_ShareRequiresOwnership(t *testing.T) {
 	// Owner access cannot be granted via sharing.
 	require.Error(t, svc.ShareTorrent(bobCtx, string(id), carol.ID, persistence.AccessOwner))
 }
+
+func TestViewerCanInspectButCannotMutateInspectorSettings(t *testing.T) {
+	svc, _ := newTestService(t)
+	id, err := svc.AddMagnet(sysCtx(), "magnet:?xt=urn:btih:inspector", "")
+	require.NoError(t, err)
+	viewer := mkUser(t, svc, UserInput{Username: "viewer", Password: "password123", Role: persistence.RoleUser})
+	require.NoError(t, svc.ShareTorrent(sysCtx(), string(id), viewer.ID, persistence.AccessViewer))
+	ctx := asUser(t, svc, viewer.ID)
+	_, err = svc.GetTorrentRateLimits(ctx, string(id))
+	require.NoError(t, err)
+	_, err = svc.GetTorrentSeedPolicy(ctx, string(id))
+	require.NoError(t, err)
+	require.ErrorIs(t, svc.SetTorrentRateLimits(ctx, string(id), 10, 20), ErrForbidden)
+	require.ErrorIs(t, svc.SetTorrentSeedPolicy(ctx, string(id), SeedPolicyDTO{UseGlobal: true}), ErrForbidden)
+	require.ErrorIs(t, svc.SetFilePriorities(ctx, string(id), map[int]string{0: "high"}), ErrForbidden)
+	require.ErrorIs(t, svc.SetSequential(ctx, string(id), true), ErrForbidden)
+	require.ErrorIs(t, svc.AddTracker(ctx, string(id), "http://tracker.example/announce"), ErrForbidden)
+	require.ErrorIs(t, svc.RemoveTracker(ctx, string(id), "http://tracker.example/announce"), ErrForbidden)
+}

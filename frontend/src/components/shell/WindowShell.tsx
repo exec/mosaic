@@ -1,10 +1,11 @@
 import {Match, Show, Switch, type JSX} from 'solid-js';
-import type {AppView, Density, StatusFilter, TorrentCounts} from '../../lib/store';
+import type {AppView, Density, StatusFilter, TorrentCounts, AppState} from '../../lib/store';
 import type {CategoryDTO, GlobalStatsT, ServerFlavor, TagDTO, Torrent, UserDTO, WebConfigDTO} from '../../lib/bindings';
 import type {SettingsPane} from '../settings/SettingsSidebar';
 import {IconRail} from './IconRail';
 import {FilterRail} from './FilterRail';
 import {TopToolbar} from './TopToolbar';
+import {ConnectionBanner} from './ConnectionBanner';
 import {StatusBar} from './StatusBar';
 import {DropZone} from './DropZone';
 import {WindowControls} from './WindowControls';
@@ -26,6 +27,11 @@ type Props = {
   currentUser: UserDTO | null;
   onLogout?: () => void;
   filteredTorrents: Torrent[];
+  selectedCount: number;
+  connection?: AppState['connection'];
+  onRetryConnection?: () => void;
+  onOpenStatistics?: () => void;
+  selectionToolbar?: JSX.Element;
   stats: GlobalStatsT;
   density: Density;
   statusFilter: StatusFilter;
@@ -42,7 +48,7 @@ type Props = {
   onAddMagnet: () => void;
   onAddTorrent: () => void;
   onMagnetDropped: (m: string) => Promise<void>;
-  onTorrentBytesDropped: (bytes: Uint8Array) => Promise<void>;
+  onTorrentBytesDropped: (bytes: Uint8Array, name?: string) => Promise<boolean | void>;
   altSpeedActive: boolean;
   onToggleAltSpeed: () => void;
   // All torrent badge tallies, computed once per tick in App.tsx.
@@ -50,6 +56,7 @@ type Props = {
   webConfig: WebConfigDTO;
   dhtEnabled: boolean;
   onNavigateWebSettings: () => void;
+  onNavigateConnectionSettings?:()=>void;
   children: JSX.Element; // the main pane (TorrentList)
   inspector?: JSX.Element;
   settings?: JSX.Element;
@@ -170,6 +177,7 @@ export function WindowShell(props: Props) {
                     drag overlay (z-20) doesn't intercept their clicks. */}
                 <div class="flex flex-1 min-h-0 flex-col">
                   <TopToolbar
+                    selectedCount={props.selectedCount}
                     searchQuery={props.searchQuery}
                     onSearch={props.onSearchQuery}
                     onAddMagnet={props.onAddMagnet}
@@ -179,6 +187,8 @@ export function WindowShell(props: Props) {
                     altSpeedActive={props.altSpeedActive}
                     onToggleAltSpeed={props.onToggleAltSpeed}
                   />
+                  <ConnectionBanner connection={props.connection} onRetry={props.onRetryConnection} />
+                  {props.selectionToolbar}
                   <DropZone onMagnet={props.onMagnetDropped} onTorrentBytes={props.onTorrentBytesDropped}>
                     {/* The table view owns its scrollport (TorrentTable's
                         h-full overflow-auto container, which its row
@@ -188,24 +198,28 @@ export function WindowShell(props: Props) {
                         cards view (CardList) also scrolls itself; keep
                         overflow-auto here only as the fallback for the
                         non-virtualized empty state. */}
-                    <div class={props.density === 'table' ? 'h-full overflow-hidden' : 'h-full overflow-auto'}>
+                    <div class={props.density === 'table' ? 'h-full overflow-hidden' : 'h-full overflow-auto'} classList={{'opacity-50': props.connection?.stale}} aria-label={props.connection?.stale ? 'Torrent data may be out of date' : undefined}>
                       {props.children}
                     </div>
                   </DropZone>
                 </div>
               </Match>
               <Match when={props.view === 'settings'}>
+                <Show when={props.connection?.stale}><div class="pt-7"><ConnectionBanner connection={props.connection} onRetry={props.onRetryConnection} /></div></Show>
                 {props.settings}
               </Match>
             </Switch>
           </main>
-          <Show when={props.view === 'torrents'}>{props.inspector}</Show>
+          <Show when={props.view === 'torrents'}><div class="h-full min-w-0 shrink-0" classList={{'opacity-50': props.connection?.stale}}>{props.inspector}</div></Show>
         </div>
         <StatusBar
+          stale={props.connection?.stale}
+          onOpenStatistics={props.onOpenStatistics}
           stats={props.stats}
           queuedCount={props.counts.queued}
           webConfig={props.webConfig}
           dhtEnabled={props.dhtEnabled}
+          onOpenConnection={props.onNavigateConnectionSettings}
           onClickWeb={props.onNavigateWebSettings}
         />
         </div>

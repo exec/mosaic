@@ -14,6 +14,9 @@ export type TagDTO = {
 };
 
 export type Torrent = {
+  total_up?: number;
+  total_down?: number;
+  ratio?: number;
   id: string;
   name: string;
   magnet: string;
@@ -92,6 +95,8 @@ export type PeerDTO = {
   progress: number;
   download_rate: number;
   upload_rate: number;
+  downloaded: number;
+  uploaded: number;
   country: string;
 };
 
@@ -168,6 +173,14 @@ export type DetailDTO = {
   paused: boolean;
   completed: boolean;
   files_missing: boolean;
+  metadata_ready?: boolean;
+  selection_empty?: boolean;
+  selection_complete?: boolean;
+  verifying?: boolean;
+  queued?: boolean;
+  last_error?: string;
+  error_at?: number;
+  error_active?: boolean;
   files?: FileDTO[];
   peers_list?: PeerDTO[];
   trackers?: TrackerDTO[];
@@ -284,9 +297,24 @@ export type SeedPolicyDTO = {
   use_global: boolean;
   ratio_limit: number | null;
   time_min_limit: number | null;
+  effective_ratio_limit?: number;
+  effective_time_min_limit?: number;
 };
 
 export const api = {
+ previewRSSFilter:(f:FilterDTO)=>transport.invoke<FilterPreviewDTO>('PreviewRSSFilter',f),
+ exportSettings:()=>transport.invoke<SettingsBackupDTO>('ExportSettings'),
+ importSettings:(b:SettingsBackupDTO)=>transport.invoke<void>('ImportSettings',b),
+ exportTorrent:(id:string)=>transport.invoke<string>('ExportTorrent',id),
+ getConnectionDiagnostics:()=>transport.invoke<ConnectionDiagnosticsDTO>('GetConnectionDiagnostics'),
+  getTransferStatistics: () => transport.invoke<TransferStatisticsDTO>('GetTransferStatistics'),
+ prepareTorrent: (request: {magnet: string; torrent_file: string; save_path: string}) => transport.invoke<string>('PrepareTorrent', request),
+ getTorrentDetail: (id: string) => transport.invoke<DetailDTO>('GetTorrentDetail', id),
+ getStorage: (id: string) => transport.invoke<{free_bytes: number; preallocate: boolean}>('GetStorage', id),
+ setPreallocate: (enabled: boolean) => transport.invoke<void>('SetPreallocate', enabled),
+ relocateTorrent: (id: string, path: string, move: boolean) => transport.invoke<void>('RelocateTorrent', id, path, move),
+ pickTorrentFile: () => transport.invoke<string>('PickTorrentFile'),
+ openTorrentFile: (id: string, index: number, reveal: boolean) => transport.invoke<void>('OpenTorrentFile', id, index, reveal),
   addMagnet: (magnet: string, savePath: string) => transport.invoke<string>('AddMagnet', magnet, savePath),
   pickAndAddTorrent: (savePath: string) => transport.invoke<string>('PickAndAddTorrent', savePath),
   listTorrents: () => transport.invoke<Torrent[]>('ListTorrents'),
@@ -312,6 +340,8 @@ export const api = {
     transport.invoke<void>('SetTorrentCategory', infohash, categoryID),
   setFilePriorities: (infohash: string, prios: Record<number, 'skip' | 'normal' | 'high' | 'max'>) =>
     transport.invoke<void>('SetFilePriorities', infohash, prios),
+  listBlockedPeers: () => transport.invoke<string[]>('ListBlockedPeers'),
+  setPeerBlocked: (ip: string, blocked: boolean) => transport.invoke<void>('SetPeerBlocked', ip, blocked),
   addTracker: (infohash: string, url: string) => transport.invoke<void>('AddTracker', infohash, url),
   removeTracker: (infohash: string, url: string) => transport.invoke<void>('RemoveTracker', infohash, url),
   addTorrentBytes: (bytes: Uint8Array, savePath: string) =>
@@ -427,3 +457,17 @@ export type LaunchNotice = {
 export function onLaunchNotice(handler: (n: LaunchNotice) => void): () => void {
   return transport.on('launch:notice', handler);
 }
+
+export type TransferTotalsDTO = {uploaded: number; downloaded: number};
+export type TransferStatisticsDTO = {
+  session: TransferTotalsDTO;
+  today: TransferTotalsDTO;
+  lifetime: TransferTotalsDTO;
+  session_started_at: number;
+  sampled_at: number;
+  days: (TransferTotalsDTO & {day: string})[];
+};
+
+export interface FilterPreviewDTO {destination:string;items:(FeedItemDTO & {matches:boolean;already_handled:boolean;in_library:boolean})[]}
+export interface SettingsBackupDTO {version:1;limits:LimitsDTO;queue:QueueLimitsDTO;peers:PeerLimitsDTO;seeding:SeedingDefaultsDTO}
+export interface ConnectionDiagnosticsDTO {available:boolean;listeners:string[];inbound_peers:number;outbound_peers:number;dht_servers:number;dht_nodes:number;dht_good_nodes:number;dht_announces:number}

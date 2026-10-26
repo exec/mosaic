@@ -1,4 +1,5 @@
 import {createEffect, createSignal, Show} from 'solid-js';
+import {ManualPeerBlocks} from './ManualPeerBlocks';
 import {RefreshCw} from 'lucide-solid';
 import {toast} from 'solid-sonner';
 import type {BlocklistDTO} from '../../lib/bindings';
@@ -91,6 +92,7 @@ export function BlocklistPane(props: Props) {
           </div>
         </div>
       </div>
+      <ManualPeerBlocks />
     </div>
   );
 }

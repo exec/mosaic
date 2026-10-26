@@ -659,3 +659,62 @@ func itoa(n int) string {
 	}
 	return string(digits)
 }
+
+func TestHandlers_PeerBlocks(t *testing.T) {
+	f := newFixture(t)
+	key, err := f.svc.RotateAPIKey(sysCtx())
+	require.NoError(t, err)
+	for _, blocked := range []bool{true, false} {
+		rec := httptest.NewRecorder()
+		f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPut, "/api/peers/blocked", map[string]any{"ip": "2001:db8::1", "blocked": blocked}))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = httptest.NewRecorder()
+		f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/peers/blocked", nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var ips []string
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &ips))
+		if blocked {
+			require.Equal(t, []string{"2001:db8::1"}, ips)
+		} else {
+			require.Empty(t, ips)
+		}
+	}
+}
+
+func TestHandlers_PrepareDetailStorage(t *testing.T) {
+	f := newFixture(t)
+	key, err := f.svc.RotateAPIKey(sysCtx())
+	require.NoError(t, err)
+	req := api.PrepareTorrentRequest{Magnet: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", SavePath: t.TempDir()}
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/torrents/prepare", req))
+	require.Equal(t, 200, rec.Code, rec.Body.String())
+	var added struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &added))
+	require.NotEmpty(t, added.ID)
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/torrents/"+added.ID+"/detail", nil))
+	require.Equal(t, 200, rec.Code, rec.Body.String())
+	var detail api.DetailDTO
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &detail))
+	require.True(t, detail.Paused)
+	require.NotEmpty(t, detail.Files)
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPut, "/api/storage/preallocate", map[string]bool{"enabled": true}))
+	require.Equal(t, 200, rec.Code, rec.Body.String())
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/torrents/"+added.ID+"/storage", nil))
+	require.Equal(t, 200, rec.Code, rec.Body.String())
+	var storage api.StorageDTO
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &storage))
+	require.True(t, storage.Preallocate)
+	dest := t.TempDir()
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodPost, "/api/torrents/"+added.ID+"/relocate", map[string]any{"path": dest, "move": false}))
+	require.Equal(t, 200, rec.Code, rec.Body.String())
+	d, err := f.svc.GetTorrentDetail(sysCtx(), added.ID)
+	require.NoError(t, err)
+	require.Equal(t, dest, d.SavePath)
+}

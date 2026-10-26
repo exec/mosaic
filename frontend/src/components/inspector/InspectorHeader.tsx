@@ -1,4 +1,9 @@
-import {X} from 'lucide-solid';
+import {Download, X} from 'lucide-solid';
+import {createSignal} from 'solid-js';
+import {api} from '../../lib/bindings';
+import {downloadTorrent} from '../../lib/download';
+import {toast} from 'solid-sonner';
+import {userErr} from '../../lib/errors';
 import {fmtBytes, fmtETA, fmtPercent, fmtRate} from '../../lib/format';
 import {ProgressBar} from '../ui/ProgressBar';
 import type {DetailDTO} from '../../lib/bindings';
@@ -13,17 +18,20 @@ type Props = {
 };
 
 export function InspectorHeader(props: Props) {
+ const [exporting,setExporting]=createSignal(false);
+ const exportMetadata=async()=>{const d=props.detail;if(!d||exporting())return;setExporting(true);try{downloadTorrent(await api.exportTorrent(d.id),d.name);}catch(e){toast.error(userErr(e));}finally{setExporting(false);}};
   return (
     <header class="border-b border-white/[.04] px-4 py-3">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
-          <div class="truncate text-sm font-semibold text-zinc-100">
+          <div class="truncate text-sm font-semibold text-zinc-100" title={props.detail?.name}>
             {props.detail?.name ?? '—'}
           </div>
           <div class="mt-0.5 font-mono text-xs tabular-nums text-zinc-500">
             {props.detail ? fmtBytes(props.detail.total_bytes) : '—'}
           </div>
         </div>
+        <button type="button" disabled={!props.detail?.metadata_ready||exporting()} aria-label="Export torrent metadata" title="Export .torrent" class="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-500 hover:bg-white/[.04] hover:text-zinc-100 disabled:opacity-30" onClick={exportMetadata}><Download class="h-3.5 w-3.5"/></button>
         <button
           type="button"
           onClick={props.onClose}

@@ -11,6 +11,7 @@ import {
   type WebConfigDTO, type ServerFlavor, type UserDTO,
 } from './bindings';
 import type {SettingsPane} from '../components/settings/SettingsSidebar';
+import {transport, type ConnectionState} from './transport';
 import {isWailsRuntime} from './runtime';
 import {BandwidthRing} from './ringbuffer';
 
@@ -28,6 +29,7 @@ export type AppState = {
   statusFilter: StatusFilter;
   searchQuery: string;
   loading: boolean;
+  connection: ConnectionState & {stale: boolean; syncing: boolean; error: string};
 
   // View routing
   view: AppView;
@@ -107,12 +109,9 @@ function rowToDetail(t: import('./bindings').Torrent): import('./bindings').Deta
     total_bytes: t.total_bytes,
     bytes_done: t.bytes_done,
     progress: t.progress,
-    // The row carries no up/down counters, so the real ratio is unknown —
-    // seed 0 and let the tick fill it in. (bytes_done/total_bytes is the
-    // progress, not the ratio, and flashed a wrong value in the inspector.)
-    ratio: 0,
-    total_down: 0, // tick will fill in real cumulative counters
-    total_up: 0,
+    ratio: t.ratio ?? 0,
+    total_down: t.total_down ?? 0,
+    total_up: t.total_up ?? 0,
     peers: t.peers,
     seeds: t.seeds,
     added_at: t.added_at,
@@ -219,6 +218,7 @@ export function createTorrentsStore() {
     statusFilter: 'all',
     searchQuery: '',
     loading: true,
+    connection: {status: isWailsRuntime() ? 'connected' : 'connecting', epoch: 0, lastUpdateAt: 0, stale: !isWailsRuntime(), syncing: false, error: ''},
 
     view: 'torrents',
     settingsPane: 'general',
@@ -259,6 +259,9 @@ export function createTorrentsStore() {
     currentUser: null,
   });
 
+  let disposed = false;
+  let torrentsVersion = 0, statsVersion = 0, inspectorVersion = 0;
+
   // Boot fetches. Each failure is logged AND surfaces a single aggregated
   // toast so the user notices when the backend is unreachable instead of
   // sitting in front of an empty UI forever. We don't toast per-failure
@@ -272,10 +275,10 @@ export function createTorrentsStore() {
   };
 
   api.listTorrents()
-    .then((rows) => setState({torrents: rows, loading: false}))
+    .then((rows) => {if (!disposed && torrentsVersion === 0) setState({torrents: rows, loading: false});})
     .catch((e) => { bootFailed('torrents')(e); setState({loading: false}); });
 
-  api.globalStats().then((s) => setState({stats: s})).catch(bootFailed('stats'));
+  api.globalStats().then((s) => {if (!disposed && statsVersion === 0) setState({stats: s});}).catch(bootFailed('stats'));
   api.listCategories().then((cs) => setState(produce((s) => { s.categories = cs; }))).catch(bootFailed('categories'));
   api.listTags().then((ts) => setState(produce((s) => { s.tags = ts; }))).catch(bootFailed('tags'));
   api.getDefaultSavePath().then((p) => setState(produce((s) => { s.defaultSavePath = p; }))).catch(bootFailed('default save path'));
@@ -313,16 +316,18 @@ export function createTorrentsStore() {
       .catch(bootFailed('current user'));
   }
 
-  const offT = onTorrentsTick((rows) => setState('torrents', reconcile(rows, {key: 'id'})));
-  const offS = onStatsTick((stats) => setState(produce((s) => { s.stats = stats; })));
+  const offT = onTorrentsTick((rows) => {torrentsVersion++;setState('torrents', reconcile(rows, {key: 'id'}));});
+  const offS = onStatsTick((stats) => {statsVersion++;setState(produce((s) => { s.stats = stats; }));});
   const offI = onInspectorTick((detail) => {
     if (detail.id !== state.inspectorOpenId) return;
+    inspectorVersion++;
     // Append to the ring imperatively (O(1), no shift), then bump the
     // reactive counter so the Speed-tab chart pulls the new sample.
+    const torrent = state.torrents.find((t) => t.id === detail.id);
     bandwidthRing.push(
       Date.now() / 1000,
-      state.stats.total_download_rate,
-      state.stats.total_upload_rate,
+      torrent?.paused ? 0 : torrent?.download_rate ?? 0,
+      torrent?.paused ? 0 : torrent?.upload_rate ?? 0,
     );
     setState(produce((s) => {
       s.inspectorDetail = detail;
@@ -331,8 +336,64 @@ export function createTorrentsStore() {
   });
   const offU = onUpdateAvailable((info) => setState(produce((s) => { s.updateInfo = info; })));
 
+  let refreshedEpoch = -1;
+  let syncRequest = 0;
+  const refreshConnection = async () => {
+    const request = ++syncRequest, epoch = state.connection.epoch;
+    const tv = torrentsVersion, sv = statsVersion;
+    setState('connection', {syncing: true, stale: true, error: ''});
+    const current = () => !disposed && request === syncRequest && state.connection.epoch === epoch && state.connection.status === 'connected';
+    try {
+      const [rows, stats] = await Promise.all([api.listTorrents(), api.globalStats()]);
+      if (!current()) return;
+      if (tv === torrentsVersion) setState('torrents', reconcile(rows, {key: 'id'}));
+      if (sv === statsVersion) setState('stats', stats);
+      const id = state.inspectorOpenId;
+      if (id) {
+        if (!state.torrents.some((t) => t.id === id)) {
+          setState({inspectorOpenId: null, inspectorDetail: null});
+        } else {
+          const iv = inspectorVersion;
+          await api.setInspectorFocus(id, tabsForActive(state.inspectorTab));
+          const detail = await api.getTorrentDetail(id);
+          if (current() && state.inspectorOpenId === id && iv === inspectorVersion) setState('inspectorDetail', detail);
+        }
+      }
+      const refreshes = [
+        api.listCategories().then((v) => {if (current()) setState('categories', v);}),
+        api.listTags().then((v) => {if (current()) setState('tags', v);}),
+        api.getLimits().then((v) => {if (current()) setState('limits', v);}),
+        api.getQueueLimits().then((v) => {if (current()) setState('queueLimits', v);}),
+        api.getPeerLimits().then((v) => {if (current()) setState('peerLimits', v);}),
+        api.getSeedingDefaults().then((v) => {if (current()) setState('seedingDefaults', v);}),
+        api.getBlocklist().then((v) => {if (current()) setState('blocklist', v);}),
+        api.getWebConfig().then((v) => {if (current()) setState('webConfig', v);}),
+        api.me().then((v) => {if (current()) setState('currentUser', v);}),
+      ];
+      const results = await Promise.allSettled(refreshes);
+      if (!current()) return;
+      const failures = results.filter((r) => r.status === 'rejected').length;
+      if (failures) throw new Error(`Couldn't refresh ${failures} settings or account details`);
+      setState('connection', {syncing: false, stale: false, error: '', lastUpdateAt: Date.now()});
+    } catch (error) {
+      if (current()) setState('connection', {syncing: false, stale: true, error: String(error)});
+    }
+  };
+  const offC = isWailsRuntime() ? () => {} : transport.on('connection:state', (connection: ConnectionState) => {
+    if (disposed) return;
+    setState('connection', connection);
+    if (connection.status !== 'connected') {
+      syncRequest++;
+      setState('connection', {stale: true, syncing: false});
+    } else if (connection.epoch !== refreshedEpoch) {
+      refreshedEpoch = connection.epoch;
+      void refreshConnection();
+    }
+  });
+
   return {
     state,
+    refreshConnection,
     // The live bandwidth history backing the Speed-tab chart. Read it
     // alongside state.bandwidthTick — the counter is the reactive trigger,
     // this ring holds the actual samples.
@@ -394,7 +455,11 @@ export function createTorrentsStore() {
       const [lo, hi] = a < b ? [a, b] : [b, a];
       s.selection = new Set(visibleIds.slice(lo, hi + 1));
     })),
-    selectAll: () => setState(produce((s) => { s.selection = new Set(s.torrents.map((t) => t.id)); })),
+    selectAll: () => setState(produce((s) => {
+      s.selection = new Set(filterTorrents(
+        s.torrents, s.statusFilter, s.searchQuery, s.selectedCategoryID, s.selectedTagID,
+      ).map((t) => t.id));
+    })),
     clearSelection: () => setState(produce((s) => { s.selection = new Set(); })),
 
     // Inspector
@@ -657,7 +722,7 @@ export function createTorrentsStore() {
       setState(produce((s) => { s.watchFolder = w; }));
     },
 
-    dispose: () => { offT(); offS(); offI(); offU(); },
+    dispose: () => { disposed = true; syncRequest++; offC(); offT(); offS(); offI(); offU(); },
   };
 }
 

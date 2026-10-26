@@ -17,6 +17,9 @@ import (
 
 // TorrentDTO is the shape returned to UI/transport callers.
 type TorrentDTO struct {
+	TotalDown     int64    `json:"total_down,omitempty"`
+	TotalUp       int64    `json:"total_up,omitempty"`
+	Ratio         float64  `json:"ratio,omitempty"`
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	Magnet        string   `json:"magnet"`
@@ -61,7 +64,7 @@ func toDTO(s engine.Snapshot, addedAt time.Time) TorrentDTO {
 		prog = float64(s.BytesDone) / float64(s.TotalBytes)
 	}
 	return TorrentDTO{
-		ID:            string(s.ID),
+		TotalDown: s.BytesDown, TotalUp: s.BytesUp, Ratio: ratioOf(s.BytesDown, s.BytesUp), ID: string(s.ID),
 		Name:          s.Name,
 		Magnet:        s.Magnet,
 		SavePath:      s.SavePath,
@@ -163,6 +166,12 @@ func (s *Service) persistAndGrantTorrent(ctx context.Context, id engine.TorrentI
 		}
 		return fmt.Errorf("grant owner: %w", err)
 	}
+	if !existing {
+		s.seedCheckMu.Lock()
+		delete(s.lastSeedCounters, string(id))
+		delete(s.sessionBaseline, string(id))
+		s.seedCheckMu.Unlock()
+	}
 	return nil
 }
 
@@ -257,9 +266,16 @@ func (s *Service) AddTorrentBytes(ctx context.Context, blob []byte, savePath str
 
 // Pause/Resume/Recheck require editor-or-higher access on the torrent.
 func (s *Service) Pause(ctx context.Context, id engine.TorrentID) error {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
 		return err
 	}
+	return s.pauseTorrent(ctx, id)
+}
+
+// Caller holds torrentMu, including the seeding-policy pass.
+func (s *Service) pauseTorrent(ctx context.Context, id engine.TorrentID) error {
 	if err := s.engine.Pause(id); err != nil {
 		return err
 	}
@@ -270,6 +286,8 @@ func (s *Service) Pause(ctx context.Context, id engine.TorrentID) error {
 }
 
 func (s *Service) Resume(ctx context.Context, id engine.TorrentID) error {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
 		return err
 	}
@@ -283,6 +301,8 @@ func (s *Service) Resume(ctx context.Context, id engine.TorrentID) error {
 }
 
 func (s *Service) Recheck(ctx context.Context, id engine.TorrentID) error {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	if err := s.requireTorrentAccess(ctx, string(id), persistence.AccessEditor); err != nil {
 		return err
 	}
@@ -294,6 +314,8 @@ func (s *Service) Recheck(ctx context.Context, id engine.TorrentID) error {
 // semantics so a single missing/dead torrent can't strand the rest.
 // Used by the system-tray "Pause all" item.
 func (s *Service) PauseAll(ctx context.Context) {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	for _, snap := range s.engine.List() {
 		if snap.Paused {
 			continue
@@ -311,6 +333,8 @@ func (s *Service) PauseAll(ctx context.Context) {
 // ResumeAll is the mirror of PauseAll. Used by the system-tray "Resume all"
 // item when the engine is in the globally-paused state.
 func (s *Service) ResumeAll(ctx context.Context) {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	for _, snap := range s.engine.List() {
 		if !snap.Paused {
 			continue
@@ -368,6 +392,12 @@ func (s *Service) Remove(ctx context.Context, id engine.TorrentID, deleteFiles b
 		}
 	}
 	if err := s.engine.Remove(id, deleteFiles); err != nil {
+		var filesErr *engine.RemoveFilesError
+		if errors.As(err, &filesErr) {
+			if dbErr := s.torrents.Remove(ctx, hash); dbErr != nil {
+				return errors.Join(err, dbErr)
+			}
+		}
 		return err
 	}
 	// torrent_access rows cascade-delete with the torrents row.
@@ -390,6 +420,8 @@ type TorrentTickSnapshot struct {
 // one tick. Call it once, then pass the result to ListTorrentsFromSnapshot /
 // GlobalStatsFromSnapshot for each connected user.
 func (s *Service) BuildTorrentTickSnapshot(ctx context.Context) (TorrentTickSnapshot, error) {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	records, err := s.torrents.List(ctx)
 	if err != nil {
 		return TorrentTickSnapshot{}, err
@@ -406,6 +438,11 @@ func (s *Service) BuildTorrentTickSnapshot(ctx context.Context) (TorrentTickSnap
 		return TorrentTickSnapshot{}, err
 	}
 	snaps := s.engine.List()
+	for i := range snaps {
+		if rec, ok := byHash[string(snaps[i].ID)]; ok {
+			snaps[i].BytesDown, snaps[i].BytesUp = s.transferTotals(rec, snaps[i])
+		}
+	}
 	// Persist completed_at the first time we observe a torrent complete.
 	// Every flavor's tick path funnels through here, so this is the one
 	// choke point where the service sees the completion transition. The
@@ -577,9 +614,17 @@ type DetailDTO struct {
 	CompletedAt int64   `json:"completed_at,omitempty"`
 	// Status flags so the inspector can color the progress bar without
 	// re-deriving from the torrents list.
-	Paused       bool `json:"paused"`
-	Completed    bool `json:"completed"`
-	FilesMissing bool `json:"files_missing"`
+	Paused            bool   `json:"paused"`
+	Completed         bool   `json:"completed"`
+	FilesMissing      bool   `json:"files_missing"`
+	MetadataReady     bool   `json:"metadata_ready,omitempty"`
+	SelectionEmpty    bool   `json:"selection_empty,omitempty"`
+	SelectionComplete bool   `json:"selection_complete,omitempty"`
+	Verifying         bool   `json:"verifying,omitempty"`
+	Queued            bool   `json:"queued,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	ErrorAt           int64  `json:"error_at,omitempty"`
+	ErrorActive       bool   `json:"error_active,omitempty"`
 
 	Files     []FileDTO    `json:"files,omitempty"`
 	PeersList []PeerDTO    `json:"peers_list,omitempty"`
@@ -603,6 +648,8 @@ type PeerDTO struct {
 	Progress     float64 `json:"progress"`
 	DownloadRate int64   `json:"download_rate"`
 	UploadRate   int64   `json:"upload_rate"`
+	Downloaded   int64   `json:"downloaded"`
+	Uploaded     int64   `json:"uploaded"`
 	Country      string  `json:"country"`
 }
 
@@ -645,6 +692,8 @@ func (s *Service) ClearInspectorFocus(ctx context.Context) {
 // DetailForFocus returns the caller's focused torrent detail, or nil if no
 // focus is set or the caller no longer has access to that torrent.
 func (s *Service) DetailForFocus(ctx context.Context) (*DetailDTO, error) {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	caller := CallerFrom(ctx)
 	s.focusMu.RLock()
 	f, ok := s.focus[caller.UserID]
@@ -666,6 +715,11 @@ func (s *Service) DetailForFocus(ctx context.Context) (*DetailDTO, error) {
 		return nil, err
 	}
 	addedAt, completedAt := s.lookupRecordTimes(ctx, f.id)
+	if rec, e := s.torrents.Get(ctx, string(f.id)); e == nil {
+		d.Snapshot.SavePath = rec.SavePath
+		d.Snapshot.Magnet = rec.Magnet
+		d.Snapshot.BytesDown, d.Snapshot.BytesUp = s.transferTotals(rec, d.Snapshot)
+	}
 	dto := detailToDTO(d, addedAt, completedAt)
 	return &dto, nil
 }
@@ -700,22 +754,25 @@ func detailToDTO(d engine.Detail, addedAt time.Time, completedAt *time.Time) Det
 		prog = float64(snap.BytesDone) / float64(snap.TotalBytes)
 	}
 	dto := DetailDTO{
-		ID:           string(snap.ID),
-		Name:         snap.Name,
-		Magnet:       snap.Magnet,
-		SavePath:     snap.SavePath,
-		TotalBytes:   snap.TotalBytes,
-		BytesDone:    snap.BytesDone,
-		Progress:     prog,
-		Ratio:        ratioOf(snap.BytesDown, snap.BytesUp),
-		TotalDown:    snap.BytesDown,
-		TotalUp:      snap.BytesUp,
-		Peers:        snap.Peers,
-		Seeds:        snap.Seeds,
-		AddedAt:      unixOrZero(addedAt),
-		Paused:       snap.Paused,
-		Completed:    snap.Completed,
-		FilesMissing: snap.FilesMissing,
+		ID:             string(snap.ID),
+		Name:           snap.Name,
+		Magnet:         snap.Magnet,
+		SavePath:       snap.SavePath,
+		TotalBytes:     snap.TotalBytes,
+		BytesDone:      snap.BytesDone,
+		Progress:       prog,
+		Ratio:          ratioOf(snap.BytesDown, snap.BytesUp),
+		TotalDown:      snap.BytesDown,
+		TotalUp:        snap.BytesUp,
+		Peers:          snap.Peers,
+		Seeds:          snap.Seeds,
+		AddedAt:        unixOrZero(addedAt),
+		Paused:         snap.Paused,
+		Completed:      snap.Completed,
+		FilesMissing:   snap.FilesMissing,
+		MetadataReady:  snap.MetadataReady,
+		SelectionEmpty: snap.SelectionEmpty, SelectionComplete: snap.SelectionComplete, Verifying: snap.Verifying, Queued: snap.Queued,
+		LastError: snap.LastError, ErrorAt: unixOrZero(snap.ErrorAt), ErrorActive: snap.ErrorActive,
 	}
 	if completedAt != nil {
 		dto.CompletedAt = completedAt.Unix()
@@ -733,13 +790,13 @@ func detailToDTO(d engine.Detail, addedAt time.Time, completedAt *time.Time) Det
 	for _, p := range d.Peers {
 		dto.PeersList = append(dto.PeersList, PeerDTO{
 			IP: p.IP, Port: p.Port, Client: p.ClientName, Flags: p.Flags,
-			Progress: p.Progress, DownloadRate: p.DownloadRate, UploadRate: p.UploadRate, Country: p.CountryCode,
+			Progress: p.Progress, DownloadRate: p.DownloadRate, UploadRate: p.UploadRate, Downloaded: p.Downloaded, Uploaded: p.Uploaded, Country: p.CountryCode,
 		})
 	}
 	for _, t := range d.Trackers {
 		dto.Trackers = append(dto.Trackers, TrackerDTO{
 			URL: t.URL, Status: t.Status, Seeds: t.Seeds, Peers: t.Peers, Downloaded: t.Downloaded,
-			LastAnnounce: t.LastAnnounce.Unix(), NextAnnounce: t.NextAnnounce.Unix(),
+			LastAnnounce: unixOrZero(t.LastAnnounce), NextAnnounce: unixOrZero(t.NextAnnounce),
 		})
 	}
 	return dto
@@ -903,6 +960,8 @@ func (s *Service) GetTorrentRateLimits(ctx context.Context, infohash string) (To
 // upKbps are in KB/s; 0 means unlimited. Changes are persisted and applied
 // to the live engine immediately.
 func (s *Service) SetTorrentRateLimits(ctx context.Context, infohash string, downKbps, upKbps int64) error {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
 		return err
 	}
@@ -979,8 +1038,22 @@ func (s *Service) SetFilePriorities(ctx context.Context, infohash string, prios 
 	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
 		return err
 	}
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
+	detail, err := s.engine.DetailedSnapshot(engine.TorrentID(infohash), engine.DetailScope{Files: true})
+	if err != nil {
+		return err
+	}
+	valid := map[int]bool{}
+	for _, f := range detail.Files {
+		valid[f.Index] = true
+	}
 	mapped := make(map[int]engine.Priority, len(prios))
+	stored := map[int]int{}
 	for idx, p := range prios {
+		if !valid[idx] {
+			return errors.New("invalid file index")
+		}
 		switch p {
 		case "skip":
 			mapped[idx] = engine.PrioritySkip
@@ -988,9 +1061,17 @@ func (s *Service) SetFilePriorities(ctx context.Context, infohash string, prios 
 			mapped[idx] = engine.PriorityHigh
 		case "max":
 			mapped[idx] = engine.PriorityMax
-		default:
+		case "normal":
 			mapped[idx] = engine.PriorityNormal
+		default:
+			return errors.New("invalid file priority")
 		}
+	}
+	for i, p := range mapped {
+		stored[i] = int(p)
+	}
+	if err := s.torrents.SetFilePriorities(ctx, infohash, stored); err != nil {
+		return err
 	}
 	return s.engine.SetFilePriorities(engine.TorrentID(infohash), mapped)
 }
@@ -1024,6 +1105,8 @@ func (s *Service) SetForceStart(ctx context.Context, infohash string, force bool
 // media to be previewed or streamed before the download completes. When
 // disabled, the default rarest-first strategy is restored.
 func (s *Service) SetSequential(ctx context.Context, infohash string, enabled bool) error {
+	s.torrentMu.Lock()
+	defer s.torrentMu.Unlock()
 	if err := s.requireTorrentAccess(ctx, infohash, persistence.AccessEditor); err != nil {
 		return err
 	}
@@ -1044,6 +1127,11 @@ func (s *Service) SetSequential(ctx context.Context, infohash string, enabled bo
 // trusted startup hydration path, not a user-driven action.
 func (s *Service) RestoreOnStartup(ctx context.Context) error {
 	ctx = WithCaller(ctx, SystemCaller)
+	blocked, err := s.ListBlockedPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("restore blocked peers: %w", err)
+	}
+	s.engine.SetBlockedPeers(blocked)
 	if err := s.recoverInvalidAdminPasswordHash(ctx); err != nil {
 		log.Warn().Err(err).Msg("restore: recover invalid admin password hash failed")
 	}
@@ -1064,16 +1152,19 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 	for _, r := range records {
 		var id engine.TorrentID
 		var addErr error
-		switch {
-		case len(r.Metainfo) > 0:
-			id, addErr = s.engine.AddFile(ctx, r.Metainfo, r.SavePath)
-		case r.Magnet != "":
-			id, addErr = s.engine.AddMagnet(ctx, r.Magnet, r.SavePath)
-		default:
-			log.Warn().Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: skipping orphan record (no magnet, no metainfo)")
+		if len(r.Metainfo) == 0 && r.Magnet == "" {
 			orphaned++
 			continue
 		}
+		priorities, e := s.torrents.FilePriorities(ctx, r.InfoHash)
+		if e != nil {
+			return e
+		}
+		mapped := map[int]engine.Priority{}
+		for i, p := range priorities {
+			mapped[i] = engine.Priority(p)
+		}
+		id, addErr = s.engine.Add(ctx, engine.AddRequest{Magnet: r.Magnet, TorrentFile: r.Metainfo, SavePath: r.SavePath, Paused: r.Paused, Priorities: mapped})
 		if addErr != nil {
 			log.Warn().Err(addErr).Str("infohash", r.InfoHash).Str("name", r.Name).Msg("restore: re-add failed")
 			failed++
@@ -1087,11 +1178,7 @@ func (s *Service) RestoreOnStartup(ctx context.Context) error {
 		if r.Sequential {
 			s.engine.SetSequential(id, true)
 		}
-		if r.Paused {
-			if err := s.engine.Pause(id); err != nil {
-				log.Warn().Err(err).Str("infohash", r.InfoHash).Msg("restore: re-pause failed")
-			}
-		}
+
 		if r.DownRateLimit != 0 || r.UpRateLimit != 0 {
 			if err := s.engine.SetTorrentRateLimits(id, r.DownRateLimit, r.UpRateLimit); err != nil {
 				log.Warn().Err(err).Str("infohash", r.InfoHash).Msg("restore: re-apply rate limits failed")

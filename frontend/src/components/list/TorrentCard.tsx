@@ -83,25 +83,27 @@ export function TorrentCard(props: Props) {
           </Show>
         </span>
         <span class="flex shrink-0 gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-          <Show
-            when={!t().paused}
-            fallback={
+          <Show when={t().access === 'owner' || t().access === 'editor'}>
+            <Show
+              when={!t().paused}
+              fallback={
+                <button
+                  class="grid h-6 w-6 place-items-center rounded text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
+                  onClick={(e) => { e.stopPropagation(); props.onResume(); }}
+                  title="Resume"
+                >
+                  <Play class="h-3 w-3" />
+                </button>
+              }
+            >
               <button
                 class="grid h-6 w-6 place-items-center rounded text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
-                onClick={(e) => { e.stopPropagation(); props.onResume(); }}
-                title="Resume"
+                onClick={(e) => { e.stopPropagation(); props.onPause(); }}
+                title="Pause"
               >
-                <Play class="h-3 w-3" />
+                <PauseIcon class="h-3 w-3" />
               </button>
-            }
-          >
-            <button
-              class="grid h-6 w-6 place-items-center rounded text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
-              onClick={(e) => { e.stopPropagation(); props.onPause(); }}
-              title="Pause"
-            >
-              <PauseIcon class="h-3 w-3" />
-            </button>
+            </Show>
           </Show>
           <button
             class="grid h-6 w-6 place-items-center rounded text-zinc-400 hover:bg-rose-500/20 hover:text-rose-300"

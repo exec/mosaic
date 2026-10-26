@@ -92,3 +92,18 @@ func TestPendingMagnetCanPauseAndShutdown(t *testing.T) {
 	require.True(t, ok)
 	require.NotPanics(t, func() { be.saveSnapshotIfComplete(id, tor) })
 }
+
+func TestTrackerStatusDoesNotInferSuccessFromMetadata(t *testing.T) {
+	be := testAnacrolixBackend(t)
+	mi, _ := testTorrent(t)
+	mi.AnnounceList = [][]string{{"http://127.0.0.1:1/announce"}}
+	var blob bytes.Buffer
+	require.NoError(t, mi.Write(&blob))
+	id, err := be.AddFile(context.Background(), blob.Bytes(), t.TempDir())
+	require.NoError(t, err)
+	detail, err := be.DetailedSnapshot(id, DetailScope{Trackers: true})
+	require.NoError(t, err)
+	require.Len(t, detail.Trackers, 1)
+	require.Equal(t, "Status unavailable", detail.Trackers[0].Status)
+	require.True(t, detail.Trackers[0].LastAnnounce.IsZero())
+}

@@ -5,10 +5,10 @@ const contentClass = 'z-50 min-w-[180px] rounded-md border border-white/10 bg-zi
 const itemClass = 'flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-zinc-200 outline-none transition-colors duration-100 data-[highlighted]:bg-white/10 data-[disabled]:opacity-40 data-[disabled]:pointer-events-none';
 
 export const DropdownMenu = Object.assign(
-  function (props: {trigger: JSX.Element; children: JSX.Element}) {
+  function (props: {trigger: JSX.Element; triggerClass?: string; label?: string; children: JSX.Element}) {
     return (
       <KDropdownMenu>
-        <KDropdownMenu.Trigger as="span">{props.trigger}</KDropdownMenu.Trigger>
+        <KDropdownMenu.Trigger class={props.triggerClass} aria-label={props.label}>{props.trigger}</KDropdownMenu.Trigger>
         <KDropdownMenu.Portal>
           <KDropdownMenu.Content class={contentClass}>{props.children}</KDropdownMenu.Content>
         </KDropdownMenu.Portal>

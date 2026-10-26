@@ -264,10 +264,29 @@ func scanTorrent(s scanner) (TorrentRecord, error) {
 // ratio-based seeding limits survive restarts — the engine's own byte
 // counters reset to zero each process start. Missing rows are not an error.
 func (t *Torrents) AddTransferTotals(ctx context.Context, infohash string, upDelta, downDelta int64) error {
-	_, err := t.db.SQL().ExecContext(ctx,
-		`UPDATE torrents SET total_uploaded = total_uploaded + ?, total_downloaded = total_downloaded + ? WHERE infohash = ?`,
-		upDelta, downDelta, infohash)
-	return err
+	if upDelta < 0 || downDelta < 0 {
+		return errors.New("negative transfer delta")
+	}
+	tx, err := t.db.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE torrents SET total_uploaded=total_uploaded+?,total_downloaded=total_downloaded+? WHERE infohash=?`, upDelta, downDelta, infohash)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 && (upDelta > 0 || downDelta > 0) {
+		_, err = tx.ExecContext(ctx, `INSERT INTO transfer_daily(infohash,day,uploaded,downloaded) VALUES(?,?,?,?) ON CONFLICT(infohash,day) DO UPDATE SET uploaded=uploaded+excluded.uploaded,downloaded=downloaded+excluded.downloaded`, infohash, time.Now().UTC().Format("2006-01-02"), upDelta, downDelta)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SetRateLimits persists per-torrent download and upload bandwidth caps.

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ type Engine struct {
 	subs   []chan EngineEvent
 	stop   chan struct{}
 	closed bool
+	errors map[TorrentID]Snapshot
 
 	// tickRun gates the per-tick poll loop. The loop emits EventTick/
 	// EventComplete to subscribers; with zero subscribers (the mosaicd
@@ -35,6 +37,7 @@ func NewEngine(b Backend, tickRate time.Duration) *Engine {
 		backend:  b,
 		tickRate: tickRate,
 		stop:     make(chan struct{}),
+		errors:   make(map[TorrentID]Snapshot),
 	}
 	// Wire backend errors (out-of-disk-space, storage write failures) into
 	// the engine event stream so the notifications subscriber + UI surface
@@ -45,7 +48,10 @@ func NewEngine(b Backend, tickRate time.Duration) *Engine {
 	// is conditional.
 	if eh, ok := b.(interface{ SetErrorHandler(func(TorrentID, error)) }); ok {
 		eh.SetErrorHandler(func(id TorrentID, err error) {
-			snap, _ := b.Snapshot(id)
+			e.mu.Lock()
+			e.errors[id] = Snapshot{LastError: err.Error(), ErrorAt: time.Now(), ErrorActive: true}
+			e.mu.Unlock()
+			snap, _ := e.Snapshot(id)
 			e.emit(EngineEvent{Kind: EventError, ID: id, Snapshot: snap, Err: err})
 		})
 	}
@@ -109,8 +115,18 @@ func (e *Engine) AddFile(ctx context.Context, blob []byte, savePath string) (Tor
 	return id, nil
 }
 
-func (e *Engine) Pause(id TorrentID) error   { return e.backend.Pause(id) }
-func (e *Engine) Resume(id TorrentID) error  { return e.backend.Resume(id) }
+func (e *Engine) Pause(id TorrentID) error { return e.backend.Pause(id) }
+func (e *Engine) Resume(id TorrentID) error {
+	if err := e.backend.Resume(id); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	s := e.errors[id]
+	s.ErrorActive = false
+	e.errors[id] = s
+	e.mu.Unlock()
+	return nil
+}
 func (e *Engine) Recheck(id TorrentID) error { return e.backend.Recheck(id) }
 
 func (e *Engine) ApplyPerTorrentMaxPeers(n int) error {
@@ -118,21 +134,52 @@ func (e *Engine) ApplyPerTorrentMaxPeers(n int) error {
 }
 
 func (e *Engine) Remove(id TorrentID, deleteFiles bool) error {
-	if err := e.backend.Remove(id, deleteFiles); err != nil {
+	err := e.backend.Remove(id, deleteFiles)
+	var filesErr *RemoveFilesError
+	if err != nil && !errors.As(err, &filesErr) {
 		return err
 	}
+	e.mu.Lock()
+	delete(e.errors, id)
+	e.mu.Unlock()
 	e.emit(EngineEvent{Kind: EventRemoved, ID: id})
-	return nil
+	return err
 }
 
-func (e *Engine) List() []Snapshot { return e.backend.List() }
+func (e *Engine) List() []Snapshot {
+	out := e.backend.List()
+	for i := range out {
+		out[i] = e.withError(out[i])
+	}
+	return out
+}
 
-func (e *Engine) Snapshot(id TorrentID) (Snapshot, error) { return e.backend.Snapshot(id) }
+func (e *Engine) Snapshot(id TorrentID) (Snapshot, error) {
+	s, err := e.backend.Snapshot(id)
+	return e.withError(s), err
+}
+func (e *Engine) withError(s Snapshot) Snapshot {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	x := e.errors[s.ID]
+	s.LastError = x.LastError
+	s.ErrorAt = x.ErrorAt
+	s.ErrorActive = x.ErrorActive
+	return s
+}
+func (e *Engine) Add(ctx context.Context, req AddRequest) (TorrentID, error) {
+	return e.backend.Add(ctx, req)
+}
+func (e *Engine) Relocate(ctx context.Context, id TorrentID, path string, move bool) error {
+	return e.backend.Relocate(ctx, id, path, move)
+}
 
 // DetailedSnapshot delegates to the backend, packaging the file/peer/tracker
 // data per scope alongside the standard Snapshot.
 func (e *Engine) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail, error) {
-	return e.backend.DetailedSnapshot(id, scope)
+	d, err := e.backend.DetailedSnapshot(id, scope)
+	d.Snapshot = e.withError(d.Snapshot)
+	return d, err
 }
 
 func (e *Engine) SetFilePriorities(id TorrentID, prios map[int]Priority) error {
@@ -143,6 +190,8 @@ func (e *Engine) SetGlobalRateLimits(d, u int) error { return e.backend.SetGloba
 func (e *Engine) SetTorrentRateLimits(id TorrentID, d, u int64) error {
 	return e.backend.SetTorrentRateLimits(id, d, u)
 }
+func (e *Engine) SetBlockedPeers(ips []string) { e.backend.SetBlockedPeers(ips) }
+
 func (e *Engine) SetIPBlocklist(r io.Reader) error { return e.backend.SetIPBlocklist(r) }
 func (e *Engine) SetQueuePosition(id TorrentID, pos int) {
 	e.backend.SetQueuePosition(id, pos)

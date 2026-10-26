@@ -31,3 +31,6 @@ mosaic.db-journal
 mosaic.db-wal
 mosaic.db-shm
 .claude/
+
+# Python release tooling
+__pycache__/

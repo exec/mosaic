@@ -2,6 +2,7 @@ import {createSignal, createEffect} from 'solid-js';
 import {toast} from 'solid-sonner';
 import type {LimitsDTO, PeerLimitsDTO, QueueLimitsDTO} from '../../lib/bindings';
 import {Button} from '../ui/Button';
+import {ConnectionDiagnostics} from './ConnectionDiagnostics';
 
 type Props = {
   limits: LimitsDTO;
@@ -112,6 +113,7 @@ export function ConnectionPane(props: Props) {
     <div class="mx-auto max-w-2xl px-6 py-6">
       <PaneHeader title="Connection" subtitle="Bandwidth limits, alt-speed, and queue slots." />
 
+      <ConnectionDiagnostics />
       <div class="text-xs uppercase tracking-wider text-zinc-500 mt-2 mb-1 px-1">Bandwidth</div>
       <Field label="Download limit" help="0 = unlimited">
         <NumberInput value={down()} onInput={setDown} suffix="KB/s" />

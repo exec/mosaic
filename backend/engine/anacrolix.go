@@ -29,10 +29,16 @@ import (
 // proxy at construction and mutating its inner ranger via atomic.Pointer, we
 // can swap blocklists at runtime without forking anacrolix.
 type ipBlocklistProxy struct {
-	inner atomic.Pointer[iplist.IPList]
+	inner   atomic.Pointer[iplist.IPList]
+	blocked atomic.Pointer[map[string]struct{}]
 }
 
 func (p *ipBlocklistProxy) Lookup(ip net.IP) (iplist.Range, bool) {
+	if blocked := p.blocked.Load(); blocked != nil {
+		if _, ok := (*blocked)[ip.String()]; ok {
+			return iplist.Range{First: ip, Last: ip, Description: "Manually blocked peer"}, true
+		}
+	}
 	r := p.inner.Load()
 	if r == nil {
 		return iplist.Range{}, false
@@ -41,11 +47,34 @@ func (p *ipBlocklistProxy) Lookup(ip net.IP) (iplist.Range, bool) {
 }
 
 func (p *ipBlocklistProxy) NumRanges() int {
-	r := p.inner.Load()
-	if r == nil {
-		return 0
+	count := 0
+	if blocked := p.blocked.Load(); blocked != nil {
+		count = len(*blocked)
 	}
-	return r.NumRanges()
+	if r := p.inner.Load(); r != nil {
+		count += r.NumRanges()
+	}
+	return count
+}
+
+// SetBlockedPeers replaces manual blocks without disturbing the downloaded list.
+func (a *AnacrolixBackend) SetBlockedPeers(ips []string) {
+	blocked := make(map[string]struct{}, len(ips))
+	for _, ip := range ips {
+		blocked[ip] = struct{}{}
+	}
+	a.ipBlock.blocked.Store(&blocked)
+	for _, t := range a.client.Torrents() {
+		for _, pc := range t.PeerConns() {
+			host, _, err := net.SplitHostPort(pc.RemoteAddr.String())
+			if err != nil {
+				continue
+			}
+			if _, ok := blocked[net.ParseIP(host).String()]; ok {
+				_ = pc.Close()
+			}
+		}
+	}
 }
 
 // AnacrolixConfig configures the production Backend.
@@ -100,8 +129,8 @@ type AnacrolixBackend struct {
 	client *torrent.Client
 
 	mu       sync.Mutex
-	bySaveTo map[TorrentID]string             // id → save path (we set it per-torrent)
-	byID     map[TorrentID]*torrent.Torrent   // id → torrent handle, populated on Add, pruned on Remove
+	bySaveTo map[TorrentID]string           // id → save path (we set it per-torrent)
+	byID     map[TorrentID]*torrent.Torrent // id → torrent handle, populated on Add, pruned on Remove
 	// Pre-v0.4.3 every per-id operation (Pause/Resume/Recheck/Remove/
 	// Snapshot/SetFilePriorities/ScheduledPause) called find() which
 	// linear-scanned client.Torrents(). With several hundred torrents
@@ -148,6 +177,7 @@ type AnacrolixBackend struct {
 	// We extend the existing read-mostly mutex rather than introducing a new
 	// one — these maps are all read together by snapshotFor and written through
 	// the same per-torrent setters, so a single RWMutex keeps the invariants simple.
+	filePriorities map[TorrentID]map[int]Priority
 	pausedMu       sync.RWMutex
 	paused         map[TorrentID]bool
 	queuePos       map[TorrentID]int
@@ -163,6 +193,8 @@ type AnacrolixBackend struct {
 	verifying        map[TorrentID]bool
 	expectedComplete map[TorrentID]bool
 	filesMissing     map[TorrentID]bool
+	verifyCancel     map[TorrentID]context.CancelFunc
+	verifyDone       map[TorrentID]chan struct{}
 
 	// Rate limiters owned via ClientConfig. The same *rate.Limiter pointers are
 	// stashed here so SetGlobalRateLimits can mutate them in place via
@@ -415,30 +447,30 @@ func NewAnacrolixBackend(cfg AnacrolixConfig) (*AnacrolixBackend, error) {
 	}
 	engineCtx, engineCancel := context.WithCancel(context.Background())
 	b := &AnacrolixBackend{
-		client:           c,
-		pieceCompletion:  pieceCompletion,
-		bySaveTo:         make(map[TorrentID]string),
-		byID:             make(map[TorrentID]*torrent.Torrent),
-		prevRates:        make(map[TorrentID]rateSample),
-		prevPeerRates:    make(map[TorrentID]map[string]peerRateSample),
-		paused:           make(map[TorrentID]bool),
-		queuePos:         make(map[TorrentID]int),
-		forceStart:       make(map[TorrentID]bool),
-		sequential:       make(map[TorrentID]bool),
-		scheduledPause:   make(map[TorrentID]bool),
-		verifying:        make(map[TorrentID]bool),
-		expectedComplete: make(map[TorrentID]bool),
-		filesMissing:     make(map[TorrentID]bool),
-		snapshotSaved:    make(map[TorrentID]bool),
-		snapshotInflight: make(map[TorrentID]bool),
-		snapshotRetryAt:  make(map[TorrentID]time.Time),
-		perTorrentDown:   make(map[TorrentID]int64),
-		perTorrentUp:     make(map[TorrentID]int64),
-		limiterRunning:   make(map[TorrentID]bool),
-		dlLim:          dlLim,
-		ulLim:          ulLim,
-		ipBlock:        ipBlock,
-		snapshotStore:  cfg.SnapshotStore,
+		client:               c,
+		pieceCompletion:      pieceCompletion,
+		bySaveTo:             make(map[TorrentID]string),
+		byID:                 make(map[TorrentID]*torrent.Torrent),
+		prevRates:            make(map[TorrentID]rateSample),
+		prevPeerRates:        make(map[TorrentID]map[string]peerRateSample),
+		paused:               make(map[TorrentID]bool),
+		queuePos:             make(map[TorrentID]int),
+		forceStart:           make(map[TorrentID]bool),
+		sequential:           make(map[TorrentID]bool),
+		scheduledPause:       make(map[TorrentID]bool),
+		verifying:            make(map[TorrentID]bool),
+		expectedComplete:     make(map[TorrentID]bool),
+		filesMissing:         make(map[TorrentID]bool),
+		snapshotSaved:        make(map[TorrentID]bool),
+		snapshotInflight:     make(map[TorrentID]bool),
+		snapshotRetryAt:      make(map[TorrentID]time.Time),
+		perTorrentDown:       make(map[TorrentID]int64),
+		perTorrentUp:         make(map[TorrentID]int64),
+		limiterRunning:       make(map[TorrentID]bool),
+		dlLim:                dlLim,
+		ulLim:                ulLim,
+		ipBlock:              ipBlock,
+		snapshotStore:        cfg.SnapshotStore,
 		engineCtx:            engineCtx,
 		engineCancel:         engineCancel,
 		preallocateFullFiles: cfg.PreallocateFullFiles,
@@ -794,6 +826,7 @@ func snapshotFor(t *torrent.Torrent, rate rateValue, paused bool, queuePos int, 
 		Queued:        queued,
 		Verifying:     verifying,
 		FilesMissing:  filesMissing,
+		MetadataReady: t.Info() != nil,
 	}
 	return snap
 }

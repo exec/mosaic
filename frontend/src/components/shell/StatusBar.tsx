@@ -1,4 +1,4 @@
-import {ArrowDown, ArrowUp, Globe, Wifi} from 'lucide-solid';
+import {ArrowDown, ArrowUp, Globe, Wifi, ChartNoAxesCombined} from 'lucide-solid';
 import {Show, createSignal, createEffect} from 'solid-js';
 import type {GlobalStatsT, WebConfigDTO} from '../../lib/bindings';
 import {fmtRate} from '../../lib/format';
@@ -6,12 +6,13 @@ import {emaStep} from '../../lib/smoothing';
 
 type Props = {
   stats: GlobalStatsT;
+  stale?: boolean;
+  onOpenStatistics?: () => void;
   queuedCount: number;
   webConfig: WebConfigDTO;
-  // True when the user has DHT enabled in Connection settings. When false
-  // the DHT indicator is hidden entirely — a green "online" pip while the
-  // service is intentionally off is worse than no readout at all.
+  // Configuration is distinct from the observed state in Connection diagnostics.
   dhtEnabled: boolean;
+  onOpenConnection?:()=>void;
   onClickWeb: () => void;
 };
 
@@ -43,11 +44,11 @@ export function StatusBar(props: Props) {
           actively seeding. */}
       <span class="inline-flex items-center gap-1.5">
         <ArrowDown class={`h-3 w-3 ${downRate() > 0 ? 'text-down' : 'text-zinc-500'}`} />
-        <span class="font-mono tabular-nums">{fmtRate(downRate())}</span>
+        <span class="font-mono tabular-nums">{props.stale ? '—' : fmtRate(downRate())}</span>
       </span>
       <span class="inline-flex items-center gap-1.5">
         <ArrowUp class={`h-3 w-3 ${upRate() > 0 ? 'text-seed' : 'text-zinc-500'}`} />
-        <span class="font-mono tabular-nums">{fmtRate(upRate())}</span>
+        <span class="font-mono tabular-nums">{props.stale ? '—' : fmtRate(upRate())}</span>
       </span>
 
       <span class="h-3 w-px bg-white/[.06]" />
@@ -59,6 +60,7 @@ export function StatusBar(props: Props) {
       <span class="font-mono tabular-nums">{s().total_peers} peers</span>
 
       <div class="ml-auto flex items-center gap-3">
+        <Show when={props.onOpenStatistics}><button type="button" onClick={props.onOpenStatistics} aria-label="Transfer statistics" title="Transfer statistics" class="rounded p-1 text-zinc-400 hover:bg-white/[.05] hover:text-zinc-200"><ChartNoAxesCombined class="h-3.5 w-3.5" /></button></Show>
         <Show when={props.webConfig.enabled}>
           <button
             type="button"
@@ -70,17 +72,10 @@ export function StatusBar(props: Props) {
             <span class="font-mono tabular-nums">Web ON :{props.webConfig.port}</span>
           </button>
         </Show>
-        {/* DHT indicator: muted Wifi glyph + a small status dot, matching the
-            torrent-row status-dot vocabulary instead of the previous flat-green
-            icon that pulled the eye disproportionately. Hidden entirely when
-            the user has DHT disabled — a green "online" pip while the service
-            is intentionally off would be misleading. */}
         <Show when={props.dhtEnabled}>
-          <span class="inline-flex items-center gap-1.5">
-            <Wifi class="h-3 w-3 text-zinc-500" />
-            <span class="h-1.5 w-1.5 rounded-full bg-seed" />
-            <span class="text-zinc-500">DHT</span>
-          </span>
+          <button type="button" onClick={props.onOpenConnection} title="DHT configured · open live connection diagnostics" class="inline-flex items-center gap-1.5 rounded p-1 text-zinc-500 hover:text-zinc-300">
+            <Wifi class="h-3 w-3" /><span>DHT configured</span>
+          </button>
         </Show>
       </div>
     </footer>

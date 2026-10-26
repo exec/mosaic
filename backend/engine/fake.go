@@ -16,8 +16,9 @@ type FakeBackend struct {
 	torrents  map[TorrentID]*Snapshot
 	filePrios map[TorrentID]map[int]Priority
 
-	downBPS int
-	upBPS   int
+	downBPS      int
+	upBPS        int
+	blockedPeers []string
 }
 
 func NewFakeBackend() *FakeBackend {
@@ -148,7 +149,7 @@ func (f *FakeBackend) DetailedSnapshot(id TorrentID, scope DetailScope) (Detail,
 	}
 	if scope.Peers {
 		d.Peers = []PeerEntry{
-			{IP: "10.0.0.1", Port: 6881, ClientName: "FakeClient 1.0", Flags: "D K E", Progress: 0.5, DownloadRate: 1024, UploadRate: 256, CountryCode: "US"},
+			{IP: "10.0.0.1", Port: 6881, ClientName: "FakeClient 1.0", Flags: "D K E", Progress: 0.5, DownloadRate: 1024, UploadRate: 256, Downloaded: 4096, Uploaded: 2048, CountryCode: "US"},
 		}
 	}
 	if scope.Trackers {
@@ -175,6 +176,18 @@ func (f *FakeBackend) GlobalRateLimits() (int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.downBPS, f.upBPS
+}
+
+func (f *FakeBackend) SetBlockedPeers(ips []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blockedPeers = append([]string(nil), ips...)
+}
+
+func (f *FakeBackend) BlockedPeers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.blockedPeers...)
 }
 
 func (f *FakeBackend) SetIPBlocklist(_ io.Reader) error { return nil }
@@ -281,4 +294,35 @@ func (f *FakeBackend) AdvanceProgress(id TorrentID, by int64) {
 func hashOf(s string) TorrentID {
 	sum := sha1.Sum([]byte(s))
 	return TorrentID(hex.EncodeToString(sum[:]))
+}
+
+func (f *FakeBackend) Add(ctx context.Context, req AddRequest) (TorrentID, error) {
+	var id TorrentID
+	var err error
+	if len(req.TorrentFile) > 0 {
+		id, err = f.AddFile(ctx, req.TorrentFile, req.SavePath)
+	} else {
+		id, err = f.AddMagnet(ctx, req.Magnet, req.SavePath)
+	}
+	if err != nil {
+		return "", err
+	}
+	if req.Paused {
+		_ = f.Pause(id)
+	}
+	_ = f.SetFilePriorities(id, req.Priorities)
+	f.mu.Lock()
+	f.torrents[id].MetadataReady = true
+	f.mu.Unlock()
+	return id, nil
+}
+func (f *FakeBackend) Relocate(_ context.Context, id TorrentID, path string, move bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.torrents[id]
+	if !ok {
+		return errors.New("not found")
+	}
+	t.SavePath = path
+	return nil
 }

@@ -4,6 +4,7 @@ import {toast} from 'solid-sonner';
 import type {CategoryDTO, FeedDTO, FeedItemDTO, FilterDTO} from '../../lib/bindings';
 import {userErr} from '../../lib/errors';
 import {Button} from '../ui/Button';
+import {RSSFilterPreview} from './RSSFilterPreview';
 
 type Props = {
   feeds: FeedDTO[];
@@ -554,6 +555,7 @@ function FilterForm(props: {
           Enabled
         </label>
       </div>
+      <RSSFilterPreview filter={{...props.initial,regex:regex().trim(),category_id:categoryID(),save_path:savePath(),enabled:enabled()}} />
       <div class="flex items-center justify-end gap-2 mt-1">
         <Show when={disabledReason()}>
           <span class="mr-auto text-xs text-zinc-500">{disabledReason()}</span>

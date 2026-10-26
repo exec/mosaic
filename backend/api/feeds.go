@@ -22,10 +22,11 @@ import (
 
 // FeedItemDTO is a single item from a live-fetched RSS feed.
 type FeedItemDTO struct {
-	GUID       string `json:"guid"`
-	Title      string `json:"title"`
-	PubDate    string `json:"pub_date"`
-	TorrentURL string `json:"torrent_url"` // magnet: URI or https://…torrent; empty if unresolvable
+	AlreadyHandled bool   `json:"already_handled,omitempty"`
+	GUID           string `json:"guid"`
+	Title          string `json:"title"`
+	PubDate        string `json:"pub_date"`
+	TorrentURL     string `json:"torrent_url"` // magnet: URI or https://…torrent; empty if unresolvable
 }
 
 // FeedDTO is the transport shape for an RSS/Atom feed subscription.

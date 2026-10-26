@@ -408,6 +408,10 @@ func isJSONDecodeError(err error) bool {
 // wrap shape and intentionally do not appear here — those leak internals and
 // must drop to 500.
 var userFacingValidationPrefixes = []string{
+	"settings backup:", "torrent metadata is unavailable", "seed ratio must be", "seed time must be",
+	"torrent already exists", "provide one magnet", "invalid file index", "invalid file priority",
+	"verification already running", "pause the torrent", "insufficient disk space:", "choose a different folder", "source and destination overlap",
+	"destination already contains", "no matching torrent data", "not enough free space", "cannot locate symbolic links",
 	"empty body",
 	"invalid request body",
 	"username is required",
@@ -1576,6 +1580,31 @@ func (h *Handlers) SetWatchFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.SetWatchFolder(r.Context(), c); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) ListBlockedPeers(w http.ResponseWriter, r *http.Request) {
+	ips, err := h.svc.ListBlockedPeers(r.Context())
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ips)
+}
+
+func (h *Handlers) SetPeerBlocked(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IP      string `json:"ip"`
+		Blocked bool   `json:"blocked"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	if err := h.svc.SetPeerBlocked(r.Context(), req.IP, req.Blocked); err != nil {
 		writeServiceErr(w, err)
 		return
 	}

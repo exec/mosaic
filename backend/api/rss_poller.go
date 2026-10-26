@@ -412,9 +412,14 @@ func (p *RSSPoller) GetFeedItems(ctx context.Context, feedID int) ([]FeedItemDTO
 	}
 	out := make([]FeedItemDTO, 0, len(feed.Items))
 	for _, item := range feed.Items {
+		key := item.GUID
+		if key == "" {
+			key = item.Link
+		}
 		dto := FeedItemDTO{
-			GUID:  item.GUID,
-			Title: item.Title,
+			AlreadyHandled: p.alreadySeen(feedID, key),
+			GUID:           key,
+			Title:          item.Title,
 		}
 		if item.PublishedParsed != nil {
 			dto.PubDate = item.PublishedParsed.UTC().Format("2006-01-02")

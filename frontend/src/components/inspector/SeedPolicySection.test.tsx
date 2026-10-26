@@ -1,0 +1,34 @@
+import {afterEach,beforeEach,expect,test,vi} from 'vitest';
+import {createSignal} from 'solid-js';
+import {render} from 'solid-js/web';
+import {api} from '../../lib/bindings';
+import {SeedPolicySection} from './SeedPolicySection';
+vi.mock('../../lib/bindings',()=>({api:{getTorrentSeedPolicy:vi.fn(),setTorrentSeedPolicy:vi.fn()}}));
+vi.mock('solid-sonner',()=>({toast:{success:vi.fn(),error:vi.fn()}}));
+let dispose:()=>void;
+beforeEach(()=>{vi.resetAllMocks();vi.mocked(api.getTorrentSeedPolicy).mockResolvedValue({use_global:true,ratio_limit:null,time_min_limit:null,effective_ratio_limit:2});});
+afterEach(()=>{dispose?.();document.body.innerHTML='';});
+const save=()=>Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Save seeding policy')!.click();
+test('inherited policy follows defaults and custom policy validates before saving',async()=>{
+ const [defaults,setDefaults]=createSignal({ratio_limit:2,time_min_limit:null});
+ dispose=render(()=><SeedPolicySection infohash="a" canEdit defaults={defaults()}/>,document.body);
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Global default · Stop at ratio 2'));
+ setDefaults({ratio_limit:3,time_min_limit:null});expect(document.body.textContent).toContain('Stop at ratio 3');
+ document.querySelector<HTMLInputElement>('input[value="custom"]')!.click();save();
+ expect(document.querySelector('[role="alert"]')?.textContent).toContain('Choose at least one limit');
+ expect(api.setTorrentSeedPolicy).not.toHaveBeenCalled();
+ document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+ const input=document.querySelector<HTMLInputElement>('[aria-label="Seeding ratio limit"]')!;
+ input.value='1.5';input.dispatchEvent(new Event('input',{bubbles:true}));save();
+ await vi.waitFor(()=>expect(api.setTorrentSeedPolicy).toHaveBeenCalledWith('a',{use_global:false,ratio_limit:1.5,time_min_limit:null}));
+});
+test('ignores late policy from previous selection and disables viewer edits',async()=>{
+ let old!:(v:any)=>void;
+ vi.mocked(api.getTorrentSeedPolicy).mockImplementationOnce(()=>new Promise(r=>old=r)).mockResolvedValue({use_global:false,ratio_limit:null,time_min_limit:null});
+ const [hash,setHash]=createSignal('a');
+ dispose=render(()=><SeedPolicySection infohash={hash()} canEdit={false}/>,document.body);
+ setHash('b');await vi.waitFor(()=>expect(document.body.textContent).toContain('No seeding limit'));
+ old({use_global:false,ratio_limit:99,time_min_limit:null});await Promise.resolve();
+ expect(document.body.textContent).not.toContain('99');expect(document.querySelector('fieldset')?.disabled).toBe(true);
+ expect(document.body.textContent).not.toContain('Save seeding policy');
+});

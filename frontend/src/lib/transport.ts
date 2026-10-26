@@ -3,6 +3,12 @@
 // (the optional HTTPS+WS interface) we go through the JSON+WS adapter at
 // /api/*. Everything above this layer is identical.
 
+export type ConnectionState = {
+  status: 'connecting' | 'connected' | 'reconnecting';
+  epoch: number;
+  lastUpdateAt: number;
+};
+
 export interface Transport {
   /** Invoke a backend method by its Wails-style name. */
   invoke<T>(method: string, ...args: any[]): Promise<T>;

@@ -1,6 +1,7 @@
 import {createEffect, createSignal} from 'solid-js';
 import {toast} from 'solid-sonner';
 import {Button} from '../ui/Button';
+import {SettingsBackup} from './SettingsBackup';
 import {api, type WatchFolderDTO} from '../../lib/bindings';
 import {isWailsRuntime} from '../../lib/runtime';
 
@@ -161,6 +162,7 @@ export function GeneralPane(props: Props) {
           Save watch folder
         </Button>
       </div>
+      <SettingsBackup />
     </div>
   );
 }

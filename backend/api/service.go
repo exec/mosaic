@@ -33,8 +33,9 @@ type Service struct {
 	focusMu sync.RWMutex
 	focus   map[int]focusState
 
-	blocklistMu sync.RWMutex
-	blocklist   blocklistState
+	blockedPeersMu sync.Mutex
+	blocklistMu    sync.RWMutex
+	blocklist      blocklistState
 
 	webHookMu       sync.RWMutex
 	onWebCfgChanged func(WebConfigDTO)
@@ -80,8 +81,10 @@ type Service struct {
 	// to the persisted cumulative totals each pass — the engine's counters
 	// reset every process start, so ratio limits computed straight from them
 	// restarted at 0 on every launch. Guarded by seedCheckMu.
-	seedCheckMu      sync.Mutex
-	lastSeedCounters map[string]sessionCounters
+	seedCheckMu       sync.Mutex
+	lastSeedCounters  map[string]sessionCounters
+	sessionBaseline   map[string]sessionCounters
+	statisticsStarted time.Time
 }
 
 // sessionCounters is one observation of the engine's session-scoped transfer
@@ -146,22 +149,24 @@ func NewService(
 	defaultSavePath string,
 ) *Service {
 	return &Service{
-		engine:           eng,
-		torrents:         torrents,
-		categories:       categories,
-		tags:             tags,
-		settings:         settings,
-		scheduleRules:    scheduleRules,
-		feeds:            feeds,
-		filters:          filters,
-		users:            users,
-		access:           access,
-		trackers:         trackers,
-		scheduler:        scheduler,
-		defaultSavePath:  defaultSavePath,
-		focus:            make(map[int]focusState),
-		callers:          newCallerCache(),
-		lastSeedCounters: make(map[string]sessionCounters),
+		engine:            eng,
+		torrents:          torrents,
+		categories:        categories,
+		tags:              tags,
+		settings:          settings,
+		scheduleRules:     scheduleRules,
+		feeds:             feeds,
+		filters:           filters,
+		users:             users,
+		access:            access,
+		trackers:          trackers,
+		scheduler:         scheduler,
+		defaultSavePath:   defaultSavePath,
+		focus:             make(map[int]focusState),
+		callers:           newCallerCache(),
+		lastSeedCounters:  make(map[string]sessionCounters),
+		sessionBaseline:   make(map[string]sessionCounters),
+		statisticsStarted: time.Now(),
 	}
 }
 

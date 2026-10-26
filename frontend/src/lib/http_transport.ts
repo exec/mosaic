@@ -2,7 +2,7 @@
 // endpoints in backend/remote, and demuxes a single shared WebSocket onto
 // per-event handlers. Selected by transport.ts when running outside Wails.
 
-import type {Transport} from './transport';
+import type {ConnectionState, Transport} from './transport';
 
 interface RouteSpec {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -21,6 +21,12 @@ const idString = (raw: any) => raw.id as string;
 const idNumber = (raw: any) => raw.id as number;
 
 const ROUTES: Record<string, RouteSpec> = {
+  GetTransferStatistics: {method: 'GET', path: () => '/api/statistics/transfers'},
+ PrepareTorrent: {method: 'POST', path: () => '/api/torrents/prepare', body: ([req]) => req, unwrap: idString},
+ GetTorrentDetail: {method: 'GET', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/detail`},
+ GetStorage: {method: 'GET', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/storage`},
+ RelocateTorrent: {method: 'POST', path: ([id]) => `/api/torrents/${encodeURIComponent(id)}/relocate`, body: ([, path, move]) => ({path, move}), unwrap: okEnvelope},
+ SetPreallocate: {method: 'PUT', path: () => '/api/storage/preallocate', body: ([enabled]) => ({enabled}), unwrap: okEnvelope},
   // Auth
   Login: {
     method: 'POST',
@@ -29,6 +35,11 @@ const ROUTES: Record<string, RouteSpec> = {
     unwrap: okEnvelope,
   },
   Logout: {method: 'POST', path: () => '/api/logout', unwrap: okEnvelope},
+  PreviewRSSFilter:{method:'POST',path:()=>'/api/rss/preview',body:(a)=>a[0]},
+  ExportSettings:{method:'GET',path:()=>'/api/settings/backup'},
+  ImportSettings:{method:'PUT',path:()=>'/api/settings/backup',body:(a)=>a[0]},
+  ExportTorrent:{method:'GET',path:(a)=>`/api/torrents/${encodeURIComponent(a[0])}/export`,unwrap:(r)=>r.data},
+  GetConnectionDiagnostics:{method:'GET',path:()=>'/api/connection/diagnostics'},
   Bootstrap: {method: 'GET', path: () => '/api/bootstrap'},
 
   // Multi-user
@@ -124,6 +135,11 @@ const ROUTES: Record<string, RouteSpec> = {
     path: () => '/api/torrents/sequential',
     body: ([infohash, enabled]) => ({infohash, enabled}),
     unwrap: okEnvelope,
+  },
+  ListBlockedPeers: {method: 'GET', path: () => '/api/peers/blocked'},
+  SetPeerBlocked: {
+    method: 'PUT', path: () => '/api/peers/blocked',
+    body: ([ip, blocked]) => ({ip, blocked}), unwrap: okEnvelope,
   },
   AddTracker: {
     method: 'POST',
@@ -362,6 +378,13 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
 
   const handlers = new Map<string, Set<(data: any) => void>>();
   let socket: WebSocket | null = null;
+  let connection: ConnectionState = {status: 'connecting', epoch: 0, lastUpdateAt: 0};
+  let watchdog: ReturnType<typeof setInterval> | null = null;
+  const emitConnection = (patch: Partial<ConnectionState>) => {
+    connection = {...connection, ...patch};
+    for (const listener of handlers.get('connection:state') ?? []) listener(connection);
+  };
+  const stopWatchdog = () => {if (watchdog !== null) clearInterval(watchdog);watchdog = null;};
   // Pending reconnect timer, cancelled when the last handler unsubscribes —
   // otherwise a timer scheduled before the unsubscribe would resurrect a
   // socket with zero subscribers and leak it.
@@ -380,14 +403,28 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
     const wsURL = origin.replace(/^http/, 'ws') + '/api/ws';
     const ws = new wsCtor(wsURL);
     socket = ws;
+    emitConnection({status: connection.epoch ? 'reconnecting' : 'connecting'});
     ws.onopen = () => {
       if (socket !== ws) return;
       reconnectDelayMs = RECONNECT_BASE_MS;
+      emitConnection({status: 'connected', epoch: connection.epoch + 1});
+      const openedAt = Date.now();
+      stopWatchdog();
+      watchdog = setInterval(() => {
+        if (socket === ws && Date.now() - Math.max(openedAt, connection.lastUpdateAt) >= 15_000) {
+          emitConnection({status: 'reconnecting'});
+          ws.close();
+        }
+      }, 5000);
     };
     ws.onmessage = (ev) => {
       if (socket !== ws) return;
       try {
         const env = JSON.parse(ev.data);
+        if ((env.type === 'torrents:tick' && Array.isArray(env.payload)) ||
+            (['stats:tick', 'inspector:tick'].includes(env.type) && env.payload && typeof env.payload === 'object')) {
+          emitConnection({lastUpdateAt: Date.now()});
+        }
         const subs = handlers.get(env.type);
         if (!subs) return;
         for (const h of subs) h(env.payload);
@@ -398,6 +435,8 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
     ws.onclose = () => {
       if (socket !== ws) return;
       socket = null;
+      stopWatchdog();
+      emitConnection({status: 'reconnecting'});
       // Reconnect with backoff if any handlers are still subscribed.
       if (handlers.size > 0) {
         reconnectTimer = setTimeout(ensureSocket, reconnectDelayMs);
@@ -444,6 +483,7 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
         handlers.set(event, set);
       }
       set.add(handler);
+      if (event === 'connection:state') handler(connection);
       ensureSocket();
       return () => {
         const s = handlers.get(event);
@@ -452,6 +492,7 @@ export function makeHTTPTransport(origin: string, opts: FetchOptions = {}): Tran
           if (s.size === 0) handlers.delete(event);
         }
         if (handlers.size === 0) {
+          stopWatchdog();
           if (reconnectTimer !== null) {
             clearTimeout(reconnectTimer);
             reconnectTimer = null;

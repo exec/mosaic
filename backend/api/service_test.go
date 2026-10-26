@@ -173,6 +173,8 @@ func TestService_InspectorFocus_StoresAndReturnsDetail(t *testing.T) {
 	require.Equal(t, string(id), got.ID)
 	require.Len(t, got.Files, 2)
 	require.Len(t, got.PeersList, 1)
+	require.Equal(t, int64(4096), got.PeersList[0].Downloaded)
+	require.Equal(t, int64(2048), got.PeersList[0].Uploaded)
 	require.Len(t, got.Trackers, 1)
 }
 
@@ -762,4 +764,11 @@ func TestRestoreOnStartup_SkipsOrphanRecord(t *testing.T) {
 
 	require.NoError(t, svc.RestoreOnStartup(sysCtx()))
 	require.Empty(t, fb.List(), "orphan should be skipped, not crash")
+}
+
+func TestUnknownTrackerTimesAreZero(t *testing.T) {
+	dto := detailToDTO(engine.Detail{Trackers: []engine.TrackerEntry{{URL: "http://tracker.example/announce", Status: "Status unavailable"}}}, time.Time{}, nil)
+	require.Len(t, dto.Trackers, 1)
+	require.Zero(t, dto.Trackers[0].LastAnnounce)
+	require.Zero(t, dto.Trackers[0].NextAnnounce)
 }

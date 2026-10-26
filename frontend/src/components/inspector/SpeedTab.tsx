@@ -50,6 +50,7 @@ export function SpeedTab(props: Props) {
 
   return (
     <div class="flex h-full flex-col gap-3 p-4">
+      <p class="text-[10px] text-zinc-500">Selected torrent · history since opened</p>
       <ToggleGroup
         class="inline-flex w-fit items-center gap-px rounded-md border border-white/[.06] bg-white/[.02] p-0.5"
         value={String(range())}
