@@ -35,6 +35,32 @@ describe('peer inspector', () => {
     expect(api.listBlockedPeers).not.toHaveBeenCalled();
   });
 
+  test('pins only the expanded connection above the live sort, then restores sorting on collapse', () => {
+    const faster = {...peer, ip: '192.0.2.2', download_rate: 4096, uploaded: 32768};
+    const sameIP = {...peer, port: 6882, download_rate: 2048};
+    const [value, setValue] = createSignal(detail([faster, sameIP, peer]));
+    dispose = render(() => <PeersTab detail={value()} canBlock={false} />, host);
+    const scroll = vi.spyOn(host.firstElementChild as HTMLElement, 'scrollIntoView');
+    const rows = () => Array.from(host.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'));
+    expect(rows()[0].textContent).toContain(faster.ip);
+    rows()[2].click();
+    expect(rows()[0].getAttribute('aria-expanded')).toBe('true');
+    expect(rows()[0].textContent).toContain(peer.ip);
+    expect(host.textContent).toContain('Port 6881');
+    expect(document.activeElement).toBe(rows()[0]);
+    expect(scroll).toHaveBeenCalledTimes(1);
+    setValue(detail([{...peer, downloaded: 65536}, sameIP, {...faster, download_rate: 8192}]));
+    const select = host.querySelector('select')!;
+    select.value = 'uploaded'; select.dispatchEvent(new Event('change', {bubbles: true}));
+    expect(rows()[0].getAttribute('aria-expanded')).toBe('true');
+    expect(host.textContent).toContain('64.0 KB');
+    expect(scroll).toHaveBeenCalledTimes(1);
+    rows()[0].click();
+    expect(rows()[0].textContent).toContain(faster.ip);
+    expect(rows().every(row => row.getAttribute('aria-expanded') === 'false')).toBe(true);
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+
   test('filters and sorts peers by their live counters', () => {
     dispose = render(() => <PeersTab detail={detail([peer, {...peer, ip: '192.0.2.2', client: 'Other client', uploaded: 16384}])} canBlock={false} />, host);
     const select = host.querySelector('select')!;

@@ -1,13 +1,15 @@
 import {createEffect, createMemo, createSignal, Index, Show} from 'solid-js';
 import {ChevronDown, Copy, ShieldBan} from 'lucide-solid';
 import {toast} from 'solid-sonner';
-import {api, type DetailDTO} from '../../lib/bindings';
+import {api, type DetailDTO, type PeerDTO} from '../../lib/bindings';
 import {fmtBytes, fmtPercent, fmtRate} from '../../lib/format';
 import {userErr} from '../../lib/errors';
 
 type Props = {detail: DetailDTO | null; canBlock: boolean};
 
 export function PeersTab(props: Props) {
+  let root!: HTMLDivElement;
+  const peerKey = (peer: PeerDTO) => `${props.detail?.id}:${peer.ip}:${peer.port}`;
   const [query, setQuery] = createSignal('');
   const [sort, setSort] = createSignal('download_rate');
   const [expanded, setExpanded] = createSignal('');
@@ -25,7 +27,8 @@ export function PeersTab(props: Props) {
       .filter((p) => !blocked().includes(p.ip) && `${p.ip} ${p.client}`.toLowerCase().includes(search))
       .sort((a, b) => {
         const key = sort() as 'download_rate' | 'upload_rate' | 'uploaded' | 'downloaded';
-        return (b[key] ?? 0) - (a[key] ?? 0) || a.ip.localeCompare(b.ip) || a.port - b.port;
+        const pinned = Number(expanded() === peerKey(b)) - Number(expanded() === peerKey(a));
+        return pinned || (b[key] ?? 0) - (a[key] ?? 0) || a.ip.localeCompare(b.ip) || a.port - b.port;
       });
   });
 
@@ -42,7 +45,7 @@ export function PeersTab(props: Props) {
   }
 
   return (
-    <div class="min-w-0 text-xs">
+    <div ref={root} class="min-w-0 text-xs">
       <div class="sticky top-0 z-10 space-y-2 border-b border-white/[.04] bg-zinc-950/95 px-4 py-3 backdrop-blur-md">
         <div class="flex items-center justify-between gap-2">
           <span class="text-zinc-400">{peers().length}{query().trim() ? ` of ${props.detail?.peers_list?.length ?? 0}` : ''} connected peers</span>
@@ -63,11 +66,18 @@ export function PeersTab(props: Props) {
       </div>
       <Show when={peers().length} fallback={<p class="p-4 text-zinc-500">{query() ? 'No matching peers.' : 'No connected peers.'}</p>}>
         <Index each={peers()}>{(p) => {
-          const key = () => `${props.detail?.id}:${p().ip}:${p().port}`;
+          const key = () => peerKey(p());
           return (
             <div class="border-b border-white/[.04]">
               <button type="button" aria-expanded={expanded() === key()}
-                onClick={() => setExpanded(expanded() === key() ? '' : key())}
+                onClick={() => {
+                  const next = expanded() === key() ? '' : key();
+                  setExpanded(next);
+                  if (next) {
+                    root.scrollIntoView({block: 'start'});
+                    root.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')?.focus({preventScroll: true});
+                  }
+                }}
                 class="flex w-full min-w-0 items-center gap-2 px-4 py-3 text-left hover:bg-white/[.03] focus-visible:outline-accent-500">
                 <ChevronDown size={12} class="shrink-0 text-zinc-500 transition-transform" classList={{'-rotate-90': expanded() !== key()}} />
                 <span class="min-w-0 flex-1">
