@@ -25,7 +25,7 @@ def release_notes(changelog: str, tag: str) -> str:
 - **Linux headless daemon:** DEB, RPM, and tarball.
 - **Windows:** installer and portable EXE.
 
-See `SHA256SUMS` for checksum verification. Installed clients can check via
+See `SHA256SUMS` for checksum verification. Desktop clients with the in-app updater can check via
 Settings → Updates → Check now; package-managed installs use their package manager.
 """
 

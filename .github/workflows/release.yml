@@ -233,8 +233,8 @@ jobs:
         if: matrix.platform == 'linux'
         env:
           VERSION: ${{ github.ref_name }}
-        # Reuses the frontend/dist tree the GUI build just produced; only
-        # cross-compiles the daemon binary + nfpm packages + tarball.
+        # Builds the daemon-only browser bundle, then the daemon binary,
+        # nfpm packages, and tarball.
         run: bash scripts/build-linux-mosaicd.sh
 
       - name: Build (Windows)

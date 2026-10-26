@@ -1,3 +1,4 @@
+import {isWailsRuntime} from '../../lib/runtime';
 import {Match, Show, Switch, type JSX} from 'solid-js';
 import type {AppView, Density, StatusFilter, TorrentCounts, AppState} from '../../lib/store';
 import type {CategoryDTO, GlobalStatsT, ServerFlavor, TagDTO, Torrent, UserDTO, WebConfigDTO} from '../../lib/bindings';
@@ -84,6 +85,7 @@ export function WindowShell(props: Props) {
   // search bar, empty space — without sacrificing the click semantics on
   // those interactive elements.
   const onTopStripMouseDown = (e: MouseEvent) => {
+    if (!isWailsRuntime()) return;
     if (e.button !== 0) return;
     if (e.clientY >= TOP_DRAG_STRIP_PX) return;
     const startX = e.clientX;
@@ -205,7 +207,7 @@ export function WindowShell(props: Props) {
                 </div>
               </Match>
               <Match when={props.view === 'settings'}>
-                <Show when={props.connection?.stale}><div class="pt-7"><ConnectionBanner connection={props.connection} onRetry={props.onRetryConnection} /></div></Show>
+                <Show when={props.connection?.stale}><div classList={{'pt-7': isWailsRuntime()}}><ConnectionBanner connection={props.connection} onRetry={props.onRetryConnection} /></div></Show>
                 {props.settings}
               </Match>
             </Switch>
@@ -235,14 +237,14 @@ export function WindowShell(props: Props) {
           pointer-events: none here lets clicks pass through to whatever
           is underneath; WindowControls flips back to pointer-events-auto
           so min/max/close still receive clicks. */}
-      <div class="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-7">
+      <Show when={isWailsRuntime()}><div class="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-7">
         <div class="flex-1" />
         <Show when={props.frameless}>
           <div class="pointer-events-auto">
             <WindowControls />
           </div>
         </Show>
-      </div>
+      </div></Show>
     </div>
   );
 }

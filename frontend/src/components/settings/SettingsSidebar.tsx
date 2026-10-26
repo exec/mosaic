@@ -59,7 +59,7 @@ export function SettingsSidebar(props: Props) {
   const isPinned = (id: PinnableID): boolean => sidebarPins().includes(id);
 
   return (
-    <aside class="flex h-full w-56 shrink-0 flex-col border-r border-white/[.04] bg-white/[.01] pt-10 pb-3">
+    <aside class="flex h-full w-56 shrink-0 flex-col border-r border-white/[.04] bg-white/[.01] pb-3" classList={{'pt-10': isWailsRuntime(), 'pt-2': !isWailsRuntime()}}>
       <ul class="flex flex-col gap-px px-2">
         <For each={items()}>
           {(item) => {

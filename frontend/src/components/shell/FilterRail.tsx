@@ -1,3 +1,4 @@
+import {isWailsRuntime} from '../../lib/runtime';
 import {createSignal, createUniqueId, For, Show, type Component} from 'solid-js';
 import {ChevronDown, ListFilter, Folder, Tag} from 'lucide-solid';
 import type {StatusFilter, TorrentCounts} from '../../lib/store';
@@ -45,7 +46,7 @@ const Section: Component<{icon: typeof ListFilter; title: string; children?: any
 
 export function FilterRail(props: Props) {
   return (
-    <aside class="flex h-full w-60 shrink-0 overflow-y-auto flex-col gap-3 border-r border-white/[.04] bg-white/[.01] pt-10 pb-3">
+    <aside class="flex h-full w-60 shrink-0 overflow-y-auto flex-col gap-3 border-r border-white/[.04] bg-white/[.01] pb-3" classList={{'pt-10': isWailsRuntime(), 'pt-2': !isWailsRuntime()}}>
       <Section icon={ListFilter} title="Status">
         <ul class="flex flex-col gap-px">
           <For each={statusItems}>

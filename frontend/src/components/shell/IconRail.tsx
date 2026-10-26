@@ -1,3 +1,4 @@
+import {isWailsRuntime} from '../../lib/runtime';
 import {For, Show, createMemo, createSignal, type Component} from 'solid-js';
 import {LogOut} from 'lucide-solid';
 import {Tooltip} from '../ui/Tooltip';
@@ -192,7 +193,7 @@ export function IconRail(props: Props) {
 
   return (
     <nav
-      class="flex h-full w-12 flex-col items-center border-r border-white/[.04] bg-white/[.01] pt-10 pb-3"
+      class="flex h-full w-12 flex-col items-center border-r border-white/[.04] bg-white/[.01] pb-3" classList={{'pt-10': isWailsRuntime(), 'pt-2': !isWailsRuntime()}}
       style={{'--wails-draggable': 'drag', '-webkit-app-region': 'drag'}}
     >
       {/* Top group: torrents (locked at idx 0) + everything the user has

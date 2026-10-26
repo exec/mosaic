@@ -1,3 +1,4 @@
+import {isWailsRuntime} from '../../lib/runtime';
 import {DAEMON_BUILD} from '../../lib/build';
 import {Match, Switch} from 'solid-js';
 import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, SeedingDefaultsDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WatchFolderDTO, WebConfigDTO} from '../../lib/bindings';
@@ -83,10 +84,8 @@ export function SettingsRoute(props: Props) {
         flavor={props.serverFlavor}
         currentUser={props.currentUser}
       />
-      {/* pt-7 keeps each pane's content below the drag overlay at the top
-          of the window. SettingsSidebar above paints to the top edge so
-          the drag overlay sits cleanly over its empty pt-10 strip. */}
-      <div class="flex-1 overflow-auto pt-7">
+      {/* Native windows reserve room for their title bar; browsers do not. */}
+      <div class="flex-1 overflow-auto" classList={{'pt-7': isWailsRuntime()}}>
         <Switch>
           <Match when={props.pane === 'general'}>
             <GeneralPane
