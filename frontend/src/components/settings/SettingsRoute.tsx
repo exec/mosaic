@@ -1,3 +1,4 @@
+import {DAEMON_BUILD} from '../../lib/build';
 import {Match, Switch} from 'solid-js';
 import type {BlocklistDTO, CategoryDTO, DesktopIntegrationDTO, FeedDTO, FilterDTO, LimitsDTO, PeerLimitsDTO, QueueLimitsDTO, ScheduleRuleDTO, SeedingDefaultsDTO, ServerFlavor, TagDTO, UpdaterConfigDTO, UpdateInfoDTO, UserDTO, WatchFolderDTO, WebConfigDTO} from '../../lib/bindings';
 import {SettingsSidebar, type SettingsPane} from './SettingsSidebar';
@@ -125,7 +126,7 @@ export function SettingsRoute(props: Props) {
           <Match when={props.pane === 'users'}>
             <UsersPane currentUser={props.currentUser} />
           </Match>
-          <Match when={props.pane === 'updates'}>
+          {!DAEMON_BUILD && <Match when={props.pane === 'updates' && props.serverFlavor !== 'daemon'}>
             <UpdatesPane
               config={props.updaterConfig}
               info={props.updateInfo}
@@ -134,7 +135,7 @@ export function SettingsRoute(props: Props) {
               onCheck={props.onCheckForUpdate}
               onInstall={props.onInstallUpdate}
             />
-          </Match>
+          </Match>}
           <Match when={props.pane === 'desktop'}>
             <DesktopPane
               desktopIntegration={props.desktopIntegration}

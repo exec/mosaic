@@ -191,7 +191,7 @@ func main() {
 		CurrentVersion: version,
 		Source:         ghSource,
 		OnAvailable: func(info updater.Info) {
-			dto := svc.MakeUpdateInfoDTO(info)
+			dto := updateInfoDTO(info, version)
 			if back.Hub != nil {
 				back.Hub.PublishUpdate(dto)
 			}
@@ -199,7 +199,7 @@ func main() {
 		},
 	})
 	installSource := updater.DetectInstallSource()
-	svc.AttachUpdater(upd, version, installSource)
+	svc.AttachUpdater(desktopUpdater{upd, version}, version, string(installSource))
 	// Schedule lifecycle: started/stopped at runtime as the user flips the
 	// Settings → Updates toggle (via OnUpdaterConfigChange below), not just
 	// at boot. Guarded so a toggle flapped on/on doesn't stack goroutines.

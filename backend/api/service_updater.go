@@ -3,16 +3,14 @@ package api
 import (
 	"context"
 	"fmt"
-
-	"mosaic/backend/updater"
 )
 
 // UpdaterConfigDTO is the persisted updater preferences shape (channel +
 // enabled toggle + cached last-check metadata for UI display).
 type UpdaterConfigDTO struct {
 	Enabled         bool   `json:"enabled"`
-	Channel         string `json:"channel"`           // "stable" | "beta"
-	LastCheckedAt   int64  `json:"last_checked_at"`   // unix seconds
+	Channel         string `json:"channel"`         // "stable" | "beta"
+	LastCheckedAt   int64  `json:"last_checked_at"` // unix seconds
 	LastSeenVersion string `json:"last_seen_version"`
 	// InstallSource classifies how this binary was installed: "apt"
 	// (managed by apt — auto-updater is dormant), "appimage", or
@@ -31,7 +29,13 @@ type UpdateInfoDTO struct {
 	CurrentVersion string `json:"current_version"`
 }
 
-// AttachUpdater wires the live *updater.Updater + build-time version into the
+// UpdateBackend keeps the desktop downloader out of the daemon's dependency graph.
+type UpdateBackend interface {
+	Check(context.Context) (UpdateInfoDTO, error)
+	Install(context.Context) (string, error)
+}
+
+// AttachUpdater wires the desktop updater + build-time version into the
 // Service after construction. main.go calls this once at startup; tests can
 // leave it unset to exercise the disabled-updater path.
 //
@@ -39,7 +43,7 @@ type UpdateInfoDTO struct {
 // binary was installed (apt / appimage / manual). The SPA reads it via
 // UpdaterConfigDTO so the Updates pane can render an "apt-managed — use
 // `apt upgrade` to update" banner instead of a misleading toggle.
-func (s *Service) AttachUpdater(u *updater.Updater, version string, installSource updater.InstallSource) {
+func (s *Service) AttachUpdater(u UpdateBackend, version string, installSource string) {
 	s.updater = u
 	s.appVersion = version
 	s.installSource = installSource
@@ -85,9 +89,9 @@ func (s *Service) GetUpdaterConfig(ctx context.Context) UpdaterConfigDTO {
 		return UpdaterConfigDTO{}
 	}
 	seen, _ := s.settings.Get(ctx, settingUpdaterLastSeenVersion)
-	src := string(s.installSource)
+	src := s.installSource
 	if src == "" {
-		src = string(updater.InstallSourceManual)
+		src = "manual"
 	}
 	return UpdaterConfigDTO{
 		Enabled:         s.UpdaterEnabled(ctx),
@@ -156,7 +160,7 @@ func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
 	if err != nil {
 		return UpdateInfoDTO{CurrentVersion: s.appVersion}, err
 	}
-	_ = s.setIntSetting(ctx, settingUpdaterLastChecked, int(info.CheckedAt.Unix()))
+	_ = s.setIntSetting(ctx, settingUpdaterLastChecked, int(info.CheckedAt))
 	if info.Available {
 		_ = s.settings.Set(ctx, settingUpdaterLastSeenVersion, info.LatestVersion)
 	}
@@ -165,7 +169,7 @@ func (s *Service) CheckForUpdate(ctx context.Context) (UpdateInfoDTO, error) {
 		LatestVersion:  info.LatestVersion,
 		AssetURL:       info.AssetURL,
 		AssetFilename:  info.AssetFilename,
-		CheckedAt:      info.CheckedAt.Unix(),
+		CheckedAt:      info.CheckedAt,
 		CurrentVersion: s.appVersion,
 	}, nil
 }
@@ -180,11 +184,11 @@ func (s *Service) InstallUpdate(ctx context.Context) error {
 	if s.updater == nil {
 		return fmt.Errorf("updater disabled")
 	}
-	if s.installSource == updater.InstallSourceAPT {
+	if s.installSource == "apt" {
 		return fmt.Errorf("this Mosaic is managed by apt — run `sudo apt update && sudo apt upgrade mosaic` to update")
 	}
-	last := s.updater.Last()
-	if err := s.updater.Install(ctx, last); err != nil {
+	installedVersion, err := s.updater.Install(ctx)
+	if err != nil {
 		return err
 	}
 	// Fire the desktop notification (if a Notifier was attached and the user
@@ -192,20 +196,7 @@ func (s *Service) InstallUpdate(ctx context.Context) error {
 	// the toggle gating). Done here rather than from a hook in the updater
 	// package because updater.Updater doesn't expose an OnInstalled callback.
 	if s.updateInstalledNotifier != nil {
-		s.updateInstalledNotifier.NotifyUpdateInstalled(last.LatestVersion)
+		s.updateInstalledNotifier.NotifyUpdateInstalled(installedVersion)
 	}
 	return nil
-}
-
-// MakeUpdateInfoDTO converts a raw updater.Info to the API DTO. Used by main.go
-// to wrap OnAvailable callback payloads for the WS/Wails event emission.
-func (s *Service) MakeUpdateInfoDTO(info updater.Info) UpdateInfoDTO {
-	return UpdateInfoDTO{
-		Available:      info.Available,
-		LatestVersion:  info.LatestVersion,
-		AssetURL:       info.AssetURL,
-		AssetFilename:  info.AssetFilename,
-		CheckedAt:      info.CheckedAt.Unix(),
-		CurrentVersion: s.appVersion,
-	}
 }

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:daemon": "tsc && VITE_MOSAIC_FLAVOR=daemon vite build --outDir dist-daemon && node ../scripts/check-daemon-bundle.mjs",
     "preview": "vite preview",
     "test": "vitest run --environment happy-dom"
   },

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Remove updater settings, notifications, API calls and routes from mosaicd. Ship a separate daemon browser bundle, and keep the desktop self-updater and downloader out of the daemon binary.
+
+- Keep the expanded peer at the top of the peer list during live updates and sort changes. Bring it into view on expansion and restore normal sorting on collapse.
+
 ## 1.9.0 — 2026-10-25
 
 A feature release focused on a more capable inspector, safer torrent and file

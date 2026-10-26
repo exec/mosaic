@@ -1,3 +1,4 @@
+import {DAEMON_BUILD} from './build';
 import {transport} from './transport';
 
 export type CategoryDTO = {
@@ -301,6 +302,13 @@ export type SeedPolicyDTO = {
   effective_time_min_limit?: number;
 };
 
+const desktopUpdaterAPI = {
+  getUpdaterConfig: () => transport.invoke<UpdaterConfigDTO>('GetUpdaterConfig'),
+  setUpdaterConfig: (c: UpdaterConfigDTO) => transport.invoke<void>('SetUpdaterConfig', c),
+  checkForUpdate: () => transport.invoke<UpdateInfoDTO>('CheckForUpdate'),
+  installUpdate: () => transport.invoke<void>('InstallUpdate'),
+};
+
 export const api = {
  previewRSSFilter:(f:FilterDTO)=>transport.invoke<FilterPreviewDTO>('PreviewRSSFilter',f),
  exportSettings:()=>transport.invoke<SettingsBackupDTO>('ExportSettings'),
@@ -381,10 +389,7 @@ export const api = {
   setWebPassword: (plain: string) => transport.invoke<void>('SetWebPassword', plain),
   rotateAPIKey: () => transport.invoke<string>('RotateAPIKey'),
   appVersion: () => transport.invoke<string>('AppVersion'),
-  getUpdaterConfig: () => transport.invoke<UpdaterConfigDTO>('GetUpdaterConfig'),
-  setUpdaterConfig: (c: UpdaterConfigDTO) => transport.invoke<void>('SetUpdaterConfig', c),
-  checkForUpdate: () => transport.invoke<UpdateInfoDTO>('CheckForUpdate'),
-  installUpdate: () => transport.invoke<void>('InstallUpdate'),
+  ...(DAEMON_BUILD ? {} as typeof desktopUpdaterAPI : desktopUpdaterAPI),
   getDesktopIntegration: () => transport.invoke<DesktopIntegrationDTO>('GetDesktopIntegration'),
   setDesktopIntegration: (c: DesktopIntegrationDTO) => transport.invoke<void>('SetDesktopIntegration', c),
   getWatchFolder: () => transport.invoke<WatchFolderDTO>('GetWatchFolder'),

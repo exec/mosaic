@@ -111,3 +111,13 @@ test('reconnect refreshes data while guarding newer ticks and disconnected respo
   expect(store.state.torrents.map(t=>t.id)).toEqual(['newest']);
  } finally {store.dispose();invoke.mockImplementation(async(method:string)=>method==='Bootstrap'?{flavor:'daemon'}:[]);}
 });
+
+
+test('daemon boot skips updater configuration requests', async () => {
+ invoke.mockClear();
+ const store = createTorrentsStore();
+ try {
+  await vi.waitFor(() => expect(store.state.serverFlavor).toBe('daemon'));
+  expect(invoke.mock.calls.some(([method]) => method === 'GetUpdaterConfig')).toBe(false);
+ } finally {store.dispose();}
+});

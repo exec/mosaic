@@ -1,3 +1,4 @@
+import {DAEMON_BUILD} from './build';
 // HTTP+WS transport: routes the Wails-style method names to the chi REST
 // endpoints in backend/remote, and demuxes a single shared WebSocket onto
 // per-event handlers. Selected by transport.ts when running outside Wails.
@@ -19,6 +20,19 @@ interface RouteSpec {
 const okEnvelope = () => undefined;
 const idString = (raw: any) => raw.id as string;
 const idNumber = (raw: any) => raw.id as number;
+
+const updaterRoutes: Record<string, RouteSpec> = {
+  GetUpdaterConfig: {method: 'GET', path: () => '/api/settings/updater'},
+  SetUpdaterConfig: {
+    method: 'PUT',
+    path: () => '/api/settings/updater',
+    body: ([c]) => c,
+    unwrap: okEnvelope,
+  },
+  CheckForUpdate: {method: 'POST', path: () => '/api/updater/check'},
+  InstallUpdate: {method: 'POST', path: () => '/api/updater/install', unwrap: okEnvelope},
+
+};
 
 const ROUTES: Record<string, RouteSpec> = {
   GetTransferStatistics: {method: 'GET', path: () => '/api/statistics/transfers'},
@@ -297,15 +311,7 @@ const ROUTES: Record<string, RouteSpec> = {
 
   // Updater + version
   AppVersion: {method: 'GET', path: () => '/api/version', unwrap: (r) => r.version as string},
-  GetUpdaterConfig: {method: 'GET', path: () => '/api/settings/updater'},
-  SetUpdaterConfig: {
-    method: 'PUT',
-    path: () => '/api/settings/updater',
-    body: ([c]) => c,
-    unwrap: okEnvelope,
-  },
-  CheckForUpdate: {method: 'POST', path: () => '/api/updater/check'},
-  InstallUpdate: {method: 'POST', path: () => '/api/updater/install', unwrap: okEnvelope},
+  ...(!DAEMON_BUILD ? updaterRoutes : {}),
 
   // Schedule
   ListScheduleRules: {method: 'GET', path: () => '/api/schedule_rules'},

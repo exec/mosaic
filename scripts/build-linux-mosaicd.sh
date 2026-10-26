@@ -12,18 +12,18 @@ mkdir -p "${BIN_DIR}"
 
 cd "${ROOT}"
 
-# The frontend dist tree is what mosaicd serves over HTTPS. If the GUI build
-# already produced it, we reuse it; otherwise run the build. Reusing avoids
-# the slower second `npm run build` in CI when both binaries ship together.
-if [[ ! -f "${ROOT}/frontend/dist/index.html" ]]; then
-    echo "==> build frontend (mosaicd serves it over HTTPS+WS)"
-    (cd frontend && npm run build)
-else
-    echo "==> reusing existing frontend/dist (built by GUI step)"
-fi
+# Build separately: desktop assets contain updater controls and cannot be reused.
+echo "==> build daemon frontend"
+(cd frontend && npm run build:daemon)
 
 echo "==> prime module cache"
 go mod download
+
+# A daemon must never link the desktop self-updater or its download backend.
+if go list -deps ./cmd/mosaicd | grep -E '^(mosaic/backend/updater|github.com/creativeprojects/go-selfupdate)(/|$)' >/dev/null; then
+    echo "mosaicd unexpectedly depends on the desktop updater" >&2
+    exit 1
+fi
 
 echo "==> go build mosaicd"
 GOOS=linux GOARCH=amd64 go build \
@@ -51,7 +51,7 @@ PKG="mosaicd-${VERSION}-linux-amd64"
 mkdir -p "${STAGE}/${PKG}/dist"
 cp "${ELF}" "${STAGE}/${PKG}/mosaicd"
 chmod +x "${STAGE}/${PKG}/mosaicd"
-cp -R "${ROOT}/frontend/dist/." "${STAGE}/${PKG}/dist/"
+cp -R "${ROOT}/frontend/dist-daemon/." "${STAGE}/${PKG}/dist/"
 cp "${ROOT}/build/linux/mosaicd.service" "${STAGE}/${PKG}/mosaicd.service"
 cat > "${STAGE}/${PKG}/README.txt" <<'README'
 Mosaic daemon (mosaicd) — Linux amd64 tarball

@@ -1,3 +1,4 @@
+import {DAEMON_BUILD} from './build';
 // User-customizable IconRail pin state. The set of items in the left rail
 // is no longer hardcoded — users pin/unpin from each row in the settings
 // sidebar, drag to reorder, and right-click for unpin. Torrents is always
@@ -38,6 +39,8 @@ export type ItemMeta = {
   visible?: (ctx: VisibilityCtx) => boolean;
 };
 
+const updateItem: ItemMeta = {id: 'updates', label: 'Updates', icon: Download, visible: ({flavor}) => flavor === 'desktop'};
+
 export const ITEM_REGISTRY: Record<PinnableID, ItemMeta> = {
   torrents:   {id: 'torrents',   label: 'Torrents',      icon: Activity},
   settings:   {id: 'settings',   label: 'Settings',      icon: Settings},
@@ -47,7 +50,7 @@ export const ITEM_REGISTRY: Record<PinnableID, ItemMeta> = {
   seeding:    {id: 'seeding',    label: 'Seeding',       icon: TrendingUp,       visible: ({user}) => canChangeSettings(user)},
   web:        {id: 'web',        label: 'Web Interface', icon: Globe,            visible: ({flavor}) => flavor === 'desktop'},
   users:      {id: 'users',      label: 'Users',         icon: Users,            visible: ({flavor}) => flavor === 'daemon'},
-  updates:    {id: 'updates',    label: 'Updates',       icon: Download},
+  ...(DAEMON_BUILD ? {} as {updates: ItemMeta} : {updates: updateItem}),
   desktop:    {id: 'desktop',    label: 'Desktop',       icon: MonitorSmartphone, visible: () => isWailsRuntime()},
   schedule:   {id: 'schedule',   label: 'Schedule',      icon: Calendar,         visible: ({user}) => canChangeSettings(user)},
   blocklist:  {id: 'blocklist',  label: 'Blocklist',     icon: Shield,           visible: ({user}) => canChangeSettings(user)},
@@ -59,7 +62,7 @@ export const ITEM_REGISTRY: Record<PinnableID, ItemMeta> = {
 
 export function isItemVisible(id: PinnableID, ctx: VisibilityCtx): boolean {
   const meta = ITEM_REGISTRY[id];
-  return !meta?.visible || meta.visible(ctx);
+  return !!meta && (!meta.visible || meta.visible(ctx));
 }
 
 // 'torrents' is non-negotiable and anchored at index 0. 'settings' is also

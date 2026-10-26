@@ -1,7 +1,8 @@
-import {createMemo, createSignal, lazy, onCleanup, onMount, Suspense} from 'solid-js';
+import {DAEMON_BUILD} from './lib/build';
+import {createMemo, createSignal, lazy, onCleanup, onMount, Show, Suspense} from 'solid-js';
 import {Toaster, toast} from 'solid-sonner';
 import {createTorrentsStore, filterTorrents, computeCounts} from './lib/store';
-import {api, onLaunchNotice} from './lib/bindings';
+import {api, onLaunchNotice, type UpdaterConfigDTO} from './lib/bindings';
 import {transport} from './lib/transport';
 import {isWailsRuntime} from './lib/runtime';
 // Importing the appearance module here ensures the persisted theme is applied
@@ -48,6 +49,14 @@ export default function App() {
 
 function AuthenticatedApp() {
   const store = createTorrentsStore();
+  const desktopUpdaterProps = () => ({
+    get updaterConfig() { return store.state.updaterConfig; },
+    get updateInfo() { return store.state.updateInfo; },
+    onSetUpdaterConfig: (c: UpdaterConfigDTO) => store.setUpdaterConfig(c),
+    onCheckForUpdate: () => store.checkForUpdate(),
+    onInstallUpdate: () => store.installUpdate(),
+  });
+
   const [statisticsOpen, setStatisticsOpen] = createSignal(false);
   const [droppedFilename,setDroppedFilename]=createSignal('');
   let droppedResolve:((added:boolean)=>void)|undefined,dropSucceeded=false;
@@ -309,6 +318,7 @@ function AuthenticatedApp() {
         settings={
           <Suspense fallback={<div class="p-6 text-sm text-zinc-500">Loading settings…</div>}>
           <SettingsRoute
+            {...(DAEMON_BUILD ? {} as ReturnType<typeof desktopUpdaterProps> : desktopUpdaterProps())}
             pane={store.state.settingsPane}
             onPaneChange={store.setSettingsPane}
             serverFlavor={store.state.serverFlavor}
@@ -326,8 +336,6 @@ function AuthenticatedApp() {
             feeds={store.state.feeds}
             filtersByFeed={store.state.filtersByFeed}
             webConfig={store.state.webConfig}
-            updaterConfig={store.state.updaterConfig}
-            updateInfo={store.state.updateInfo}
             appVersion={store.state.appVersion}
             desktopIntegration={store.state.desktopIntegration}
             onSetDefaultSavePath={(p) => store.setDefaultSavePath(p)}
@@ -335,9 +343,6 @@ function AuthenticatedApp() {
             onSetWebConfig={(c) => store.setWebConfig(c)}
             onSetWebPassword={(p) => store.setWebPassword(p)}
             onRotateAPIKey={() => store.rotateAPIKey()}
-            onSetUpdaterConfig={(c) => store.setUpdaterConfig(c)}
-            onCheckForUpdate={() => store.checkForUpdate()}
-            onInstallUpdate={() => store.installUpdate()}
             onSetDesktopIntegration={(d) => store.setDesktopIntegration(d)}
             onSetLimits={(l) => store.setLimits(l)}
             onSetQueueLimits={(q) => store.setQueueLimits(q)}
@@ -472,11 +477,11 @@ function AuthenticatedApp() {
         currentUserID={store.state.currentUser?.id ?? 0}
         onClose={() => setShareId(null)}
       />
-      <UpdateToast
+      {!DAEMON_BUILD && <Show when={store.state.serverFlavor !== 'daemon'}><UpdateToast
         info={store.state.updateInfo}
         onInstall={() => { store.setView('settings'); store.setSettingsPane('updates'); }}
         onDismiss={() => {}}
-      />
+      /></Show>}
       <GnomeTrayPrompt />
     </>
   );

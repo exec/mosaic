@@ -1,3 +1,4 @@
+import {DAEMON_BUILD} from './build';
 import {createStore, produce, reconcile} from 'solid-js/store';
 import {toast} from 'solid-sonner';
 import {
@@ -246,8 +247,7 @@ export function createTorrentsStore() {
 
     webConfig: emptyWebConfig,
 
-    updaterConfig: emptyUpdaterConfig,
-    updateInfo: null,
+    ...(DAEMON_BUILD ? {} as Pick<AppState, 'updaterConfig' | 'updateInfo'> : {updaterConfig: emptyUpdaterConfig, updateInfo: null}),
     appVersion: 'dev',
 
     desktopIntegration: defaultDesktopIntegration,
@@ -290,7 +290,7 @@ export function createTorrentsStore() {
   api.getBlocklist().then((b) => setState(produce((s) => { s.blocklist = b; }))).catch(bootFailed('blocklist'));
   api.listFeeds().then((fs) => setState(produce((s) => { s.feeds = fs ?? []; }))).catch(bootFailed('feeds'));
   api.getWebConfig().then((c) => setState(produce((s) => { s.webConfig = c; }))).catch(bootFailed('web config'));
-  api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(bootFailed('updater config'));
+
   api.appVersion().then((v) => setState(produce((s) => { s.appVersion = v; }))).catch(bootFailed('app version'));
   // Desktop integration (tray, notifications, close-to-tray) is inherently
   // tied to the local OS session running the binary. The HTTP transport
@@ -299,6 +299,7 @@ export function createTorrentsStore() {
   // remote machine. Skip the boot fetch in browser mode; the SettingsSidebar
   // also hides the Desktop pane there.
   if (isWailsRuntime()) {
+    if (!DAEMON_BUILD) api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(bootFailed('updater config'));
     api.getDesktopIntegration().then((d) => setState(produce((s) => { s.desktopIntegration = d; }))).catch(bootFailed('desktop integration'));
     api.getWatchFolder().then((w) => setState(produce((s) => { s.watchFolder = w; }))).catch(bootFailed('watch folder'));
   } else {
@@ -309,7 +310,10 @@ export function createTorrentsStore() {
     // these silently console.error'd and a mosaicd unreachable at startup
     // produced an empty Users pane and no UI feedback at all.
     api.bootstrap()
-      .then((b) => setState(produce((s) => { s.serverFlavor = b.flavor; })))
+      .then((b) => {
+        setState(produce((s) => { s.serverFlavor = b.flavor; }));
+        if (!DAEMON_BUILD && b.flavor !== 'daemon') api.getUpdaterConfig().then((c) => setState(produce((s) => { s.updaterConfig = c; }))).catch(bootFailed('updater config'));
+      })
       .catch(bootFailed('bootstrap'));
     api.me()
       .then((u) => setState(produce((s) => { s.currentUser = u; })))
@@ -334,7 +338,7 @@ export function createTorrentsStore() {
       s.bandwidthTick = s.bandwidthTick + 1;
     }));
   });
-  const offU = onUpdateAvailable((info) => setState(produce((s) => { s.updateInfo = info; })));
+  const offU = DAEMON_BUILD ? () => {} : onUpdateAvailable((info) => setState(produce((s) => { s.updateInfo = info; })));
 
   let refreshedEpoch = -1;
   let syncRequest = 0;
@@ -390,6 +394,25 @@ export function createTorrentsStore() {
       void refreshConnection();
     }
   });
+
+  const desktopUpdaterActions = {
+    refreshUpdaterConfig: async () => {
+      const c = await api.getUpdaterConfig();
+      setState(produce((s) => { s.updaterConfig = c; }));
+    },
+    setUpdaterConfig: async (c: UpdaterConfigDTO) => {
+      await api.setUpdaterConfig(c);
+      const fresh = await api.getUpdaterConfig();
+      setState(produce((s) => { s.updaterConfig = fresh; }));
+    },
+    checkForUpdate: async () => {
+      const info = await api.checkForUpdate();
+      setState(produce((s) => { s.updateInfo = info; }));
+      return info;
+    },
+    installUpdate: () => api.installUpdate(),
+
+  };
 
   return {
     state,
@@ -689,22 +712,7 @@ export function createTorrentsStore() {
       return key;
     },
 
-    // Auto-update
-    refreshUpdaterConfig: async () => {
-      const c = await api.getUpdaterConfig();
-      setState(produce((s) => { s.updaterConfig = c; }));
-    },
-    setUpdaterConfig: async (c: UpdaterConfigDTO) => {
-      await api.setUpdaterConfig(c);
-      const fresh = await api.getUpdaterConfig();
-      setState(produce((s) => { s.updaterConfig = fresh; }));
-    },
-    checkForUpdate: async () => {
-      const info = await api.checkForUpdate();
-      setState(produce((s) => { s.updateInfo = info; }));
-      return info;
-    },
-    installUpdate: () => api.installUpdate(),
+    ...(DAEMON_BUILD ? {} as typeof desktopUpdaterActions : desktopUpdaterActions),
 
     // Desktop integration
     refreshDesktopIntegration: async () => {

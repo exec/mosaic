@@ -55,7 +55,7 @@ Each release publishes a `SHA256SUMS` manifest; verifying against it before runn
 ### Web Interface &amp; API
 
 - [Web Interface](https://mosaic.byexec.com/docs/web-interface/) — enabling, binding, password, API key
-- [Daemon (mosaicd)](https://mosaic.byexec.com/docs/daemon/) — headless Linux variant, systemd unit, reverse-proxy deployment
+- [Daemon (mosaicd)](https://mosaic.byexec.com/docs/daemon/) — headless Linux variant, systemd unit, reverse-proxy deployment. Upgrade through your package manager or a new daemon package; mosaicd has no built-in updater.
 - [API Overview](https://mosaic.byexec.com/docs/api/) — base URL, auth model, error envelope
 - [Authentication](https://mosaic.byexec.com/docs/api/authentication/) — login, sessions, bearer keys, CSRF
 - [REST Endpoints](https://mosaic.byexec.com/docs/api/rest/) — every route, request/response schema

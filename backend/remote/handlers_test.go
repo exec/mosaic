@@ -197,6 +197,7 @@ func TestHandlers_Stats(t *testing.T) {
 
 func TestHandlers_Updater_GetConfig_DefaultsEnabled(t *testing.T) {
 	f := newFixture(t)
+	f.router = Mount(f.svc, f.sessions, nil, nil, false, FlavorDesktop)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
@@ -211,6 +212,7 @@ func TestHandlers_Updater_GetConfig_DefaultsEnabled(t *testing.T) {
 
 func TestHandlers_Updater_SetConfig_RoundTrip(t *testing.T) {
 	f := newFixture(t)
+	f.router = Mount(f.svc, f.sessions, nil, nil, false, FlavorDesktop)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
@@ -230,6 +232,7 @@ func TestHandlers_Updater_SetConfig_RoundTrip(t *testing.T) {
 
 func TestHandlers_Updater_RejectsUnknownChannel(t *testing.T) {
 	f := newFixture(t)
+	f.router = Mount(f.svc, f.sessions, nil, nil, false, FlavorDesktop)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
@@ -244,6 +247,7 @@ func TestHandlers_Updater_CheckWithoutUpdater_400s(t *testing.T) {
 	// "updater disabled" error → writeServiceErr recognizes it as a
 	// user-facing validation message and maps it to 400.
 	f := newFixture(t)
+	f.router = Mount(f.svc, f.sessions, nil, nil, false, FlavorDesktop)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
@@ -253,6 +257,7 @@ func TestHandlers_Updater_CheckWithoutUpdater_400s(t *testing.T) {
 
 func TestHandlers_Updater_InstallWithoutUpdater_400s(t *testing.T) {
 	f := newFixture(t)
+	f.router = Mount(f.svc, f.sessions, nil, nil, false, FlavorDesktop)
 	key, _ := f.svc.RotateAPIKey(sysCtx())
 
 	rec := httptest.NewRecorder()
@@ -717,4 +722,23 @@ func TestHandlers_PrepareDetailStorage(t *testing.T) {
 	d, err := f.svc.GetTorrentDetail(sysCtx(), added.ID)
 	require.NoError(t, err)
 	require.Equal(t, dest, d.SavePath)
+}
+
+func TestDaemonOmitsUpdaterRoutes(t *testing.T) {
+	f := newFixture(t)
+	key, err := f.svc.RotateAPIKey(sysCtx())
+	require.NoError(t, err)
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/api/settings/updater"},
+		{http.MethodPut, "/api/settings/updater"},
+		{http.MethodPost, "/api/updater/check"},
+		{http.MethodPost, "/api/updater/install"},
+	} {
+		rec := httptest.NewRecorder()
+		f.router.ServeHTTP(rec, authedReq(t, key, route.method, route.path, nil))
+		require.Equal(t, http.StatusNotFound, rec.Code, route.path)
+	}
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, authedReq(t, key, http.MethodGet, "/api/version", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
 }

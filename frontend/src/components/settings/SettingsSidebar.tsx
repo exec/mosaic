@@ -1,3 +1,4 @@
+import {DAEMON_BUILD} from '../../lib/build';
 import {For, createMemo} from 'solid-js';
 import {Sliders, Palette, Wifi, Globe, Users, Download, MonitorSmartphone, Calendar, Shield, Rss, Folder, Tag, Info, TrendingUp, Pin} from 'lucide-solid';
 import {isWailsRuntime} from '../../lib/runtime';
@@ -31,7 +32,7 @@ const allItems: Item[] = [
   {value: 'web', label: 'Web Interface', icon: Globe, visible: ({flavor}) => flavor === 'desktop'},
   // Multi-user account management — only the headless mosaicd daemon.
   {value: 'users', label: 'Users', icon: Users, visible: ({flavor}) => flavor === 'daemon'},
-  {value: 'updates', label: 'Updates', icon: Download},
+  ...(!DAEMON_BUILD ? [{value: 'updates', label: 'Updates', icon: Download, visible: ({flavor}) => flavor === 'desktop'} as Item] : []),
   // Desktop integration (tray, notifications, close-to-tray) only applies to
   // the local desktop session running the Mosaic binary.
   {value: 'desktop', label: 'Desktop', icon: MonitorSmartphone, visible: () => isWailsRuntime()},

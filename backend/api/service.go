@@ -6,7 +6,6 @@ import (
 
 	"mosaic/backend/engine"
 	"mosaic/backend/persistence"
-	"mosaic/backend/updater"
 )
 
 // Service is the only place business logic lives. Wails handlers and (later)
@@ -46,11 +45,11 @@ type Service struct {
 	updaterHookMu    sync.RWMutex
 	onUpdaterChanged func(UpdaterConfigDTO)
 
-	updater       *updater.Updater // may be nil if not yet attached
+	updater       UpdateBackend // attached only by the desktop entry point
 	appVersion    string
-	installSource updater.InstallSource // "apt" | "appimage" | "manual"
-	rssPoller     *RSSPoller            // may be nil during startup; set by AttachRSSPoller
-	watchFolder   *WatchFolder          // may be nil during startup; set by AttachWatchFolder
+	installSource string       // "apt" | "appimage" | "manual"
+	rssPoller     *RSSPoller   // may be nil during startup; set by AttachRSSPoller
+	watchFolder   *WatchFolder // may be nil during startup; set by AttachWatchFolder
 
 	// updateInstalledNotifier, if set, is invoked after a successful
 	// InstallUpdate so the OS-level desktop notification fires. Wired via

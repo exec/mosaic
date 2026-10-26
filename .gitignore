@@ -9,6 +9,7 @@ mosaic
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/dist-daemon/
 frontend/wailsjs/
 frontend/package.json.md5
 
